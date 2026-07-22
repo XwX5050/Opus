@@ -1,2 +1,10 @@
 .superpowers/
 .worktrees/
+/node_modules/
+/dist/
+/src-tauri/target/
+/tests/perf/generated/
+/playwright-report/
+/test-results/
+/blob-report/
+/tsconfig.tsbuildinfo
