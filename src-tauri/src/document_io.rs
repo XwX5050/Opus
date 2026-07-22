@@ -112,13 +112,12 @@ pub fn write_document(
         temporary_file
             .sync_all()
             .map_err(|error| map_io_error(&destination, error))?;
+        let modified_unix_ms = temporary_file_modified_unix_ms(&temporary_file, &destination)?;
         drop(temporary_file);
         fs::rename(&temporary_path, &destination)
             .map_err(|error| map_io_error(&destination, error))?;
 
-        let metadata =
-            fs::metadata(&destination).map_err(|error| map_io_error(&destination, error))?;
-        modified_unix_ms(&metadata, &destination)
+        Ok(modified_unix_ms)
     })();
 
     if result.is_err() {
@@ -260,6 +259,16 @@ fn modified_unix_ms(metadata: &fs::Metadata, path: &Path) -> Result<u128, Docume
         })
 }
 
+fn temporary_file_modified_unix_ms(
+    file: &fs::File,
+    destination: &Path,
+) -> Result<u128, DocumentIoError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| map_io_error(destination, error))?;
+    modified_unix_ms(&metadata, destination)
+}
+
 fn map_io_error(path: &Path, error: io::Error) -> DocumentIoError {
     match error.kind() {
         io::ErrorKind::NotFound => DocumentIoError::NotFound {
@@ -272,5 +281,27 @@ fn map_io_error(path: &Path, error: io::Error) -> DocumentIoError {
             path: path.to_path_buf(),
             source: error,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_io_reads_temporary_mtime_before_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let temporary_path = dir.path().join(".note.md.tmp");
+        let mut temporary_file = fs::File::create(&temporary_path).unwrap();
+        temporary_file.write_all(b"contents\n").unwrap();
+        temporary_file.sync_all().unwrap();
+
+        let temporary_mtime = temporary_file_modified_unix_ms(&temporary_file, &path).unwrap();
+
+        assert_eq!(
+            temporary_mtime,
+            modified_unix_ms(&temporary_file.metadata().unwrap(), &path).unwrap()
+        );
     }
 }
