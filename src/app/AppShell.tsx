@@ -145,6 +145,7 @@ export default function AppShell({
             <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
             <button
               type="button"
+              aria-label="实时预览"
               aria-pressed={!sourceMode}
               onClick={() => setSourceMode((current) => !current)}
             >

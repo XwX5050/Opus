@@ -97,10 +97,9 @@ describe("AppShell", () => {
     expect(editor()).not.toHaveTextContent("**");
 
     await user.click(toggle);
-    expect(screen.getByRole("button", { name: "源码模式" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    const sourceToggle = screen.getByRole("button", { name: "实时预览" });
+    expect(sourceToggle).toHaveAttribute("aria-pressed", "false");
+    expect(sourceToggle).toHaveTextContent("源码模式");
     expect(EditorView.findFromDOM(editor())).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(root.querySelector(".cm-live-preview-strong")).toBeNull();
@@ -108,7 +107,7 @@ describe("AppShell", () => {
     expect(editor()).toHaveTextContent("**world**");
     expect(editor()).toHaveTextContent("---");
 
-    await user.click(screen.getByRole("button", { name: "源码模式" }));
+    await user.click(sourceToggle);
     expect(screen.getByRole("button", { name: "实时预览" })).toHaveAttribute(
       "aria-pressed",
       "true",

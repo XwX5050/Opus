@@ -66,9 +66,7 @@ describe("planLivePreview", () => {
         "`",
         "[",
         "]",
-        "(",
-        "https://example.com",
-        ")",
+        "(https://example.com)",
         ">",
         "1.",
         "-",
@@ -170,6 +168,16 @@ describe("planLivePreview", () => {
     ]);
   });
 
+  it.each([
+    ["trailing space", "[label](url ) outside", "(url )"],
+    ["line break", "[label](url\n) outside", "(url\n)"],
+    ["angled destination spacing", "[label]( <url> ) outside", "( <url> )"],
+  ])("collapses the complete inline destination with %s", (_label, doc, destination) => {
+    const state = createState(doc, [{ anchor: doc.length }]);
+    expect(syntaxTree(state).toString()).toContain("Link(LinkMark,LinkMark,LinkMark,URL,LinkMark)");
+    expect(hiddenSource(state, planLivePreview(state))).toEqual(["[", "]", destination]);
+  });
+
   it("hides a reference link label but keeps and marks its definition as source", () => {
     const doc = "[label][ref]\n\n[ref]: https://example.com \"Title\"\n\noutside";
     const state = createState(doc, [{ anchor: doc.length }]);
@@ -188,6 +196,26 @@ describe("planLivePreview", () => {
     const plan = planLivePreview(state);
     expect(hiddenSource(state, plan)).toEqual([]);
     expect(markedAs(plan, "cm-live-preview-link")).toHaveLength(2);
+  });
+
+  it("marks bare URLs under emphasis, strong emphasis, and table-cell ancestors", () => {
+    const doc = [
+      "*https://example.com* **www.example.com**",
+      "",
+      "| url |",
+      "| --- |",
+      "| https://table.example.com |",
+      "",
+      "outside",
+    ].join("\n");
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const tree = syntaxTree(state).toString();
+    expect(tree).toContain("Emphasis(EmphasisMark,URL,EmphasisMark)");
+    expect(tree).toContain("StrongEmphasis(EmphasisMark,URL,EmphasisMark)");
+    expect(tree).toContain("TableCell(URL)");
+    const links = markedAs(planLivePreview(state), "cm-live-preview-link");
+    expect(links).toHaveLength(3);
+    expect(new Set(links.map(({ from, to }) => `${from}:${to}`)).size).toBe(3);
   });
 
   it("plans non-interactive checked and unchecked task widgets from GFM nodes", () => {
@@ -253,6 +281,16 @@ describe("livePreviewExtension", () => {
 
   it("renders a titled inline link as only its readable label", () => {
     const view = createView("[label](url \"title\") outside");
+    expect(view.contentDOM.textContent).toBe("label outside");
+    view.destroy();
+  });
+
+  it.each([
+    ["[label](url ) outside"],
+    ["[label](url\n) outside"],
+    ["[label]( <url> ) outside"],
+  ])("renders %s without destination whitespace", (doc) => {
+    const view = createView(doc);
     expect(view.contentDOM.textContent).toBe("label outside");
     view.destroy();
   });
@@ -326,6 +364,11 @@ describe("livePreviewExtension", () => {
       ".cm-live-preview-list-marker",
     );
     expect([...listMarkers].map((marker) => marker.textContent)).toEqual(["•", "•"]);
+    for (const marker of listMarkers) {
+      expect(marker).not.toHaveAttribute("aria-hidden");
+      expect(marker).toHaveAttribute("role", "listitem");
+      expect(marker).toHaveAccessibleName("项目符号");
+    }
     expect(checkboxes).toHaveLength(2);
     expect([...checkboxes].map((checkbox) => checkbox.checked)).toEqual([false, true]);
     for (const checkbox of checkboxes) {
@@ -337,6 +380,19 @@ describe("livePreviewExtension", () => {
       checkbox.click();
     }
     expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+
+  it("gives bullet and ordered list-marker widgets readable names", () => {
+    const view = createView("- bullet\n\n2. ordered\n\noutside");
+    const markers = view.dom.querySelectorAll<HTMLElement>(
+      ".cm-live-preview-list-marker",
+    );
+    expect([...markers].map((marker) => marker.textContent)).toEqual(["•", "2."]);
+    expect([...markers].map((marker) => marker.getAttribute("aria-label"))).toEqual([
+      "项目符号",
+      "列表序号 2.",
+    ]);
     view.destroy();
   });
 });

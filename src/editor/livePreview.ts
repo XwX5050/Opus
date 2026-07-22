@@ -63,10 +63,13 @@ const structureNames = new Set([
 const isHeading = (name: string) =>
   name.startsWith("ATXHeading") || name.startsWith("SetextHeading");
 
-const isStructure = (node: SyntaxNode, parentName: string | null) =>
+const linkContainerNames = new Set(["Link", "Autolink", "LinkReference"]);
+
+const isStructure = (node: SyntaxNode, ancestorNames: readonly string[]) =>
   structureNames.has(node.name) ||
   isHeading(node.name) ||
-  (node.name === "URL" && parentName === "Paragraph");
+  (node.name === "URL" &&
+    !ancestorNames.some((name) => linkContainerNames.has(name)));
 
 // Cursor ranges include node.to to keep delimiters visible at the editing edge.
 // Non-empty selections use normal half-open overlap semantics.
@@ -195,7 +198,7 @@ export const planLivePreview = (
       enter(nodeRef) {
         if (diagnostics) diagnostics.visitedNodes += 1;
         const node = nodeRef.node;
-        const createsStructure = isStructure(node, nodeNames.at(-1) ?? null);
+        const createsStructure = isStructure(node, nodeNames);
         nodeNames.push(node.name);
         createdStructure.push(createsStructure);
         if (createsStructure) {
@@ -247,7 +250,7 @@ export const planLivePreview = (
   }
   const effectiveMarkerCandidates: { owner: Structure; node: MarkerNode }[] = [];
   for (const [owner, markers] of markersByOwner) {
-    if (owner.node.name === "Link" && markers.some(({ name }) => name === "LinkTitle")) {
+    if (owner.node.name === "Link") {
       const opening = markers.find(
         (node) => node.name === "LinkMark" && state.sliceDoc(node.from, node.to) === "(",
       );
@@ -347,7 +350,11 @@ class ListMarkerWidget extends WidgetType {
     const marker = document.createElement("span");
     marker.className = "cm-live-preview-list-marker";
     marker.textContent = this.text;
-    marker.setAttribute("aria-hidden", "true");
+    marker.setAttribute("role", "listitem");
+    marker.setAttribute(
+      "aria-label",
+      this.text === "•" ? "项目符号" : `列表序号 ${this.text}`,
+    );
     return marker;
   }
 
@@ -420,7 +427,19 @@ const decorationSetsFor = (
         widget: new TaskCheckboxWidget(item.checked ?? false),
       }).range(item.from, item.to);
     } else {
-      decoration = Decoration.replace({}).range(item.from, item.to);
+      let from = item.from;
+      while (from < item.to) {
+        const line = state.doc.lineAt(from);
+        const to = Math.min(item.to, line.to);
+        if (to > from) {
+          const segment = Decoration.replace({}).range(from, to);
+          decorations.push(segment);
+          atomicRanges.push(segment);
+        }
+        if (to === item.to) break;
+        from = line.to + 1;
+      }
+      continue;
     }
     decorations.push(decoration);
     atomicRanges.push(decoration);
