@@ -4,6 +4,7 @@ export type DocumentPortErrorCode =
   | "invalid_utf8"
   | "permission_denied"
   | "not_found"
+  | "conflict"
   | "io";
 
 export class DocumentPortError extends Error {
@@ -17,14 +18,19 @@ export class DocumentPortError extends Error {
 }
 
 export interface SavedFile {
-  path: string;
-  modifiedUnixMs: number;
-  version: string;
+  readonly path: string;
+  readonly modifiedUnixMs: number;
+  readonly version: string;
 }
 
 export interface DocumentPort {
-  chooseAndOpenFiles(): Promise<OpenedFile[]>;
+  chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>>;
   openPath(path: string): Promise<OpenedFile>;
+  chooseSavePath(suggestedName: string): Promise<string | null>;
   save(document: DocumentSnapshot): Promise<SavedFile>;
-  saveAs(document: DocumentSnapshot): Promise<SavedFile | null>;
+  saveToPath(
+    path: string,
+    document: DocumentSnapshot,
+    expectedVersion: string | null,
+  ): Promise<SavedFile>;
 }

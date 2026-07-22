@@ -17,7 +17,21 @@ export type DocumentAction =
     }
   | { type: "activate"; id: string }
   | { type: "textChanged"; id: string; text: string }
-  | { type: "saveSucceeded"; id: string; result: SavedFile }
+  | {
+      type: "saveStarted";
+      id: string;
+      requestId: string;
+      targetPath: string;
+      writtenText: string;
+      previousVersion: string | null;
+    }
+  | {
+      type: "saveSucceeded";
+      id: string;
+      requestId: string;
+      result: SavedFile;
+      pathPlatform?: PathPlatform;
+    }
   | {
       type: "externalConflict";
       id: string;
@@ -29,6 +43,7 @@ export type DocumentAction =
       type: "closeConfirmed";
       id: string;
       disposition: "saved" | "discarded";
+      pathPlatform?: PathPlatform;
     }
   | { type: "reopenLastClosed"; pathPlatform?: PathPlatform };
 
@@ -38,8 +53,11 @@ export const initialDocumentState: DocumentState = {
   recentlyClosed: [],
 };
 
-const collapseSegments = (path: string, separator: "/" | "\\"): string => {
-  const hasRoot = path.startsWith(separator);
+const collapseSegments = (
+  path: string,
+  separator: "/" | "\\",
+  rooted: boolean,
+): string => {
   const segments = path.split(separator);
   const collapsed: string[] = [];
 
@@ -47,12 +65,50 @@ const collapseSegments = (path: string, separator: "/" | "\\"): string => {
     if (segment === "" || segment === ".") continue;
     if (segment === ".." && collapsed.length > 0 && collapsed.at(-1) !== "..") {
       collapsed.pop();
-    } else if (segment !== ".." || !hasRoot) {
+    } else if (segment !== ".." || !rooted) {
       collapsed.push(segment);
     }
   }
 
-  return `${hasRoot ? separator : ""}${collapsed.join(separator)}` || separator;
+  return collapsed.join(separator);
+};
+
+const normalizePosixPath = (path: string): string => {
+  const rooted = path.startsWith("/");
+  const collapsed = collapseSegments(path, "/", rooted);
+  return rooted ? `/${collapsed}` : collapsed;
+};
+
+const normalizeWindowsPath = (path: string): string => {
+  const windowsPath = path.replaceAll("/", "\\");
+  const lower = (value: string) => value.toLocaleLowerCase("en-US");
+
+  if (windowsPath.startsWith("\\\\?\\") || windowsPath.startsWith("\\\\.\\")) {
+    return lower(windowsPath);
+  }
+
+  if (windowsPath.startsWith("\\\\")) {
+    const parts = windowsPath.slice(2).split("\\").filter(Boolean);
+    const server = parts.shift() ?? "";
+    const share = parts.shift() ?? "";
+    const root = `\\\\${server}\\${share}`;
+    const tail = collapseSegments(parts.join("\\"), "\\", true);
+    return lower(tail ? `${root}\\${tail}` : root);
+  }
+
+  const drive = windowsPath.match(/^([A-Za-z]):(.*)$/);
+  if (drive) {
+    const drivePrefix = `${lower(drive[1])}:`;
+    const absolute = drive[2].startsWith("\\");
+    const tail = collapseSegments(drive[2], "\\", absolute);
+    return lower(
+      absolute ? `${drivePrefix}\\${tail}` : `${drivePrefix}${tail}`,
+    );
+  }
+
+  const rooted = windowsPath.startsWith("\\");
+  const tail = collapseSegments(windowsPath, "\\", rooted);
+  return lower(rooted ? `\\${tail}` : tail);
 };
 
 /**
@@ -66,15 +122,10 @@ export const normalizePathKey = (
   path: string,
   platform: PathPlatform = "macos",
 ): string => {
-  if (platform === "linux") return collapseSegments(path, "/");
+  if (platform === "linux") return normalizePosixPath(path);
+  if (platform === "windows") return normalizeWindowsPath(path);
 
-  if (platform === "windows") {
-    return collapseSegments(path.replaceAll("/", "\\"), "\\").toLocaleLowerCase(
-      "en-US",
-    );
-  }
-
-  return collapseSegments(path.normalize("NFC"), "/").toLocaleLowerCase("en-US");
+  return normalizePosixPath(path.normalize("NFC")).toLocaleLowerCase("en-US");
 };
 
 const titleFromPath = (path: string): string => {
@@ -113,6 +164,12 @@ const discardedSnapshot = (document: DocumentSnapshot): DocumentSnapshot => ({
   ...document,
   text: document.savedText,
   status: "clean",
+  pendingSave: undefined,
+});
+
+const cloneSnapshot = (document: DocumentSnapshot): DocumentSnapshot => ({
+  ...document,
+  pendingSave: document.pendingSave ? { ...document.pendingSave } : undefined,
 });
 
 export const documentReducer = (
@@ -140,6 +197,9 @@ export const documentReducer = (
     }
 
     case "fileOpened": {
+      const sameId = state.tabs.find((tab) => tab.id === action.id);
+      if (sameId) return { ...state, activeId: sameId.id };
+
       const platform = action.pathPlatform ?? "macos";
       const key = normalizePathKey(action.file.path, platform);
       const existing = state.tabs.find(
@@ -170,16 +230,53 @@ export const documentReducer = (
               : "dirty",
       }));
 
-    case "saveSucceeded":
+    case "saveStarted":
       return replaceTab(state, action.id, (document) => ({
         ...document,
+        pendingSave: {
+          requestId: action.requestId,
+          targetPath: action.targetPath,
+          writtenText: action.writtenText,
+          previousVersion: action.previousVersion,
+        },
+      }));
+
+    case "saveSucceeded": {
+      const document = state.tabs.find((tab) => tab.id === action.id);
+      if (!document || document.pendingSave?.requestId !== action.requestId) {
+        return state;
+      }
+
+      const platform = action.pathPlatform ?? "macos";
+      const resultKey = normalizePathKey(action.result.path, platform);
+      const targetMismatch =
+        normalizePathKey(document.pendingSave.targetPath, platform) !== resultKey;
+      const collides = state.tabs.some(
+        (tab) =>
+          tab.id !== action.id &&
+          tab.path !== null &&
+          normalizePathKey(tab.path, platform) === resultKey,
+      );
+      if (targetMismatch || collides) {
+        return replaceTab(state, action.id, (tab) => ({
+          ...tab,
+          status: "conflict",
+          pendingSave: undefined,
+        }));
+      }
+
+      const writtenText = document.pendingSave.writtenText;
+      return replaceTab(state, action.id, (tab) => ({
+        ...tab,
         path: action.result.path,
         title: titleFromPath(action.result.path),
-        savedText: document.text,
+        savedText: writtenText,
         modifiedUnixMs: action.result.modifiedUnixMs,
         version: action.result.version,
-        status: "clean",
+        status: tab.text === writtenText ? "clean" : "dirty",
+        pendingSave: undefined,
       }));
+    }
 
     case "externalConflict":
       return replaceTab(state, action.id, (document) => ({
@@ -201,19 +298,31 @@ export const documentReducer = (
 
       const closed = state.tabs[closedIndex];
       const stored =
-        action.disposition === "discarded" ? discardedSnapshot(closed) : closed;
+        action.disposition === "discarded"
+          ? discardedSnapshot(closed)
+          : cloneSnapshot(closed);
       const tabs = state.tabs.filter((tab) => tab.id !== action.id);
       const activeId =
         state.activeId !== action.id
           ? state.activeId
           : (tabs[closedIndex]?.id ?? tabs[closedIndex - 1]?.id ?? null);
 
+      const platform = action.pathPlatform ?? "macos";
+      const duplicate = (candidate: DocumentSnapshot): boolean =>
+        stored.path === null
+          ? candidate.path === null && candidate.id === stored.id
+          : candidate.path !== null &&
+            normalizePathKey(candidate.path, platform) ===
+              normalizePathKey(stored.path, platform);
+
       return {
         tabs,
         activeId,
         recentlyClosed: [
           { document: stored, closedIndex },
-          ...state.recentlyClosed,
+          ...state.recentlyClosed.filter(
+            ({ document }) => !duplicate(document),
+          ),
         ].slice(0, 20),
       };
     }
@@ -223,6 +332,11 @@ export const documentReducer = (
       if (!closed) return state;
 
       const platform = action.pathPlatform ?? "macos";
+      const sameId = state.tabs.find((tab) => tab.id === closed.document.id);
+      if (sameId) {
+        return { ...state, activeId: sameId.id, recentlyClosed };
+      }
+
       const path = closed.document.path;
       const existing =
         path === null
@@ -237,15 +351,21 @@ export const documentReducer = (
         return { ...state, activeId: existing.id, recentlyClosed };
       }
 
-      const insertAt = Math.min(closed.closedIndex, state.tabs.length);
+      const insertAt = Math.max(
+        0,
+        Math.min(closed.closedIndex, state.tabs.length),
+      );
       const tabs = [...state.tabs];
-      tabs.splice(insertAt, 0, closed.document);
+      tabs.splice(insertAt, 0, cloneSnapshot(closed.document));
       return {
         tabs,
         activeId: closed.document.id,
         recentlyClosed,
       };
     }
+
+    default:
+      return state;
   }
 };
 
