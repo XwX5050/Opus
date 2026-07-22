@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "minimal permissions for document dialogs and the open-path event handshake",
   "windows": [
     "main"
   ],

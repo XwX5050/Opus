@@ -82,6 +82,37 @@ fn valid_open_and_current_version_save_round_trip() {
     .unwrap();
     assert_eq!(saved.path, path);
     assert_eq!(std::fs::read(&saved.path).unwrap(), b"new\n");
+    assert_eq!(
+        saved.version,
+        open_document_impl(saved.path.clone()).unwrap().version
+    );
+}
+
+#[test]
+fn replacing_a_file_with_same_content_changes_version_and_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.md");
+    let replacement = dir.path().join("replacement.md");
+    std::fs::write(&path, b"same").unwrap();
+    let opened = open_document_impl(path.clone()).unwrap();
+    std::fs::write(&replacement, b"same").unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    assert_ne!(
+        opened.version,
+        open_document_impl(path.clone()).unwrap().version
+    );
+    let error = save_document_impl(SaveDocumentRequest {
+        request_id: "r".into(),
+        document_id: "d".into(),
+        target_path: path,
+        text: "ours".into(),
+        has_utf8_bom: false,
+        newline: Newline::Lf,
+        expected_version: Some(opened.version),
+        path_platform: "macos".into(),
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "conflict");
 }
 
 #[cfg(unix)]
@@ -110,6 +141,39 @@ fn symlink_open_and_save_checks_and_updates_target_without_replacing_link() {
         .file_type()
         .is_symlink());
     assert_eq!(std::fs::read(target).unwrap(), b"new");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_retarget_to_same_content_changes_version_and_conflicts() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.md");
+    let second = dir.path().join("second.md");
+    let link = dir.path().join("link.md");
+    std::fs::write(&first, b"same").unwrap();
+    std::fs::write(&second, b"same").unwrap();
+    symlink(&first, &link).unwrap();
+    let opened = open_document_impl(link.clone()).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    symlink(&second, &link).unwrap();
+    assert_ne!(
+        opened.version,
+        open_document_impl(link.clone()).unwrap().version
+    );
+    let error = save_document_impl(SaveDocumentRequest {
+        request_id: "r".into(),
+        document_id: "d".into(),
+        target_path: link,
+        text: "ours".into(),
+        has_utf8_bom: false,
+        newline: Newline::Lf,
+        expected_version: Some(opened.version),
+        path_platform: "macos".into(),
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "conflict");
+    assert_eq!(std::fs::read(second).unwrap(), b"same");
 }
 
 #[test]

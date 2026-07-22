@@ -67,27 +67,71 @@ impl std::error::Error for DocumentIoError {
 }
 
 pub fn read_document(path: &Path) -> Result<OpenedDocument, DocumentIoError> {
-    let bytes = fs::read(path).map_err(|error| map_io_error(path, error))?;
+    let mut file = fs::File::open(path).map_err(|error| map_io_error(path, error))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| map_io_error(path, error))?;
     let has_utf8_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     let text = std::str::from_utf8(if has_utf8_bom { &bytes[3..] } else { &bytes })
         .map_err(|_| DocumentIoError::InvalidUtf8 {
             path: path.to_path_buf(),
         })?
         .to_owned();
-    let metadata = fs::metadata(path).map_err(|error| map_io_error(path, error))?;
+    let metadata = file.metadata().map_err(|error| map_io_error(path, error))?;
 
     Ok(OpenedDocument {
         newline: detect_newline(&text),
         text,
         has_utf8_bom,
         modified_unix_ms: modified_unix_ms(&metadata, path)?,
-        version: version_for_bytes(&bytes),
+        version: version_for_bytes_and_metadata(&bytes, &metadata),
     })
 }
 
-fn version_for_bytes(bytes: &[u8]) -> String {
+fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn version_for_bytes_and_metadata(bytes: &[u8], metadata: &fs::Metadata) -> String {
+    format!(
+        "sha256:{}:{}",
+        content_hash(bytes),
+        identity_token(metadata)
+    )
+}
+
+#[cfg(unix)]
+fn identity_token(metadata: &fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!("unix:{}:{}", metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn identity_token(metadata: &fs::Metadata) -> String {
+    use std::os::windows::fs::MetadataExt;
+    format!(
+        "windows:{:?}:{:?}:{}:{}",
+        metadata.volume_serial_number(),
+        metadata.file_index(),
+        metadata.creation_time(),
+        metadata.file_size()
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity_token(metadata: &fs::Metadata) -> String {
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos());
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos());
+    format!("fallback:{}:{created:?}:{modified:?}", metadata.len())
 }
 
 pub fn write_document_checked(
@@ -114,9 +158,10 @@ where
 {
     let destination = resolve_write_path(path)?;
     let parent = parent_directory(&destination)?;
-    let permissions = existing_permissions(&destination)?;
+    // This preserves basic filesystem mode/readonly permissions only. ACLs,
+    // xattrs, ownership, and hard-link topology are release-hardening work.
+    let permissions = existing_mode_permissions(&destination)?;
     let output = output_bytes(text, bom, newline);
-    let version = version_for_bytes(&output);
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .map_err(|error| map_io_error(&destination, error))?;
     if let Some(permissions) = permissions {
@@ -135,7 +180,12 @@ where
         .as_file()
         .sync_all()
         .map_err(|error| map_io_error(&destination, error))?;
-    let modified = temporary_file_modified_unix_ms(temporary.as_file(), &destination)?;
+    let temporary_metadata = temporary
+        .as_file()
+        .metadata()
+        .map_err(|error| map_io_error(&destination, error))?;
+    let modified = modified_unix_ms(&temporary_metadata, &destination)?;
+    let version = version_for_bytes_and_metadata(&output, &temporary_metadata);
 
     if let Some(expected) = expected_version {
         let mut current = fs::File::open(&destination).map_err(|error| {
@@ -154,12 +204,20 @@ where
         current
             .read_to_end(&mut bytes)
             .map_err(|error| map_io_error(&destination, error))?;
-        if version_for_bytes(&bytes) != expected {
+        if version_for_bytes_and_metadata(&bytes, &identity) != expected {
             return Err(DocumentIoError::Conflict {
                 path: path.to_path_buf(),
             });
         }
         before_commit();
+        match resolve_write_path(path) {
+            Ok(current_destination) if current_destination == destination => {}
+            _ => {
+                return Err(DocumentIoError::Conflict {
+                    path: path.to_path_buf(),
+                })
+            }
+        }
         let current_identity =
             fs::metadata(&destination).map_err(|error| map_io_error(&destination, error))?;
         if !same_identity(&identity, &current_identity) {
@@ -195,7 +253,16 @@ fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.mtime_nsec() == right.mtime_nsec()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
@@ -208,7 +275,7 @@ pub fn write_document(
 ) -> Result<u128, DocumentIoError> {
     let destination = resolve_write_path(path)?;
     let parent = parent_directory(&destination)?;
-    let existing_permissions = existing_permissions(&destination)?;
+    let existing_permissions = existing_mode_permissions(&destination)?;
     let output = output_bytes(text, bom, newline);
 
     let (temporary_path, mut temporary_file) = create_sibling_temp(parent, &destination)?;
@@ -320,7 +387,7 @@ fn parent_directory(path: &Path) -> Result<&Path, DocumentIoError> {
     }
 }
 
-fn existing_permissions(path: &Path) -> Result<Option<fs::Permissions>, DocumentIoError> {
+fn existing_mode_permissions(path: &Path) -> Result<Option<fs::Permissions>, DocumentIoError> {
     match fs::metadata(path) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {

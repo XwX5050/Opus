@@ -178,7 +178,7 @@ fn document_io_writing_a_symlink_updates_its_target_without_replacing_the_link()
 }
 
 #[test]
-fn document_io_write_preserves_existing_target_permissions_and_reports_metadata_time() {
+fn document_io_write_preserves_existing_unix_mode_bits_and_reports_metadata_time() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("note.md");
     std::fs::write(&path, b"original\n").unwrap();
@@ -249,4 +249,31 @@ fn checked_existing_save_rejects_modification_at_commit_and_cleans_temp() {
     assert!(matches!(result, Err(DocumentIoError::Conflict { .. })));
     assert_eq!(std::fs::read(&path).unwrap(), b"theirs-longer");
     assert_eq!(directory_entry_names(dir.path()), vec!["race.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_symlink_save_rejects_retarget_at_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.md");
+    let second = dir.path().join("second.md");
+    let link = dir.path().join("link.md");
+    std::fs::write(&first, b"same").unwrap();
+    std::fs::write(&second, b"same").unwrap();
+    symlink(&first, &link).unwrap();
+    let expected = read_document(&link).unwrap().version;
+    let result = write_document_checked_with_hook(
+        &link,
+        "ours",
+        false,
+        Newline::Lf,
+        Some(&expected),
+        || {
+            std::fs::remove_file(&link).unwrap();
+            symlink(&second, &link).unwrap();
+        },
+    );
+    assert!(matches!(result, Err(DocumentIoError::Conflict { .. })));
+    assert_eq!(std::fs::read(first).unwrap(), b"same");
+    assert_eq!(std::fs::read(second).unwrap(), b"same");
 }
