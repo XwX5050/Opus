@@ -1,4 +1,8 @@
-import type { DocumentSnapshot, OpenedFile } from "./types";
+import type {
+  OpenedFile,
+  PendingWriteRequest,
+  SaveTarget,
+} from "./types";
 
 export type DocumentPortErrorCode =
   | "invalid_utf8"
@@ -26,11 +30,6 @@ export interface SavedFile {
 export interface DocumentPort {
   chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>>;
   openPath(path: string): Promise<OpenedFile>;
-  chooseSavePath(suggestedName: string): Promise<string | null>;
-  save(document: DocumentSnapshot): Promise<SavedFile>;
-  saveToPath(
-    path: string,
-    document: DocumentSnapshot,
-    expectedVersion: string | null,
-  ): Promise<SavedFile>;
+  chooseSavePath(suggestedName: string): Promise<SaveTarget | null>;
+  write(request: PendingWriteRequest): Promise<SavedFile>;
 }

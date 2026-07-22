@@ -3,31 +3,41 @@ import {
   type DocumentPort,
   type SavedFile,
 } from "./DocumentPort";
-import type { DocumentSnapshot, OpenedFile } from "./types";
+import { normalizePathKey } from "./documentReducer";
+import type {
+  OpenedFile,
+  PathPlatform,
+  PendingWriteRequest,
+  SaveTarget,
+} from "./types";
 
 export interface MemoryDocumentPortOptions {
   readonly savePath?: string | null;
   readonly chosenPaths?: ReadonlyArray<string>;
+  readonly pathPlatform?: PathPlatform;
 }
 
 const cloneOpenedFile = (file: OpenedFile): OpenedFile => ({ ...file });
-const cloneSnapshot = (document: DocumentSnapshot): DocumentSnapshot => ({
-  ...document,
-  pendingSave: document.pendingSave ? { ...document.pendingSave } : undefined,
-});
+const cloneRequest = (request: PendingWriteRequest): PendingWriteRequest =>
+  Object.freeze({ ...request });
 
 export class MemoryDocumentPort implements DocumentPort {
   readonly #files: Map<string, OpenedFile>;
   readonly #options: MemoryDocumentPortOptions;
-  readonly #writes: DocumentSnapshot[] = [];
+  readonly #pathPlatform: PathPlatform;
+  readonly #writes: PendingWriteRequest[] = [];
   #nextRevision = 1;
 
   constructor(
     files: Map<string, OpenedFile>,
     options: MemoryDocumentPortOptions = {},
   ) {
+    this.#pathPlatform = options.pathPlatform ?? "macos";
     this.#files = new Map(
-      [...files].map(([path, file]) => [path, cloneOpenedFile(file)]),
+      [...files].map(([, file]) => [
+        normalizePathKey(file.path, this.#pathPlatform),
+        cloneOpenedFile(file),
+      ]),
     );
     this.#options = {
       ...options,
@@ -35,56 +45,48 @@ export class MemoryDocumentPort implements DocumentPort {
     };
   }
 
-  get writes(): ReadonlyArray<DocumentSnapshot> {
-    return this.#writes.map(cloneSnapshot);
+  get writes(): ReadonlyArray<PendingWriteRequest> {
+    return this.#writes.map(cloneRequest);
   }
 
   async chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>> {
-    const paths = this.#options.chosenPaths ?? [...this.#files.keys()];
+    const paths =
+      this.#options.chosenPaths ??
+      [...this.#files.values()].map((file) => file.path);
     return Promise.all(paths.map((path) => this.openPath(path)));
   }
 
   async openPath(path: string): Promise<OpenedFile> {
-    const file = this.#files.get(path);
+    const file = this.#files.get(normalizePathKey(path, this.#pathPlatform));
     if (!file) {
       throw new DocumentPortError("not_found", `Document not found: ${path}`);
     }
     return cloneOpenedFile(file);
   }
 
-  async chooseSavePath(_suggestedName: string): Promise<string | null> {
-    return this.#options.savePath ?? null;
+  async chooseSavePath(_suggestedName: string): Promise<SaveTarget | null> {
+    const path = this.#options.savePath;
+    if (path == null) return null;
+    const existing = this.#files.get(
+      normalizePathKey(path, this.#pathPlatform),
+    );
+    return Object.freeze({
+      path,
+      expectedVersion: existing?.version ?? null,
+    });
   }
 
-  async save(document: DocumentSnapshot): Promise<SavedFile> {
-    if (document.path === null) {
-      throw new DocumentPortError("io", "Cannot save a document without a path");
-    }
-    return this.#write(document.path, document, document.version);
-  }
-
-  async saveToPath(
-    path: string,
-    document: DocumentSnapshot,
-    expectedVersion: string | null,
-  ): Promise<SavedFile> {
-    return this.#write(path, document, expectedVersion);
-  }
-
-  #write(
-    path: string,
-    document: DocumentSnapshot,
-    expectedVersion: string | null,
-  ): SavedFile {
-    const existing = this.#files.get(path);
-    if ((existing?.version ?? null) !== expectedVersion) {
+  async write(request: PendingWriteRequest): Promise<SavedFile> {
+    const key = normalizePathKey(request.targetPath, this.#pathPlatform);
+    const existing = this.#files.get(key);
+    if ((existing?.version ?? null) !== request.expectedVersion) {
       throw new DocumentPortError(
         "conflict",
-        `Document version changed before save: ${path}`,
+        `Document version changed before save: ${request.targetPath}`,
       );
     }
 
-    const input = cloneSnapshot({ ...document, path });
+    const input = cloneRequest(request);
     this.#writes.push(input);
     const modifiedUnixMs = (existing?.modifiedUnixMs ?? 0) + 1;
     let version: string;
@@ -92,14 +94,15 @@ export class MemoryDocumentPort implements DocumentPort {
       version = `memory-version-${this.#nextRevision}`;
       this.#nextRevision += 1;
     } while ([...this.#files.values()].some((file) => file.version === version));
-    this.#files.set(path, {
-      path,
+    const displayPath = existing?.path ?? request.targetPath;
+    this.#files.set(key, {
+      path: displayPath,
       text: input.text,
       hasUtf8Bom: input.hasUtf8Bom,
       newline: input.newline,
       modifiedUnixMs,
       version,
     });
-    return { path, modifiedUnixMs, version };
+    return { path: displayPath, modifiedUnixMs, version };
   }
 }

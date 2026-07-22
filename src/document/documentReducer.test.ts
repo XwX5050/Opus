@@ -8,7 +8,11 @@ import {
 } from "./documentReducer";
 import { DocumentPortError } from "./DocumentPort";
 import { MemoryDocumentPort } from "./memoryDocumentPort";
-import type { DocumentSnapshot, OpenedFile } from "./types";
+import type {
+  DocumentSnapshot,
+  OpenedFile,
+  PendingWriteRequest,
+} from "./types";
 
 const openedFile = (overrides: Partial<OpenedFile> = {}): OpenedFile => ({
   path: "/Users/Alice/Notes/readme.md",
@@ -37,6 +41,21 @@ const document = (
   ...overrides,
 });
 
+const writeRequest = (
+  overrides: Partial<PendingWriteRequest> = {},
+): PendingWriteRequest =>
+  Object.freeze({
+    requestId: "save-1",
+    documentId: "doc-1",
+    targetPath: "/notes/a.md",
+    text: "updated",
+    hasUtf8Bom: false,
+    newline: "lf",
+    expectedVersion: "v1",
+    pathPlatform: "macos",
+    ...overrides,
+  });
+
 const reduce = (actions: DocumentAction[]): DocumentState =>
   actions.reduce(documentReducer, initialDocumentState);
 
@@ -61,6 +80,7 @@ describe("documentReducer", () => {
       ],
       activeId: "doc-1",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     });
   });
 
@@ -194,66 +214,74 @@ describe("documentReducer", () => {
     expect(state.tabs[0].status).toBe("clean");
   });
 
-  it("applies the latest successful save without changing the document id", () => {
-    const state = reduce([
-      { type: "newDocument", id: "stable-id" },
-      { type: "textChanged", id: "stable-id", text: "new text" },
-      {
-        type: "saveStarted",
-        id: "stable-id",
-        requestId: "save-1",
-        targetPath: "/notes/new.md",
-        writtenText: "new text",
-        previousVersion: null,
-      },
-      {
-        type: "saveSucceeded",
-        id: "stable-id",
-        requestId: "save-1",
-        result: {
-          path: "/notes/new.md",
-          modifiedUnixMs: 250,
-          version: "strong-v2",
-        },
-      },
+  it("derives one immutable write request and passes its exact values to the port", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile({ path: "/notes/a.md" })]]),
+    );
+    const edited = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile({ path: "/notes/a.md" }) },
+      { type: "textChanged", id: "doc-1", text: "write exactly this" },
     ]);
+    const saving = documentReducer(edited, {
+      type: "saveRequested",
+      id: "doc-1",
+    });
+    const request = saving.tabs[0].pendingSave!;
 
-    expect(state.tabs[0]).toMatchObject({
-      id: "stable-id",
-      path: "/notes/new.md",
-      title: "new.md",
-      text: "new text",
-      savedText: "new text",
-      modifiedUnixMs: 250,
-      version: "strong-v2",
+    expect(request).toEqual({
+      requestId: "save-1",
+      documentId: "doc-1",
+      targetPath: "/notes/a.md",
+      text: "write exactly this",
+      hasUtf8Bom: false,
+      newline: "lf",
+      expectedVersion: "v1",
+      pathPlatform: "macos",
+    });
+    expect(Object.isFrozen(request)).toBe(true);
+
+    const result = await port.write(request);
+    expect(port.writes[0]).toEqual(request);
+    expect(port.writes[0]).not.toBe(request);
+
+    const saved = documentReducer(saving, {
+      type: "saveSucceeded",
+      requestId: request.requestId,
+      result,
+    });
+    expect(saved.tabs[0]).toMatchObject({
+      id: "doc-1",
+      text: "write exactly this",
+      savedText: "write exactly this",
+      version: result.version,
       status: "clean",
     });
   });
 
-  it("keeps edits made during a save dirty and records only the written text", () => {
-    const state = reduce([
+  it("keeps edits made during a save dirty and uses pending request text", () => {
+    const saving = reduce([
       { type: "fileOpened", id: "doc-1", file: openedFile({ text: "base" }) },
       { type: "textChanged", id: "doc-1", text: "A" },
       {
-        type: "saveStarted",
+        type: "saveRequested",
         id: "doc-1",
-        requestId: "save-A",
-        targetPath: "/Users/Alice/Notes/readme.md",
-        writtenText: "A",
-        previousVersion: "v1",
-      },
-      { type: "textChanged", id: "doc-1", text: "B" },
-      {
-        type: "saveSucceeded",
-        id: "doc-1",
-        requestId: "save-A",
-        result: {
-          path: "/Users/Alice/Notes/readme.md",
-          modifiedUnixMs: 200,
-          version: "v2",
-        },
       },
     ]);
+    const requestId = saving.tabs[0].pendingSave!.requestId;
+    const editedAgain = documentReducer(saving, {
+      type: "textChanged",
+      id: "doc-1",
+      text: "B",
+    });
+    const state = documentReducer(editedAgain, {
+      type: "saveSucceeded",
+      requestId,
+      result: {
+        path: "/Users/Alice/Notes/readme.md",
+        modifiedUnixMs: 200,
+        version: "v2",
+      },
+    });
 
     expect(state.tabs[0]).toMatchObject({
       text: "B",
@@ -265,127 +293,241 @@ describe("documentReducer", () => {
     expect(state.tabs[0].pendingSave).toBeUndefined();
   });
 
-  it("ignores an out-of-order completion from an older save request", () => {
-    const beforeOldCompletion = reduce([
+  it("generates monotonic request ids and ignores out-of-order completion", () => {
+    const first = reduce([
       { type: "fileOpened", id: "doc-1", file: openedFile({ text: "base" }) },
       { type: "textChanged", id: "doc-1", text: "A" },
       {
-        type: "saveStarted",
+        type: "saveRequested",
         id: "doc-1",
-        requestId: "save-A",
-        targetPath: "/notes/a.md",
-        writtenText: "A",
-        previousVersion: "v1",
-      },
-      { type: "textChanged", id: "doc-1", text: "B" },
-      {
-        type: "saveStarted",
-        id: "doc-1",
-        requestId: "save-B",
-        targetPath: "/notes/b.md",
-        writtenText: "B",
-        previousVersion: "v1",
+        target: { path: "/notes/a.md", expectedVersion: "v1" },
       },
     ]);
-    const afterOldCompletion = documentReducer(beforeOldCompletion, {
+    const firstId = first.tabs[0].pendingSave!.requestId;
+    const second = documentReducer(
+      documentReducer(first, { type: "textChanged", id: "doc-1", text: "B" }),
+      {
+        type: "saveRequested",
+        id: "doc-1",
+        target: { path: "/notes/b.md", expectedVersion: null },
+      },
+    );
+    const secondId = second.tabs[0].pendingSave!.requestId;
+
+    expect([firstId, secondId]).toEqual(["save-1", "save-2"]);
+    const afterOld = documentReducer(second, {
       type: "saveSucceeded",
-      id: "doc-1",
-      requestId: "save-A",
+      requestId: firstId,
       result: { path: "/notes/a.md", modifiedUnixMs: 200, version: "old" },
     });
+    expect(afterOld).toBe(second);
 
-    expect(beforeOldCompletion.tabs[0].pendingSave).toEqual({
-      requestId: "save-B",
-      targetPath: "/notes/b.md",
-      writtenText: "B",
-      previousVersion: "v1",
-    });
-    expect(afterOldCompletion).toBe(beforeOldCompletion);
-
-    const afterLatestCompletion = documentReducer(afterOldCompletion, {
+    const afterLatest = documentReducer(afterOld, {
       type: "saveSucceeded",
-      id: "doc-1",
-      requestId: "save-B",
+      requestId: secondId,
       result: { path: "/notes/b.md", modifiedUnixMs: 300, version: "latest" },
     });
-    expect(afterLatestCompletion.tabs[0]).toMatchObject({
+    expect(afterLatest.tabs[0]).toMatchObject({
       path: "/notes/b.md",
       text: "B",
       savedText: "B",
-      modifiedUnixMs: 300,
       version: "latest",
       status: "clean",
     });
   });
 
-  it("fails closed when a save result collides with another open tab path", () => {
+  it("blocks a save request whose target is already open", () => {
     const state: DocumentState = {
       tabs: [
         document("a", { path: "/notes/a.md", text: "changed", status: "dirty" }),
-        document("b", { path: "/notes/b.md" }),
+        document("b", { path: "/NOTES/b.md", text: "target text" }),
       ],
       activeId: "a",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     };
-    const saving = documentReducer(state, {
-      type: "saveStarted",
+
+    const blocked = documentReducer(state, {
+      type: "saveRequested",
       id: "a",
-      requestId: "save-as",
-      targetPath: "/notes/b.md",
-      writtenText: "changed",
-      previousVersion: "v1",
+      target: { path: "/notes/B.md", expectedVersion: "v1" },
+      pathPlatform: "macos",
     });
 
-    const completed = documentReducer(saving, {
+    expect(blocked.tabs[0]).toMatchObject({ status: "conflict" });
+    expect(blocked.tabs[0].pendingSave).toBeUndefined();
+    expect(blocked.nextSaveSequence).toBe(0);
+  });
+
+  it("does not orphan an existing pending request when a newer target is blocked", () => {
+    const saving = reduce([
+      { type: "fileOpened", id: "source", file: openedFile({ path: "/notes/a.md" }) },
+      { type: "textChanged", id: "source", text: "source local" },
+      { type: "saveRequested", id: "source" },
+    ]);
+    const request = saving.tabs[0].pendingSave;
+    const targetOpened = documentReducer(saving, {
+      type: "fileOpened",
+      id: "target",
+      file: openedFile({ path: "/notes/b.md" }),
+    });
+
+    const blocked = documentReducer(targetOpened, {
+      type: "saveRequested",
+      id: "source",
+      target: { path: "/notes/b.md", expectedVersion: "v1" },
+    });
+
+    expect(blocked.tabs[0].status).toBe("conflict");
+    expect(blocked.tabs[0].pendingSave).toBe(request);
+    expect(blocked.nextSaveSequence).toBe(1);
+  });
+
+  it("marks both tabs conflict if the target opens while a write is pending", () => {
+    const saving = reduce([
+      { type: "fileOpened", id: "source", file: openedFile({ path: "/notes/a.md" }) },
+      { type: "textChanged", id: "source", text: "source local" },
+      {
+        type: "saveRequested",
+        id: "source",
+        target: { path: "/notes/b.md", expectedVersion: null },
+      },
+    ]);
+    const requestId = saving.tabs[0].pendingSave!.requestId;
+    const targetOpened = documentReducer(saving, {
+      type: "fileOpened",
+      id: "target",
+      file: openedFile({ path: "/notes/b.md", text: "target text" }),
+    });
+
+    const completed = documentReducer(targetOpened, {
       type: "saveSucceeded",
-      id: "a",
-      requestId: "save-as",
+      requestId,
       result: { path: "/notes/b.md", modifiedUnixMs: 200, version: "v2" },
     });
 
-    expect(completed.tabs[0]).toMatchObject({
-      path: "/notes/a.md",
-      text: "changed",
-      savedText: "saved",
-      modifiedUnixMs: 100,
-      version: "v1",
-      status: "conflict",
-    });
+    expect(completed.tabs.map(({ text, status }) => ({ text, status }))).toEqual([
+      { text: "source local", status: "conflict" },
+      { text: "target text", status: "conflict" },
+    ]);
+    expect(completed.tabs[0].pendingSave).toBeUndefined();
   });
 
-  it("fails closed when a save result reports a path other than its target", () => {
-    const state: DocumentState = {
-      tabs: [document("a", { text: "changed", status: "dirty" })],
-      activeId: "a",
-      recentlyClosed: [],
-    };
-    const saving = documentReducer(state, {
-      type: "saveStarted",
-      id: "a",
-      requestId: "save-as",
-      targetPath: "/notes/expected.md",
-      writtenText: "changed",
-      previousVersion: "v1",
-    });
-
-    const completed = documentReducer(saving, {
-      type: "saveSucceeded",
-      id: "a",
-      requestId: "save-as",
-      result: {
-        path: "/notes/unexpected.md",
-        modifiedUnixMs: 200,
-        version: "v2",
+  it("clears only the matching failed or cancelled save request", () => {
+    const first = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "A" },
+      {
+        type: "saveRequested",
+        id: "doc-1",
+        target: { path: "/notes/a.md", expectedVersion: "v1" },
       },
-    });
+    ]);
+    const firstId = first.tabs[0].pendingSave!.requestId;
+    const second = documentReducer(
+      documentReducer(first, { type: "textChanged", id: "doc-1", text: "B" }),
+      {
+        type: "saveRequested",
+        id: "doc-1",
+        target: { path: "/notes/b.md", expectedVersion: null },
+      },
+    );
+    const secondId = second.tabs[0].pendingSave!.requestId;
 
-    expect(completed.tabs[0]).toMatchObject({
-      path: "/notes/a.md",
-      savedText: "saved",
-      modifiedUnixMs: 100,
-      version: "v1",
-      status: "conflict",
+    const staleFailure = documentReducer(second, {
+      type: "saveFailed",
+      requestId: firstId,
+      error: new DocumentPortError("io", "old failure"),
     });
+    expect(staleFailure).toBe(second);
+
+    const failed = documentReducer(staleFailure, {
+      type: "saveFailed",
+      requestId: secondId,
+      error: new DocumentPortError("io", "current failure"),
+    });
+    expect(failed.tabs[0]).toMatchObject({
+      text: "B",
+      savedText: "saved",
+      version: "v1",
+      status: "dirty",
+    });
+    expect(failed.tabs[0].pendingSave).toBeUndefined();
+
+    const closedAfterFailure = documentReducer(failed, {
+      type: "closeConfirmed",
+      id: "doc-1",
+      disposition: "discarded",
+    });
+    const reopenedAfterFailure = documentReducer(closedAfterFailure, {
+      type: "reopenLastClosed",
+    });
+    expect(reopenedAfterFailure.tabs[0].pendingSave).toBeUndefined();
+
+    const retrying = documentReducer(failed, {
+      type: "saveRequested",
+      id: "doc-1",
+      target: { path: "/notes/b.md", expectedVersion: null },
+    });
+    const cancelled = documentReducer(retrying, {
+      type: "saveCancelled",
+      requestId: retrying.tabs[0].pendingSave!.requestId,
+    });
+    expect(cancelled.tabs[0]).toMatchObject({ text: "B", status: "dirty" });
+    expect(cancelled.tabs[0].pendingSave).toBeUndefined();
+  });
+
+  it("does not close a tab with a pending write and never archives pending state", () => {
+    const saving = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "dirty" },
+      {
+        type: "saveRequested",
+        id: "doc-1",
+      },
+    ]);
+    const blockedClose = documentReducer(saving, {
+      type: "closeConfirmed",
+      id: "doc-1",
+      disposition: "saved",
+    });
+    expect(blockedClose).toBe(saving);
+
+    const cancelled = documentReducer(saving, {
+      type: "saveCancelled",
+      requestId: saving.tabs[0].pendingSave!.requestId,
+    });
+    const closed = documentReducer(cancelled, {
+      type: "closeConfirmed",
+      id: "doc-1",
+      disposition: "discarded",
+    });
+    expect(closed.tabs).toEqual([]);
+    expect(closed.recentlyClosed[0].document.pendingSave).toBeUndefined();
+  });
+
+  it("sanitizes stale pending data from a restored recently closed entry", () => {
+    const stale = document("stale", {
+      pendingSave: writeRequest({ documentId: "stale" }),
+    });
+    const staleDeeper = document("deeper", {
+      pendingSave: writeRequest({ documentId: "deeper", requestId: "save-6" }),
+    });
+    const state: DocumentState = {
+      tabs: [],
+      activeId: null,
+      recentlyClosed: [
+        { document: stale, closedIndex: 0 },
+        { document: staleDeeper, closedIndex: 1 },
+      ],
+      nextSaveSequence: 7,
+    };
+
+    const reopened = documentReducer(state, { type: "reopenLastClosed" });
+
+    expect(reopened.tabs[0].pendingSave).toBeUndefined();
+    expect(reopened.recentlyClosed[0].document.pendingSave).toBeUndefined();
+    expect(reopened.nextSaveSequence).toBe(7);
   });
 
   it("selects the right neighbor, then the left neighbor, when closing tabs", () => {
@@ -393,6 +535,7 @@ describe("documentReducer", () => {
       tabs: [document("a"), document("b"), document("c")],
       activeId: "b",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     };
     const afterB = documentReducer(initial, {
       type: "closeConfirmed",
@@ -445,6 +588,7 @@ describe("documentReducer", () => {
       tabs: Array.from({ length: 21 }, (_, index) => document(`doc-${index}`)),
       activeId: "doc-20",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     };
     for (let index = 0; index < 21; index += 1) {
       state = documentReducer(state, {
@@ -464,6 +608,7 @@ describe("documentReducer", () => {
       tabs: [document("a"), document("b"), document("c")],
       activeId: "b",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     };
     const closed = documentReducer(initial, {
       type: "closeConfirmed",
@@ -482,6 +627,7 @@ describe("documentReducer", () => {
       tabs: [document("a"), document("b"), document("c")],
       activeId: "a",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     };
     const closedA = documentReducer(initial, {
       type: "closeConfirmed",
@@ -516,6 +662,7 @@ describe("documentReducer", () => {
       tabs: [existing],
       activeId: "same",
       recentlyClosed: [{ document: closed, closedIndex: 0 }],
+      nextSaveSequence: 0,
     };
 
     const reopened = documentReducer(state, { type: "reopenLastClosed" });
@@ -536,6 +683,7 @@ describe("documentReducer", () => {
         { document: old, closedIndex: 3 },
         { document: unrelated, closedIndex: 2 },
       ],
+      nextSaveSequence: 0,
     };
 
     const closed = documentReducer(state, {
@@ -561,6 +709,7 @@ describe("documentReducer", () => {
       tabs: [open],
       activeId: "untitled",
       recentlyClosed: [{ document: older, closedIndex: 4 }],
+      nextSaveSequence: 0,
     };
 
     const closed = documentReducer(state, {
@@ -578,6 +727,7 @@ describe("documentReducer", () => {
       tabs: [document("a"), document("b")],
       activeId: "a",
       recentlyClosed: [{ document: document("c"), closedIndex: -4 }],
+      nextSaveSequence: 0,
     };
     const nonActiveClosed = documentReducer(state, {
       type: "closeConfirmed",
@@ -616,6 +766,7 @@ describe("documentReducer", () => {
       tabs: [document("a", { text: "discard me", status: "dirty" })],
       activeId: "a",
       recentlyClosed: [],
+      nextSaveSequence: 0,
     };
     const state = documentReducer(initial, {
       type: "closeConfirmed",
@@ -662,6 +813,7 @@ describe("documentReducer", () => {
       tabs: [alreadyOpen],
       activeId: "existing",
       recentlyClosed: [{ document: closedDuplicate, closedIndex: 0 }],
+      nextSaveSequence: 0,
     };
 
     const reopened = documentReducer(state, { type: "reopenLastClosed" });
@@ -721,18 +873,14 @@ describe("MemoryDocumentPort", () => {
     expect(second.text).toBe("saved");
   });
 
-  it("records cloned writes and saves when the opaque version matches", async () => {
+  it("records cloned exact requests and writes when the opaque version matches", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", openedFile({ path: "/notes/a.md" })]]),
     );
-    const snapshot = document("a", {
-      path: "/notes/a.md",
-      text: "updated",
-      version: "v1",
-    });
+    const request = writeRequest();
 
-    const result = await port.save(snapshot);
-    Reflect.set(snapshot, "text", "mutated after save");
+    const result = await port.write(request);
+    Reflect.set(request, "text", "mutated after save");
     const stored = await port.openPath("/notes/a.md");
 
     expect(result.path).toBe("/notes/a.md");
@@ -755,8 +903,8 @@ describe("MemoryDocumentPort", () => {
       ]),
     );
 
-    const result = await port.save(
-      document("a", { path: "/notes/a.md", version: "memory-version-1" }),
+    const result = await port.write(
+      writeRequest({ expectedVersion: "memory-version-1" }),
     );
 
     expect(result.version).not.toBe("memory-version-1");
@@ -773,18 +921,28 @@ describe("MemoryDocumentPort", () => {
     const port = new MemoryDocumentPort(new Map(), {
       savePath: "/notes/new.md",
     });
-    const snapshot = document("new", { path: null, text: "new" });
-
-    const path = await port.chooseSavePath("Untitled.md");
-    expect(path).toBe("/notes/new.md");
-    const result = await port.saveToPath(path!, snapshot, null);
+    const target = await port.chooseSavePath("Untitled.md");
+    expect(target).toEqual({ path: "/notes/new.md", expectedVersion: null });
+    const result = await port.write(
+      writeRequest({
+        documentId: "new",
+        targetPath: target!.path,
+        text: "new",
+        expectedVersion: target!.expectedVersion,
+      }),
+    );
 
     expect(result.path).toBe("/notes/new.md");
     expect((await port.openPath("/notes/new.md")).text).toBe("new");
 
     const staleExpectation = new MemoryDocumentPort(new Map());
     await expect(
-      staleExpectation.saveToPath("/notes/other.md", snapshot, "ghost-version"),
+      staleExpectation.write(
+        writeRequest({
+          targetPath: "/notes/other.md",
+          expectedVersion: "ghost-version",
+        }),
+      ),
     ).rejects.toMatchObject({ code: "conflict" });
   });
 
@@ -792,41 +950,91 @@ describe("MemoryDocumentPort", () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", openedFile({ path: "/notes/a.md", version: "v2" })]]),
     );
-    const stale = document("a", {
-      path: "/notes/a.md",
-      text: "stale write",
-      version: "v1",
-    });
-
-    await expect(port.save(stale)).rejects.toMatchObject({ code: "conflict" });
+    await expect(
+      port.write(writeRequest({ text: "stale write", expectedVersion: "v1" })),
+    ).rejects.toMatchObject({ code: "conflict" });
     expect((await port.openPath("/notes/a.md")).text).toBe("saved");
     expect(port.writes).toEqual([]);
   });
 
-  it("requires the target version when overwriting through saveToPath", async () => {
+  it("requires the chosen target version when overwriting", async () => {
     const port = new MemoryDocumentPort(
       new Map([
         ["/notes/target.md", openedFile({ path: "/notes/target.md", version: "target-v1" })],
       ]),
+      { savePath: "/notes/target.md" },
     );
-    const source = document("source", {
-      path: "/notes/source.md",
-      text: "replacement",
-      version: "source-v1",
+    const target = await port.chooseSavePath("source.md");
+    expect(target).toEqual({
+      path: "/notes/target.md",
+      expectedVersion: "target-v1",
     });
-
     await expect(
-      port.saveToPath("/notes/target.md", source, "stale-target"),
+      port.write(
+        writeRequest({
+          targetPath: "/notes/target.md",
+          text: "replacement",
+          expectedVersion: "stale-target",
+        }),
+      ),
     ).rejects.toMatchObject({ code: "conflict" });
-    const result = await port.saveToPath(
-      "/notes/target.md",
-      source,
-      "target-v1",
+    const result = await port.write(
+      writeRequest({
+        targetPath: target!.path,
+        text: "replacement",
+        expectedVersion: target!.expectedVersion,
+      }),
     );
 
     expect(result.version).not.toBe("target-v1");
     expect((await port.openPath("/notes/target.md")).text).toBe("replacement");
     expect(port.writes).toHaveLength(1);
+  });
+
+  it("uses normalized macOS keys for open, target selection, and CAS", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        [
+          "/Notes/A.md",
+          openedFile({ path: "/Notes/A.md", version: "v1" }),
+        ],
+      ]),
+      { savePath: "/notes/./a.md", pathPlatform: "macos" },
+    );
+
+    expect((await port.openPath("/notes/a.md")).path).toBe("/Notes/A.md");
+    expect(await port.chooseSavePath("A.md")).toEqual({
+      path: "/notes/./a.md",
+      expectedVersion: "v1",
+    });
+    const result = await port.write(
+      writeRequest({ targetPath: "/NOTES/a.md", expectedVersion: "v1" }),
+    );
+
+    expect(result.path).toBe("/Notes/A.md");
+    expect((await port.openPath("/notes/../notes/A.md")).text).toBe("updated");
+  });
+
+  it("uses Windows separator and case semantics in its backing index", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        [
+          "C:\\Notes\\A.md",
+          openedFile({ path: "C:\\Notes\\A.md", version: "v1" }),
+        ],
+      ]),
+      { pathPlatform: "windows" },
+    );
+
+    const result = await port.write(
+      writeRequest({
+        targetPath: "c:/notes/./a.md",
+        expectedVersion: "v1",
+      }),
+    );
+
+    expect(result.path).toBe("C:\\Notes\\A.md");
+    expect((await port.openPath("c:/notes/a.md")).text).toBe("updated");
   });
 
   it("exposes stable typed errors with an optional cause", () => {

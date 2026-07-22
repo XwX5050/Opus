@@ -1,10 +1,20 @@
 export type Newline = "lf" | "cr_lf";
+export type PathPlatform = "linux" | "macos" | "windows";
 
-export interface PendingSave {
+export interface SaveTarget {
+  readonly path: string;
+  readonly expectedVersion: string | null;
+}
+
+export interface PendingWriteRequest {
   readonly requestId: string;
+  readonly documentId: string;
   readonly targetPath: string;
-  readonly writtenText: string;
-  readonly previousVersion: string | null;
+  readonly text: string;
+  readonly hasUtf8Bom: boolean;
+  readonly newline: Newline;
+  readonly expectedVersion: string | null;
+  readonly pathPlatform: PathPlatform;
 }
 
 export interface DocumentSnapshot {
@@ -18,7 +28,7 @@ export interface DocumentSnapshot {
   readonly modifiedUnixMs: number | null;
   readonly version: string | null;
   readonly status: "clean" | "dirty" | "conflict" | "missing";
-  readonly pendingSave?: PendingSave;
+  readonly pendingSave?: PendingWriteRequest;
 }
 
 export interface ClosedTab {
@@ -30,6 +40,7 @@ export interface DocumentState {
   readonly tabs: ReadonlyArray<DocumentSnapshot>;
   readonly activeId: string | null;
   readonly recentlyClosed: ReadonlyArray<ClosedTab>;
+  readonly nextSaveSequence: number;
 }
 
 export interface OpenedFile {

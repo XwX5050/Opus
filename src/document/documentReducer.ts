@@ -1,11 +1,12 @@
-import type { SavedFile } from "./DocumentPort";
+import type { DocumentPortError, SavedFile } from "./DocumentPort";
 import type {
   DocumentSnapshot,
   DocumentState,
   OpenedFile,
+  PathPlatform,
+  PendingWriteRequest,
+  SaveTarget,
 } from "./types";
-
-export type PathPlatform = "linux" | "macos" | "windows";
 
 export type DocumentAction =
   | { type: "newDocument"; id: string; title?: string }
@@ -18,20 +19,18 @@ export type DocumentAction =
   | { type: "activate"; id: string }
   | { type: "textChanged"; id: string; text: string }
   | {
-      type: "saveStarted";
+      type: "saveRequested";
       id: string;
-      requestId: string;
-      targetPath: string;
-      writtenText: string;
-      previousVersion: string | null;
+      target?: SaveTarget;
+      pathPlatform?: PathPlatform;
     }
   | {
       type: "saveSucceeded";
-      id: string;
       requestId: string;
       result: SavedFile;
-      pathPlatform?: PathPlatform;
     }
+  | { type: "saveFailed"; requestId: string; error: DocumentPortError }
+  | { type: "saveCancelled"; requestId: string }
   | {
       type: "externalConflict";
       id: string;
@@ -51,6 +50,7 @@ export const initialDocumentState: DocumentState = {
   tabs: [],
   activeId: null,
   recentlyClosed: [],
+  nextSaveSequence: 0,
 };
 
 const collapseSegments = (
@@ -169,8 +169,12 @@ const discardedSnapshot = (document: DocumentSnapshot): DocumentSnapshot => ({
 
 const cloneSnapshot = (document: DocumentSnapshot): DocumentSnapshot => ({
   ...document,
-  pendingSave: document.pendingSave ? { ...document.pendingSave } : undefined,
+  pendingSave: undefined,
 });
+
+const assertNever = (action: never): never => {
+  throw new Error(`Unhandled document action: ${JSON.stringify(action)}`);
+};
 
 export const documentReducer = (
   state: DocumentState,
@@ -230,50 +234,110 @@ export const documentReducer = (
               : "dirty",
       }));
 
-    case "saveStarted":
-      return replaceTab(state, action.id, (document) => ({
-        ...document,
-        pendingSave: {
-          requestId: action.requestId,
-          targetPath: action.targetPath,
-          writtenText: action.writtenText,
-          previousVersion: action.previousVersion,
-        },
-      }));
-
-    case "saveSucceeded": {
+    case "saveRequested": {
       const document = state.tabs.find((tab) => tab.id === action.id);
-      if (!document || document.pendingSave?.requestId !== action.requestId) {
-        return state;
-      }
+      if (!document) return state;
+
+      const target =
+        action.target ??
+        (document.path === null
+          ? null
+          : { path: document.path, expectedVersion: document.version });
+      if (!target) return state;
 
       const platform = action.pathPlatform ?? "macos";
+      const targetKey = normalizePathKey(target.path, platform);
+      const collision = state.tabs.some(
+        (tab) =>
+          tab.id !== document.id &&
+          tab.path !== null &&
+          normalizePathKey(tab.path, platform) === targetKey,
+      );
+      if (collision) {
+        return replaceTab(state, document.id, (tab) => ({
+          ...tab,
+          status: "conflict",
+        }));
+      }
+
+      const nextSaveSequence = state.nextSaveSequence + 1;
+      const pendingSave: PendingWriteRequest = Object.freeze({
+        requestId: `save-${nextSaveSequence}`,
+        documentId: document.id,
+        targetPath: target.path,
+        text: document.text,
+        hasUtf8Bom: document.hasUtf8Bom,
+        newline: document.newline,
+        expectedVersion: target.expectedVersion,
+        pathPlatform: platform,
+      });
+      const withPending = replaceTab(state, document.id, (tab) => ({
+        ...tab,
+        pendingSave,
+      }));
+      return { ...withPending, nextSaveSequence };
+    }
+
+    case "saveSucceeded": {
+      const document = state.tabs.find(
+        (tab) => tab.pendingSave?.requestId === action.requestId,
+      );
+      if (!document) {
+        return state;
+      }
+      const pendingSave = document.pendingSave;
+      if (!pendingSave) return state;
+
+      const platform = pendingSave.pathPlatform;
       const resultKey = normalizePathKey(action.result.path, platform);
       const targetMismatch =
-        normalizePathKey(document.pendingSave.targetPath, platform) !== resultKey;
+        normalizePathKey(pendingSave.targetPath, platform) !== resultKey;
       const collides = state.tabs.some(
         (tab) =>
-          tab.id !== action.id &&
+          tab.id !== document.id &&
           tab.path !== null &&
           normalizePathKey(tab.path, platform) === resultKey,
       );
       if (targetMismatch || collides) {
-        return replaceTab(state, action.id, (tab) => ({
-          ...tab,
-          status: "conflict",
-          pendingSave: undefined,
-        }));
+        return {
+          ...state,
+          tabs: state.tabs.map((tab) => {
+            const isSource = tab.id === document.id;
+            const isTarget =
+              tab.id !== document.id &&
+              tab.path !== null &&
+              normalizePathKey(tab.path, platform) === resultKey;
+            if (!isSource && !isTarget) return tab;
+            return {
+              ...tab,
+              status: "conflict",
+              pendingSave: isSource ? undefined : tab.pendingSave,
+            };
+          }),
+        };
       }
 
-      const writtenText = document.pendingSave.writtenText;
-      return replaceTab(state, action.id, (tab) => ({
+      const savedText = pendingSave.text;
+      return replaceTab(state, document.id, (tab) => ({
         ...tab,
         path: action.result.path,
         title: titleFromPath(action.result.path),
-        savedText: writtenText,
+        savedText,
         modifiedUnixMs: action.result.modifiedUnixMs,
         version: action.result.version,
-        status: tab.text === writtenText ? "clean" : "dirty",
+        status: tab.text === savedText ? "clean" : "dirty",
+        pendingSave: undefined,
+      }));
+    }
+
+    case "saveFailed":
+    case "saveCancelled": {
+      const document = state.tabs.find(
+        (tab) => tab.pendingSave?.requestId === action.requestId,
+      );
+      if (!document) return state;
+      return replaceTab(state, document.id, (tab) => ({
+        ...tab,
         pendingSave: undefined,
       }));
     }
@@ -297,6 +361,7 @@ export const documentReducer = (
       if (closedIndex === -1) return state;
 
       const closed = state.tabs[closedIndex];
+      if (closed.pendingSave) return state;
       const stored =
         action.disposition === "discarded"
           ? discardedSnapshot(closed)
@@ -322,14 +387,24 @@ export const documentReducer = (
           { document: stored, closedIndex },
           ...state.recentlyClosed.filter(
             ({ document }) => !duplicate(document),
-          ),
+          ).map(({ document, closedIndex }) => ({
+            document: cloneSnapshot(document),
+            closedIndex,
+          })),
         ].slice(0, 20),
+        nextSaveSequence: state.nextSaveSequence,
       };
     }
 
     case "reopenLastClosed": {
-      const [closed, ...recentlyClosed] = state.recentlyClosed;
+      const [closed, ...remainingClosed] = state.recentlyClosed;
       if (!closed) return state;
+      const recentlyClosed = remainingClosed.map(
+        ({ document, closedIndex }) => ({
+          document: cloneSnapshot(document),
+          closedIndex,
+        }),
+      );
 
       const platform = action.pathPlatform ?? "macos";
       const sameId = state.tabs.find((tab) => tab.id === closed.document.id);
@@ -361,12 +436,13 @@ export const documentReducer = (
         tabs,
         activeId: closed.document.id,
         recentlyClosed,
+        nextSaveSequence: state.nextSaveSequence,
       };
     }
 
     default:
-      return state;
+      return assertNever(action);
   }
 };
 
-export type { DocumentState } from "./types";
+export type { DocumentState, PathPlatform } from "./types";
