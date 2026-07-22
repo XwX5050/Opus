@@ -11,7 +11,7 @@ rust-version = "1.77.2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "app_lib"
+name = "markdown_edit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -27,3 +27,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
+
+[dev-dependencies]
+tempfile = "3"
