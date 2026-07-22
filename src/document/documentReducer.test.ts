@@ -106,6 +106,26 @@ describe("documentReducer", () => {
     );
   });
 
+  it("opens case-distinct Linux paths as two tabs through fileOpened", () => {
+    const state = reduce([
+      {
+        type: "fileOpened",
+        id: "upper",
+        file: openedFile({ path: "/tmp/A.md" }),
+        pathPlatform: "linux",
+      },
+      {
+        type: "fileOpened",
+        id: "lower",
+        file: openedFile({ path: "/tmp/a.md" }),
+        pathPlatform: "linux",
+      },
+    ]);
+
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["upper", "lower"]);
+    expect(state.activeId).toBe("lower");
+  });
+
   it("marks an edited document dirty while retaining the saved text", () => {
     const state = reduce([
       { type: "fileOpened", id: "doc-1", file: openedFile() },
@@ -224,6 +244,38 @@ describe("documentReducer", () => {
     expect(reopened.tabs.map((tab) => tab.id)).toEqual(["a", "b", "c"]);
     expect(reopened.activeId).toBe("b");
     expect(reopened.recentlyClosed).toEqual([]);
+  });
+
+  it("reopens recently closed tabs in LIFO order and preserves the remaining stack", () => {
+    const initial: DocumentState = {
+      tabs: [document("a"), document("b"), document("c")],
+      activeId: "a",
+      recentlyClosed: [],
+    };
+    const closedA = documentReducer(initial, {
+      type: "closeConfirmed",
+      id: "a",
+      disposition: "saved",
+    });
+    const closedC = documentReducer(closedA, {
+      type: "closeConfirmed",
+      id: "c",
+      disposition: "saved",
+    });
+    const closedB = documentReducer(closedC, {
+      type: "closeConfirmed",
+      id: "b",
+      disposition: "saved",
+    });
+
+    const reopened = documentReducer(closedB, { type: "reopenLastClosed" });
+
+    expect(reopened.tabs.map((tab) => tab.id)).toEqual(["b"]);
+    expect(reopened.activeId).toBe("b");
+    expect(reopened.recentlyClosed.map(({ document }) => document.id)).toEqual([
+      "c",
+      "a",
+    ]);
   });
 
   it("records saved text rather than discarded dirty edits", () => {
