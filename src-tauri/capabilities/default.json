@@ -7,9 +7,8 @@
   ],
   "permissions": [
     "core:default",
-    "dialog:default",
-    "fs:default",
-    "opener:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
     "store:default"
   ]
 }

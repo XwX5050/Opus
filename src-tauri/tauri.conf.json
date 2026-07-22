@@ -28,6 +28,9 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "fileAssociations": [
+      { "ext": ["md", "markdown"], "name": "Markdown Document", "role": "Editor" }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

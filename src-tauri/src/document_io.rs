@@ -21,6 +21,7 @@ pub struct OpenedDocument {
     pub has_utf8_bom: bool,
     pub newline: Newline,
     pub modified_unix_ms: u128,
+    pub version: String,
 }
 
 #[derive(Debug)]
@@ -78,7 +79,48 @@ pub fn read_document(path: &Path) -> Result<OpenedDocument, DocumentIoError> {
         text,
         has_utf8_bom,
         modified_unix_ms: modified_unix_ms(&metadata, path)?,
+        version: version_for_bytes(&bytes),
     })
+}
+
+pub fn document_version(path: &Path) -> Result<String, DocumentIoError> {
+    fs::read(path)
+        .map(|bytes| version_for_bytes(&bytes))
+        .map_err(|error| map_io_error(path, error))
+}
+
+fn version_for_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+pub fn write_document_checked(
+    path: &Path,
+    text: &str,
+    bom: bool,
+    newline: Newline,
+    expected_version: Option<&str>,
+) -> Result<(u128, String), DocumentIoError> {
+    let destination = resolve_write_path(path)?;
+    match (expected_version, document_version(&destination)) {
+        (Some(expected), Ok(actual)) if expected != actual => {
+            return Err(DocumentIoError::Io {
+                path: path.to_path_buf(),
+                source: io::Error::new(io::ErrorKind::AlreadyExists, "document version conflict"),
+            })
+        }
+        (Some(_), Err(DocumentIoError::NotFound { .. })) | (None, Ok(_)) => {
+            return Err(DocumentIoError::Io {
+                path: path.to_path_buf(),
+                source: io::Error::new(io::ErrorKind::AlreadyExists, "document version conflict"),
+            })
+        }
+        (Some(_), Err(error)) => return Err(error),
+        (None, Err(DocumentIoError::NotFound { .. })) | (Some(_), Ok(_)) => {}
+        (None, Err(error)) => return Err(error),
+    }
+    let modified = write_document(&destination, text, bom, newline)?;
+    Ok((modified, document_version(&destination)?))
 }
 
 pub fn write_document(
