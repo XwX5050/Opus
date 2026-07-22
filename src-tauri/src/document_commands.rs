@@ -66,11 +66,7 @@ fn map_error(error: DocumentIoError) -> CommandError {
         DocumentIoError::InvalidUtf8 { .. } => "invalid_utf8",
         DocumentIoError::NotFound { .. } => "not_found",
         DocumentIoError::PermissionDenied { .. } => "permission_denied",
-        DocumentIoError::Io { source, .. }
-            if source.kind() == std::io::ErrorKind::AlreadyExists =>
-        {
-            "conflict"
-        }
+        DocumentIoError::Conflict { .. } => "conflict",
         _ => "io",
     };
     CommandError {

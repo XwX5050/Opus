@@ -6,9 +6,10 @@
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
     "dialog:allow-open",
-    "dialog:allow-save",
-    "store:default"
+    "dialog:allow-save"
   ]
 }

@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DocumentPort, DocumentPortErrorCode, SavedFile } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
 import type { OpenedFile, PendingWriteRequest, SaveTarget } from "./types";
@@ -55,19 +54,17 @@ export interface OpenPathSubscriptions {
 export async function subscribeToOpenPaths(port: DocumentPort, onFiles: (files: ReadonlyArray<OpenedFile>) => void, onDirectory: (path: string) => void = () => {}): Promise<OpenPathSubscriptions> {
   let isReady = false;
   let disposed = false;
-  const queued: string[][] = [];
-  const consume = async (paths: string[]) => {
+  type Payload = { files: string[]; directories: string[] };
+  const queued: Payload[] = [];
+  const consume = async (payload: Payload) => {
     if (disposed) return;
-    if (!isReady) { queued.push(paths); return; }
-    const markdown = paths.filter(path => /\.(?:md|markdown)$/i.test(path));
-    paths.filter(path => !/\.(?:md|markdown)$/i.test(path)).forEach(onDirectory);
-    if (markdown.length) onFiles(await Promise.all(markdown.map(path => port.openPath(path))));
+    if (!isReady) { queued.push(payload); return; }
+    payload.directories.forEach(path => onDirectory(path));
+    if (payload.files.length) onFiles(await Promise.all(payload.files.map(path => port.openPath(path))));
   };
   const unlisten: UnlistenFn[] = [];
-  unlisten.push(await listen<string[]>("open-paths", event => { void consume(event.payload); }));
-  unlisten.push(await getCurrentWindow().onDragDropEvent(event => {
-    if (event.payload.type === "drop") void consume(event.payload.paths);
-  }));
+  unlisten.push(await listen<Payload>("open-paths", event => { void consume(event.payload); }));
+  await emit("frontend-ready");
   return {
     async ready() { isReady = true; for (const paths of queued.splice(0)) await consume(paths); },
     dispose() { disposed = true; queued.length = 0; unlisten.splice(0).forEach(fn => fn()); },

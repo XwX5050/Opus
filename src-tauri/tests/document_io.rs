@@ -1,5 +1,6 @@
 use std::os::unix::{fs::symlink, fs::PermissionsExt};
 
+use markdown_edit_lib::document_io::write_document_checked_with_hook;
 use markdown_edit_lib::document_io::{read_document, write_document, DocumentIoError, Newline};
 
 #[test]
@@ -217,4 +218,35 @@ fn directory_entry_names(path: &std::path::Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+#[test]
+fn checked_new_save_does_not_clobber_file_created_at_commit_and_cleans_temp() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("race.md");
+    let result = write_document_checked_with_hook(&path, "ours", false, Newline::Lf, None, || {
+        std::fs::write(&path, b"theirs").unwrap()
+    });
+    assert!(matches!(result, Err(DocumentIoError::Conflict { .. })));
+    assert_eq!(std::fs::read(&path).unwrap(), b"theirs");
+    assert_eq!(directory_entry_names(dir.path()), vec!["race.md"]);
+}
+
+#[test]
+fn checked_existing_save_rejects_modification_at_commit_and_cleans_temp() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("race.md");
+    std::fs::write(&path, b"original").unwrap();
+    let expected = read_document(&path).unwrap().version;
+    let result = write_document_checked_with_hook(
+        &path,
+        "ours",
+        false,
+        Newline::Lf,
+        Some(&expected),
+        || std::fs::write(&path, b"theirs-longer").unwrap(),
+    );
+    assert!(matches!(result, Err(DocumentIoError::Conflict { .. })));
+    assert_eq!(std::fs::read(&path).unwrap(), b"theirs-longer");
+    assert_eq!(directory_entry_names(dir.path()), vec!["race.md"]);
 }

@@ -1,7 +1,66 @@
+use serde::Serialize;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
 };
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct OpenPathsPayload {
+    pub files: Vec<PathBuf>,
+    pub directories: Vec<PathBuf>,
+}
+
+impl OpenPathsPayload {
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty() && self.directories.is_empty()
+    }
+}
+
+#[derive(Default)]
+pub struct OpenPathQueue {
+    ready: bool,
+    pending: Vec<PathBuf>,
+}
+
+impl OpenPathQueue {
+    pub fn enqueue<I>(&mut self, paths: I) -> Option<OpenPathsPayload>
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let paths = paths.into_iter().collect::<Vec<_>>();
+        if self.ready {
+            nonempty(classify(paths))
+        } else {
+            self.pending.extend(paths);
+            None
+        }
+    }
+
+    pub fn ready(&mut self) -> Option<OpenPathsPayload> {
+        if self.ready {
+            return None;
+        }
+        self.ready = true;
+        nonempty(classify(std::mem::take(&mut self.pending)))
+    }
+}
+
+fn nonempty(payload: OpenPathsPayload) -> Option<OpenPathsPayload> {
+    (!payload.is_empty()).then_some(payload)
+}
+
+fn classify(paths: Vec<PathBuf>) -> OpenPathsPayload {
+    let mut seen = HashSet::new();
+    let mut payload = OpenPathsPayload::default();
+    for path in paths.into_iter().filter(|path| seen.insert(path.clone())) {
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => payload.directories.push(path),
+            Ok(metadata) if metadata.is_file() && is_markdown(&path) => payload.files.push(path),
+            _ => {}
+        }
+    }
+    payload
+}
 
 pub fn normalize_open_paths<I, S>(values: I) -> Vec<PathBuf>
 where

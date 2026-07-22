@@ -1,6 +1,6 @@
 use std::{
     fmt, fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::UNIX_EPOCH,
@@ -30,6 +30,7 @@ pub enum DocumentIoError {
     MissingParent { path: PathBuf },
     NotFound { path: PathBuf },
     PermissionDenied { path: PathBuf },
+    Conflict { path: PathBuf },
     Io { path: PathBuf, source: io::Error },
 }
 
@@ -48,6 +49,7 @@ impl fmt::Display for DocumentIoError {
             Self::PermissionDenied { path } => {
                 write!(formatter, "permission denied for {}", path.display())
             }
+            Self::Conflict { path } => write!(formatter, "document changed at {}", path.display()),
             Self::Io { path, source } => {
                 write!(formatter, "I/O error for {}: {source}", path.display())
             }
@@ -83,12 +85,6 @@ pub fn read_document(path: &Path) -> Result<OpenedDocument, DocumentIoError> {
     })
 }
 
-pub fn document_version(path: &Path) -> Result<String, DocumentIoError> {
-    fs::read(path)
-        .map(|bytes| version_for_bytes(&bytes))
-        .map_err(|error| map_io_error(path, error))
-}
-
 fn version_for_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
@@ -101,26 +97,107 @@ pub fn write_document_checked(
     newline: Newline,
     expected_version: Option<&str>,
 ) -> Result<(u128, String), DocumentIoError> {
+    write_document_checked_with_hook(path, text, bom, newline, expected_version, || {})
+}
+
+#[doc(hidden)]
+pub fn write_document_checked_with_hook<F>(
+    path: &Path,
+    text: &str,
+    bom: bool,
+    newline: Newline,
+    expected_version: Option<&str>,
+    before_commit: F,
+) -> Result<(u128, String), DocumentIoError>
+where
+    F: FnOnce(),
+{
     let destination = resolve_write_path(path)?;
-    match (expected_version, document_version(&destination)) {
-        (Some(expected), Ok(actual)) if expected != actual => {
-            return Err(DocumentIoError::Io {
-                path: path.to_path_buf(),
-                source: io::Error::new(io::ErrorKind::AlreadyExists, "document version conflict"),
-            })
-        }
-        (Some(_), Err(DocumentIoError::NotFound { .. })) | (None, Ok(_)) => {
-            return Err(DocumentIoError::Io {
-                path: path.to_path_buf(),
-                source: io::Error::new(io::ErrorKind::AlreadyExists, "document version conflict"),
-            })
-        }
-        (Some(_), Err(error)) => return Err(error),
-        (None, Err(DocumentIoError::NotFound { .. })) | (Some(_), Ok(_)) => {}
-        (None, Err(error)) => return Err(error),
+    let parent = parent_directory(&destination)?;
+    let permissions = existing_permissions(&destination)?;
+    let output = output_bytes(text, bom, newline);
+    let version = version_for_bytes(&output);
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| map_io_error(&destination, error))?;
+    if let Some(permissions) = permissions {
+        temporary
+            .as_file()
+            .set_permissions(permissions)
+            .map_err(|error| map_io_error(&destination, error))?;
     }
-    let modified = write_document(&destination, text, bom, newline)?;
-    Ok((modified, document_version(&destination)?))
+    temporary
+        .write_all(&output)
+        .map_err(|error| map_io_error(&destination, error))?;
+    temporary
+        .flush()
+        .map_err(|error| map_io_error(&destination, error))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| map_io_error(&destination, error))?;
+    let modified = temporary_file_modified_unix_ms(temporary.as_file(), &destination)?;
+
+    if let Some(expected) = expected_version {
+        let mut current = fs::File::open(&destination).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                DocumentIoError::Conflict {
+                    path: path.to_path_buf(),
+                }
+            } else {
+                map_io_error(&destination, error)
+            }
+        })?;
+        let identity = current
+            .metadata()
+            .map_err(|error| map_io_error(&destination, error))?;
+        let mut bytes = Vec::new();
+        current
+            .read_to_end(&mut bytes)
+            .map_err(|error| map_io_error(&destination, error))?;
+        if version_for_bytes(&bytes) != expected {
+            return Err(DocumentIoError::Conflict {
+                path: path.to_path_buf(),
+            });
+        }
+        before_commit();
+        let current_identity =
+            fs::metadata(&destination).map_err(|error| map_io_error(&destination, error))?;
+        if !same_identity(&identity, &current_identity) {
+            return Err(DocumentIoError::Conflict {
+                path: path.to_path_buf(),
+            });
+        }
+        temporary
+            .persist(&destination)
+            .map_err(|error| map_io_error(&destination, error.error))?;
+    } else {
+        before_commit();
+        temporary.persist_noclobber(&destination).map_err(|error| {
+            if error.error.kind() == io::ErrorKind::AlreadyExists {
+                DocumentIoError::Conflict {
+                    path: path.to_path_buf(),
+                }
+            } else {
+                map_io_error(&destination, error.error)
+            }
+        })?;
+    }
+    Ok((modified, version))
+}
+
+#[cfg(unix)]
+fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
 pub fn write_document(
@@ -132,11 +209,7 @@ pub fn write_document(
     let destination = resolve_write_path(path)?;
     let parent = parent_directory(&destination)?;
     let existing_permissions = existing_permissions(&destination)?;
-    let mut output = Vec::new();
-    if bom {
-        output.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    }
-    output.extend_from_slice(serialize_text(text, newline).as_bytes());
+    let output = output_bytes(text, bom, newline);
 
     let (temporary_path, mut temporary_file) = create_sibling_temp(parent, &destination)?;
     let result = (|| {
@@ -166,6 +239,15 @@ pub fn write_document(
         let _ = fs::remove_file(&temporary_path);
     }
     result
+}
+
+fn output_bytes(text: &str, bom: bool, newline: Newline) -> Vec<u8> {
+    let mut output = Vec::new();
+    if bom {
+        output.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    }
+    output.extend_from_slice(serialize_text(text, newline).as_bytes());
+    output
 }
 
 fn detect_newline(text: &str) -> Newline {

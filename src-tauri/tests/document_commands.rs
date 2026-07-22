@@ -60,3 +60,72 @@ fn rejects_relative_and_non_markdown_paths() {
         "io"
     );
 }
+
+#[test]
+fn valid_open_and_current_version_save_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.md");
+    std::fs::write(&path, b"old\n").unwrap();
+    let opened = open_document_impl(path.clone()).unwrap();
+    assert_eq!(opened.text, "old\n");
+    assert!(opened.version.starts_with("sha256:"));
+    let saved = save_document_impl(SaveDocumentRequest {
+        request_id: "r".into(),
+        document_id: "d".into(),
+        target_path: path.clone(),
+        text: "new\n".into(),
+        has_utf8_bom: false,
+        newline: Newline::Lf,
+        expected_version: Some(opened.version),
+        path_platform: "macos".into(),
+    })
+    .unwrap();
+    assert_eq!(saved.path, path);
+    assert_eq!(std::fs::read(&saved.path).unwrap(), b"new\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_open_and_save_checks_and_updates_target_without_replacing_link() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target.md");
+    let link = dir.path().join("link.md");
+    std::fs::write(&target, b"old").unwrap();
+    symlink(&target, &link).unwrap();
+    let opened = open_document_impl(link.clone()).unwrap();
+    save_document_impl(SaveDocumentRequest {
+        request_id: "r".into(),
+        document_id: "d".into(),
+        target_path: link.clone(),
+        text: "new".into(),
+        has_utf8_bom: false,
+        newline: Newline::Lf,
+        expected_version: Some(opened.version),
+        path_platform: "macos".into(),
+    })
+    .unwrap();
+    assert!(std::fs::symlink_metadata(link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read(target).unwrap(), b"new");
+}
+
+#[test]
+fn new_target_saves_successfully() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("new.md");
+    save_document_impl(SaveDocumentRequest {
+        request_id: "r".into(),
+        document_id: "d".into(),
+        target_path: path.clone(),
+        text: "new".into(),
+        has_utf8_bom: false,
+        newline: Newline::Lf,
+        expected_version: None,
+        path_platform: "macos".into(),
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"new");
+}
