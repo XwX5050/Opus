@@ -197,37 +197,17 @@ fn document_io_write_preserves_existing_target_permissions_and_reports_metadata_
 }
 
 #[test]
-fn document_io_cleans_up_temporary_sibling_after_an_injected_sync_failure() {
+fn document_io_cleans_up_temporary_sibling_after_rename_to_a_directory_fails() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("note.md");
-    let bytes = b"original\n";
-    std::fs::write(&path, bytes).unwrap();
-    let _fault_guard =
-        EnvironmentVariableGuard::set("MARKDOWN_EDIT_DOCUMENT_IO_FAIL_SYNC_FOR", path.as_os_str());
+    let path = dir.path().join("destination");
+    std::fs::create_dir(&path).unwrap();
 
     assert!(matches!(
         write_document(&path, "replacement\n", false, Newline::Lf),
         Err(DocumentIoError::Io { .. })
     ));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    assert_eq!(directory_entry_names(dir.path()), vec!["note.md"]);
-}
-
-struct EnvironmentVariableGuard {
-    name: &'static str,
-}
-
-impl EnvironmentVariableGuard {
-    fn set(name: &'static str, value: &std::ffi::OsStr) -> Self {
-        std::env::set_var(name, value);
-        Self { name }
-    }
-}
-
-impl Drop for EnvironmentVariableGuard {
-    fn drop(&mut self) {
-        std::env::remove_var(self.name);
-    }
+    assert!(path.is_dir());
+    assert_eq!(directory_entry_names(dir.path()), vec!["destination"]);
 }
 
 fn directory_entry_names(path: &std::path::Path) -> Vec<String> {
