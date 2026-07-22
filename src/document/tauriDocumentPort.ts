@@ -65,7 +65,7 @@ export interface OpenPathSubscriptions {
   dispose(): Promise<void>;
 }
 
-export async function subscribeToOpenPaths(port: DocumentPort, onFiles: (files: ReadonlyArray<OpenedFile>) => void, onDirectory: (path: string) => void = () => {}, onError: DocumentPortErrorHandler = () => {}): Promise<OpenPathSubscriptions> {
+export async function subscribeToOpenPaths(port: DocumentPort, onFiles: (files: ReadonlyArray<OpenedFile>) => void, onDirectory: (path: string) => void = () => {}, onError: DocumentPortErrorHandler = () => {}, signal?: AbortSignal): Promise<OpenPathSubscriptions> {
   let isReady = false;
   let disposed = false;
   let generation = 0;
@@ -123,6 +123,13 @@ export async function subscribeToOpenPaths(port: DocumentPort, onFiles: (files: 
     if (isReady) void pump();
   };
   const unlisten: UnlistenFn = await listen<Payload>("open-paths", event => receive(event.payload));
+  if (signal?.aborted) {
+    disposed = true;
+    generation += 1;
+    queued.length = 0;
+    unlisten();
+    return { async ready() {}, async dispose() {} };
+  }
   try { await emit("frontend-ready"); } catch (error) { unlisten(); throw error; }
   let disposePromise: Promise<void> | null = null;
   return {

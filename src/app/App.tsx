@@ -13,6 +13,7 @@ export default function App() {
       port={port}
       subscribeToEvents={subscribeToOpenPaths}
       externalError={portError}
+      onDismissExternalError={() => setPortError(null)}
     />
   );
 }

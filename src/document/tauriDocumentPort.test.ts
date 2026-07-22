@@ -145,4 +145,29 @@ describe("tauri document port", () => {
     await subscriptions.dispose();
     expect(unlistenOpen).toHaveBeenCalledOnce();
   });
+
+  it("does not handshake when registration finishes after its signal was aborted", async () => {
+    let finishListening!: (unlisten: () => void) => void;
+    const registered = new Promise<() => void>((resolve) => { finishListening = resolve; });
+    const unlisten = vi.fn();
+    mocks.listen.mockReturnValue(registered);
+    const controller = new AbortController();
+
+    const subscribing = subscribeToOpenPaths(
+      createTauriDocumentPort(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      controller.signal,
+    );
+    controller.abort();
+    finishListening(unlisten);
+    const subscription = await subscribing;
+
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(mocks.emit).not.toHaveBeenCalled();
+    await subscription.ready();
+    await subscription.dispose();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
 });

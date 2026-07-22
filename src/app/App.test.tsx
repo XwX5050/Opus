@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DocumentPortError, type DocumentPort } from "../document/DocumentPort";
 import App from "./App";
@@ -24,9 +25,12 @@ vi.mock("../document/tauriDocumentPort", () => ({
 }));
 
 describe("App", () => {
-  it("surfaces production document-picker errors in the shell", () => {
+  it("surfaces and acknowledges production document-picker errors in the shell", async () => {
+    const user = userEvent.setup();
     render(<App />);
     act(() => mockedTauri.onError?.(new DocumentPortError("permission_denied", "permission denied")));
     expect(screen.getByRole("alert")).toHaveTextContent("permission denied");
+    await user.click(screen.getByRole("button", { name: "关闭错误提示" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

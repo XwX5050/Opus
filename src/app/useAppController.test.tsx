@@ -15,6 +15,7 @@ const file: OpenedFile = {
 
 class InspectableControllerPort implements DocumentPort {
   request: PendingWriteRequest | undefined;
+  readonly requests: PendingWriteRequest[] = [];
 
   constructor(
     private readonly file: OpenedFile,
@@ -27,6 +28,7 @@ class InspectableControllerPort implements DocumentPort {
   async chooseSavePath() { return this.saveTarget; }
   write(request: PendingWriteRequest) {
     this.request = request;
+    this.requests.push(request);
     return this.writeResult;
   }
 }
@@ -84,5 +86,81 @@ describe("useAppController", () => {
       savedText: "copy text",
       status: "clean",
     });
+  });
+
+  it("atomically rejects every second close choice while the first save is pending", async () => {
+    let resolveWrite!: (value: SavedFile) => void;
+    const write = new Promise<SavedFile>((resolve) => { resolveWrite = resolve; });
+    const port = new InspectableControllerPort(file, write);
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openFiles());
+    const id = hook.result.current.state.activeId!;
+    act(() => hook.result.current.changeText(id, "dirty"));
+    act(() => hook.result.current.close(id));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    let discard!: Promise<void>;
+    let cancel!: Promise<void>;
+    act(() => {
+      first = hook.result.current.confirmClose("save");
+      second = hook.result.current.confirmClose("save");
+      discard = hook.result.current.confirmClose("discard");
+      cancel = hook.result.current.confirmClose("cancel");
+    });
+
+    await waitFor(() => expect(port.requests).toHaveLength(1));
+    expect(hook.result.current.closeSaving).toBe(true);
+    expect(hook.result.current.closeDocumentId).toBe(id);
+    expect(hook.result.current.state.tabs).toHaveLength(1);
+
+    resolveWrite({ path: file.path, modifiedUnixMs: 2, version: "v2" });
+    await act(() => Promise.all([first, second, discard, cancel]));
+    expect(port.requests).toHaveLength(1);
+    expect(hook.result.current.state.tabs).toHaveLength(0);
+    expect(hook.result.current.state.recentlyClosed).toHaveLength(1);
+    expect(hook.result.current.closeDocumentId).toBeNull();
+    expect(hook.result.current.closeSaving).toBe(false);
+  });
+
+  it("settles a deferred open without updating after unmount", async () => {
+    let resolveOpen!: (value: ReadonlyArray<OpenedFile>) => void;
+    const opening = new Promise<ReadonlyArray<OpenedFile>>((resolve) => { resolveOpen = resolve; });
+    const port: DocumentPort = {
+      chooseAndOpenFiles: () => opening,
+      async openPath() { return file; },
+      async chooseSavePath() { return null; },
+      async write(request) {
+        return { path: request.targetPath, modifiedUnixMs: 2, version: "v2" };
+      },
+    };
+    const hook = renderHook(() => useAppController(port));
+    const openingAction = hook.result.current.openFiles();
+    const stateBeforeUnmount = hook.result.current.state;
+    hook.unmount();
+
+    resolveOpen([file]);
+    await openingAction;
+    expect(hook.result.current.state).toBe(stateBeforeUnmount);
+  });
+
+  it("settles a deferred save without applying completion after unmount", async () => {
+    let resolveWrite!: (value: SavedFile) => void;
+    const writing = new Promise<SavedFile>((resolve) => { resolveWrite = resolve; });
+    const port = new InspectableControllerPort(file, writing);
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openFiles());
+    const id = hook.result.current.state.activeId!;
+    act(() => hook.result.current.changeText(id, "dirty"));
+    let saving!: Promise<boolean>;
+    act(() => { saving = hook.result.current.save(id); });
+    await waitFor(() => expect(hook.result.current.state.tabs[0].pendingSave).toBeDefined());
+    const stateBeforeUnmount = hook.result.current.state;
+    hook.unmount();
+
+    resolveWrite({ path: file.path, modifiedUnixMs: 2, version: "v2" });
+    await saving;
+    expect(hook.result.current.state).toBe(stateBeforeUnmount);
+    expect(stateBeforeUnmount.tabs[0].pendingSave).toBeDefined();
   });
 });

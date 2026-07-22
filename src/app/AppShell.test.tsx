@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
@@ -111,7 +112,9 @@ describe("AppShell", () => {
     await user.click(screen.getByRole("button", { name: "打开文件" }));
 
     act(() => replaceEditorText("changed"));
-    expect(screen.getByRole("tab", { name: /a\.md/ })).toHaveTextContent("●");
+    const dirtyTab = screen.getByRole("tab", { name: /a\.md.*未保存/ });
+    expect(dirtyTab).toHaveTextContent("●");
+    expect(within(dirtyTab).getByText(/●/)).toHaveAttribute("aria-hidden", "true");
 
     editor().focus();
     await user.keyboard("{Control>}s{/Control}");
@@ -179,6 +182,33 @@ describe("AppShell", () => {
       text: "copy contents",
       expectedVersion: null,
     });
+  });
+
+  it("shows a Chinese conflict error when Save As completes at a different path", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort(
+      [file("/notes/original.md")],
+      { path: "/notes/copy.md", expectedVersion: null },
+    );
+    port.writeResult = Promise.resolve({
+      path: "/notes/collision.md",
+      modifiedUnixMs: 2,
+      version: "collision-v1",
+    });
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("copy contents"));
+
+    await user.click(screen.getByRole("button", { name: "另存为…" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/保存.*路径.*冲突/);
+    expect(screen.getByRole("tab", { name: /original\.md.*未保存/ })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "关闭 original.md" }));
+    const dialog = screen.getByRole("dialog", { name: "保存更改" });
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/保存.*路径.*冲突/);
+    expect(dialog).toBeVisible();
   });
 
   it("leaves an existing document unchanged when Save As is cancelled", async () => {
@@ -343,5 +373,39 @@ describe("AppShell", () => {
     await waitFor(() => expect(ready).toHaveBeenCalledOnce());
     view.unmount();
     await waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+  });
+
+  it("under StrictMode handshakes only the active deferred subscription and delivers its payload once", async () => {
+    type SubscriberCall = {
+      onFiles: (files: ReadonlyArray<OpenedFile>) => void;
+      signal: AbortSignal | undefined;
+      resolve: (subscription: { ready(): Promise<void>; dispose(): Promise<void> }) => void;
+    };
+    const calls: SubscriberCall[] = [];
+    const bridge = vi.fn((_port, onFiles, _onDirectory, _onError, signal) =>
+      new Promise<{ ready(): Promise<void>; dispose(): Promise<void> }>((resolve) => {
+        calls.push({ onFiles, signal, resolve });
+      }),
+    );
+    render(
+      <StrictMode>
+        <AppShell port={new InspectablePort()} subscribeToEvents={bridge} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0].signal?.aborted).toBe(true);
+    expect(calls[1].signal?.aborted).toBe(false);
+    const first = { ready: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+    const second = { ready: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+
+    calls[0].resolve(first);
+    calls[1].resolve(second);
+    await waitFor(() => expect(second.ready).toHaveBeenCalledOnce());
+    expect(first.ready).not.toHaveBeenCalled();
+    expect(first.dispose).toHaveBeenCalledOnce();
+
+    act(() => calls[1].onFiles([file("/notes/launch.md", "startup payload")]));
+    expect(screen.getAllByRole("tab", { name: /launch\.md/ })).toHaveLength(1);
+    expect(editor()).toHaveTextContent("startup payload");
   });
 });

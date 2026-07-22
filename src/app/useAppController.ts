@@ -14,6 +14,7 @@ export type EventSubscriber = (
   onFiles: (files: ReadonlyArray<OpenedFile>) => void,
   onDirectory?: (path: string) => void,
   onError?: (error: DocumentPortError) => void,
+  signal?: AbortSignal,
 ) => Promise<OpenPathSubscriptions>;
 
 export type CloseChoice = "save" | "discard" | "cancel";
@@ -29,11 +30,28 @@ export function useAppController(
   const stateRef = useRef(state);
   const idSequence = useRef(0);
   const savingIds = useRef(new Set<string>());
+  const closeSavingRef = useRef(false);
+  const closeOperationSequence = useRef(0);
+  const mountedRef = useRef(true);
+  const lifecycleGenerationRef = useRef(0);
   const [closeDocumentId, setCloseDocumentId] = useState<string | null>(null);
   const [closeSaving, setCloseSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    lifecycleGenerationRef.current += 1;
+    return () => {
+      mountedRef.current = false;
+      lifecycleGenerationRef.current += 1;
+    };
+  }, []);
+
+  const isCurrent = useCallback((generation: number) =>
+    mountedRef.current && lifecycleGenerationRef.current === generation, []);
+
   const dispatch = useCallback((action: DocumentAction) => {
+    if (!mountedRef.current) return stateRef.current;
     const next = documentReducer(stateRef.current, action);
     stateRef.current = next;
     setState(next);
@@ -56,22 +74,26 @@ export function useAppController(
   }, [dispatch, nextId]);
 
   const openFiles = useCallback(async () => {
+    const generation = lifecycleGenerationRef.current;
     setError(null);
     try {
-      addOpenedFiles(await port.chooseAndOpenFiles());
+      const files = await port.chooseAndOpenFiles();
+      if (isCurrent(generation)) addOpenedFiles(files);
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (isCurrent(generation)) setError(errorMessage(caught));
     }
-  }, [addOpenedFiles, port]);
+  }, [addOpenedFiles, isCurrent, port]);
 
   const openPath = useCallback(async (path: string) => {
+    const generation = lifecycleGenerationRef.current;
     setError(null);
     try {
-      addOpenedFiles([await port.openPath(path)]);
+      const file = await port.openPath(path);
+      if (isCurrent(generation)) addOpenedFiles([file]);
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (isCurrent(generation)) setError(errorMessage(caught));
     }
-  }, [addOpenedFiles, port]);
+  }, [addOpenedFiles, isCurrent, port]);
 
   const newDocument = useCallback(() => {
     dispatch({ type: "newDocument", id: nextId() });
@@ -81,6 +103,7 @@ export function useAppController(
     id: string | null,
     chooseTarget: boolean,
   ): Promise<boolean> => {
+    const generation = lifecycleGenerationRef.current;
     if (!id || savingIds.current.has(id)) return false;
     const before = stateRef.current.tabs.find((tab) => tab.id === id);
     if (!before || before.pendingSave) return false;
@@ -90,6 +113,7 @@ export function useAppController(
       let target;
       if (chooseTarget || before.path === null) {
         target = await port.chooseSavePath(before.title);
+        if (!isCurrent(generation)) return false;
         if (!target) return false;
       }
 
@@ -108,29 +132,40 @@ export function useAppController(
 
       try {
         const result = await port.write(pending);
+        if (!isCurrent(generation)) return false;
         const completed = dispatch({
           type: "saveSucceeded",
           requestId: pending.requestId,
           result,
         });
-        return completed.tabs.some(
+        const succeeded = completed.tabs.some(
           (tab) => tab.id === id && !tab.pendingSave && tab.status !== "conflict",
         );
+        if (!succeeded) {
+          const failure = new DocumentPortError(
+            "conflict",
+            "保存完成时检测到目标路径冲突，文件仍处于未保存状态",
+          );
+          setError(failure.message);
+        }
+        return succeeded;
       } catch (caught) {
         const failure = caught instanceof DocumentPortError
           ? caught
           : new DocumentPortError("io", errorMessage(caught), { cause: caught });
-        dispatch({ type: "saveFailed", requestId: pending.requestId, error: failure });
-        setError(failure.message);
+        if (isCurrent(generation)) {
+          dispatch({ type: "saveFailed", requestId: pending.requestId, error: failure });
+          setError(failure.message);
+        }
         return false;
       }
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (isCurrent(generation)) setError(errorMessage(caught));
       return false;
     } finally {
       savingIds.current.delete(id);
     }
-  }, [dispatch, port]);
+  }, [dispatch, isCurrent, port]);
 
   const save = useCallback(
     (id = stateRef.current.activeId) => performSave(id, false),
@@ -154,31 +189,36 @@ export function useAppController(
 
   const confirmClose = useCallback(async (choice: CloseChoice) => {
     const id = closeDocumentId;
-    if (!id) return;
+    if (!id || closeSavingRef.current) return;
     if (choice === "cancel") {
-      if (closeSaving) return;
       setCloseDocumentId(null);
       return;
     }
     if (choice === "discard") {
-      if (closeSaving) return;
       setCloseDocumentId(null);
       dispatch({ type: "closeConfirmed", id, disposition: "discarded" });
       return;
     }
-    if (closeSaving) return;
+    const generation = lifecycleGenerationRef.current;
+    const operationToken = closeOperationSequence.current + 1;
+    closeOperationSequence.current = operationToken;
+    closeSavingRef.current = true;
     setCloseSaving(true);
     try {
       const saved = await save(id);
+      if (!isCurrent(generation)) return;
       const document = stateRef.current.tabs.find((tab) => tab.id === id);
       if (saved && document?.status === "clean" && !document.pendingSave) {
         dispatch({ type: "closeConfirmed", id, disposition: "saved" });
         setCloseDocumentId(null);
       }
     } finally {
-      setCloseSaving(false);
+      if (closeOperationSequence.current === operationToken) {
+        closeSavingRef.current = false;
+        if (isCurrent(generation)) setCloseSaving(false);
+      }
     }
-  }, [closeDocumentId, closeSaving, dispatch, save]);
+  }, [closeDocumentId, dispatch, isCurrent, save]);
 
   const reopenClosed = useCallback(() => {
     dispatch({ type: "reopenLastClosed" });
@@ -186,22 +226,25 @@ export function useAppController(
 
   useEffect(() => {
     if (!subscribeToEvents) return;
+    const abortController = new AbortController();
     let disposed = false;
     let subscription: OpenPathSubscriptions | null = null;
     void subscribeToEvents(
       port,
-      addOpenedFiles,
+      (files) => { if (!abortController.signal.aborted) addOpenedFiles(files); },
       undefined,
-      (eventError) => setError(eventError.message),
+      (eventError) => { if (!abortController.signal.aborted) setError(eventError.message); },
+      abortController.signal,
     ).then(async (created) => {
       subscription = created;
-      if (disposed) await created.dispose();
+      if (disposed || abortController.signal.aborted) await created.dispose();
       else await created.ready();
     }).catch((caught) => {
       if (!disposed) setError(errorMessage(caught));
     });
     return () => {
       disposed = true;
+      abortController.abort();
       if (subscription) void subscription.dispose();
     };
   }, [addOpenedFiles, port, subscribeToEvents]);

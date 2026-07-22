@@ -7,12 +7,14 @@ export interface AppShellProps {
   port: DocumentPort;
   subscribeToEvents?: EventSubscriber | null;
   externalError?: string | null;
+  onDismissExternalError?: () => void;
 }
 
 export default function AppShell({
   port,
   subscribeToEvents = null,
   externalError = null,
+  onDismissExternalError,
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
@@ -158,7 +160,13 @@ export default function AppShell({
                 onClick={() => controller.activate(tab.id)}
                 onKeyDown={(event) => onTabKeyDown(event, index)}
               >
-                {tab.title}{tab.status === "clean" ? "" : " ●"}
+                {tab.title}
+                {tab.status !== "clean" && (
+                  <>
+                    <span aria-hidden="true"> ●</span>
+                    <span style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}> 未保存</span>
+                  </>
+                )}
               </button>
               <button
                 type="button"
@@ -202,7 +210,14 @@ export default function AppShell({
       </section>
       </div>
 
-      {(controller.error || externalError) && <p role="alert">{controller.error || externalError}</p>}
+      {(controller.error || externalError) && (
+        <div role="alert">
+          <span>{controller.error || externalError}</span>
+          {!controller.error && externalError && onDismissExternalError && (
+            <button type="button" aria-label="关闭错误提示" onClick={onDismissExternalError}>×</button>
+          )}
+        </div>
+      )}
 
       {closing && (
         <div
