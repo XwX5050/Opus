@@ -7,6 +7,7 @@ use std::{
 };
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const INJECT_SYNC_FAILURE_FOR: &str = "MARKDOWN_EDIT_DOCUMENT_IO_FAIL_SYNC_FOR";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,9 +110,7 @@ pub fn write_document(
         temporary_file
             .flush()
             .map_err(|error| map_io_error(&destination, error))?;
-        temporary_file
-            .sync_all()
-            .map_err(|error| map_io_error(&destination, error))?;
+        sync_temporary_file(&temporary_file, &destination)?;
         drop(temporary_file);
         fs::rename(&temporary_path, &destination)
             .map_err(|error| map_io_error(&destination, error))?;
@@ -125,6 +124,21 @@ pub fn write_document(
         let _ = fs::remove_file(&temporary_path);
     }
     result
+}
+
+fn sync_temporary_file(file: &fs::File, destination: &Path) -> Result<(), DocumentIoError> {
+    if std::env::var_os(INJECT_SYNC_FAILURE_FOR)
+        .as_deref()
+        .is_some_and(|configured_path| Path::new(configured_path) == destination)
+    {
+        return Err(DocumentIoError::Io {
+            path: destination.to_path_buf(),
+            source: io::Error::other("injected temporary file sync failure"),
+        });
+    }
+
+    file.sync_all()
+        .map_err(|error| map_io_error(destination, error))
 }
 
 fn detect_newline(text: &str) -> Newline {
