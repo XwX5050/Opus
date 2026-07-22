@@ -74,6 +74,51 @@ describe("AppShell", () => {
     expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
   });
 
+  it("defaults to live preview and toggles source mode without rebuilding the editor", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        port={new InspectablePort([
+          file("/notes/preview.md", "**world** rest\n\n---\n\noutside"),
+        ])}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    const root = view.dom;
+    const selection = view.state.selection;
+    const toggle = screen.getByRole("button", { name: "实时预览" });
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
+    expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
+    expect(editor()).not.toHaveTextContent("**");
+
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: "源码模式" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(EditorView.findFromDOM(editor())).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(root.querySelector(".cm-live-preview-strong")).toBeNull();
+    expect(root.querySelector(".cm-live-preview-horizontal-rule")).toBeNull();
+    expect(editor()).toHaveTextContent("**world**");
+    expect(editor()).toHaveTextContent("---");
+
+    await user.click(screen.getByRole("button", { name: "源码模式" }));
+    expect(screen.getByRole("button", { name: "实时预览" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(EditorView.findFromDOM(editor())).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
+    expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
+  });
+
   it("opens two files as tabs and focuses an equivalent path instead of duplicating it", async () => {
     const user = userEvent.setup();
     const port = new InspectablePort([

@@ -32,6 +32,16 @@ const editorView = () => {
   return view;
 };
 
+const atomicRanges = (view: EditorView) => {
+  const ranges: { from: number; to: number }[] = [];
+  for (const provider of view.state.facet(EditorView.atomicRanges)) {
+    provider(view).between(0, view.state.doc.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+  }
+  return ranges;
+};
+
 describe("MarkdownEditor", () => {
   it.each([
     ["- item", "- item\n- "],
@@ -97,18 +107,21 @@ describe("MarkdownEditor", () => {
     const view = editorView();
     const selection = view.state.selection;
     expect(content().textContent).not.toContain("**");
+    expect(atomicRanges(view)).not.toHaveLength(0);
 
     rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
     expect(rendered.container.querySelector(".cm-editor")).toBe(root);
     expect(editorView()).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(content().textContent).toContain("**world**");
+    expect(atomicRanges(view)).toEqual([]);
     expect(onChange).not.toHaveBeenCalled();
 
     rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
     expect(editorView()).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(content().textContent).not.toContain("**");
+    expect(atomicRanges(view)).not.toHaveLength(0);
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -122,5 +135,19 @@ describe("MarkdownEditor", () => {
     rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
     await user.keyboard("{Control>}z{/Control}");
     expect(editorView().state.doc.toString()).toBe("text");
+  });
+
+  it("keeps source revealed when preview is toggled during composition", () => {
+    const rendered = renderEditor({ value: "**world** rest", sourceMode: false });
+    moveToEnd();
+    content().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(content()).toHaveTextContent("**world**");
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
+    expect(content()).toHaveTextContent("**world**");
+
+    content().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(content()).not.toHaveTextContent("**");
   });
 });

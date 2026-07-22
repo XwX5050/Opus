@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import MarkdownEditor from "../editor/MarkdownEditor";
 import { type EventSubscriber, useAppController } from "./useAppController";
@@ -17,6 +17,7 @@ export default function AppShell({
   onDismissExternalError,
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
+  const [sourceMode, setSourceMode] = useState(false);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLElement>(null);
@@ -142,6 +143,13 @@ export default function AppShell({
             <button type="button" onClick={controller.newDocument}>新建</button>
             <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
             <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
+            <button
+              type="button"
+              aria-pressed={!sourceMode}
+              onClick={() => setSourceMode((current) => !current)}
+            >
+              {sourceMode ? "源码模式" : "实时预览"}
+            </button>
           </>
         )}
       </header>
@@ -195,7 +203,7 @@ export default function AppShell({
             onChange={(text) => controller.changeText(active.id, text)}
             onSave={() => void controller.save(active.id)}
             onReopenClosed={reopenClosed}
-            sourceMode
+            sourceMode={sourceMode}
             documentPath={active.path}
           />
         ) : (

@@ -26,8 +26,23 @@ export interface PlannedDecoration {
   checked?: boolean;
 }
 
+export interface LivePreviewRange {
+  from: number;
+  to: number;
+}
+
+export interface LivePreviewDiagnostics {
+  visitedNodes: number;
+}
+
 interface Structure {
   node: SyntaxNode;
+}
+
+interface MarkerNode {
+  from: number;
+  to: number;
+  name: string;
 }
 
 const structureNames = new Set([
@@ -37,6 +52,7 @@ const structureNames = new Set([
   "InlineCode",
   "Link",
   "Autolink",
+  "LinkReference",
   "Blockquote",
   "ListItem",
   "Task",
@@ -47,8 +63,10 @@ const structureNames = new Set([
 const isHeading = (name: string) =>
   name.startsWith("ATXHeading") || name.startsWith("SetextHeading");
 
-const isStructure = (node: SyntaxNode) =>
-  structureNames.has(node.name) || isHeading(node.name);
+const isStructure = (node: SyntaxNode, parentName: string | null) =>
+  structureNames.has(node.name) ||
+  isHeading(node.name) ||
+  (node.name === "URL" && parentName === "Paragraph");
 
 // Cursor ranges include node.to to keep delimiters visible at the editing edge.
 // Non-empty selections use normal half-open overlap semantics.
@@ -77,7 +95,10 @@ const classNameFor = (node: SyntaxNode): string | undefined => {
       return "cm-live-preview-inline-code";
     case "Link":
     case "Autolink":
+    case "URL":
       return "cm-live-preview-link";
+    case "LinkReference":
+      return "cm-live-preview-reference-definition";
     case "Blockquote":
       return "cm-live-preview-quote";
     case "FencedCode":
@@ -98,7 +119,12 @@ const shouldReplace = (owner: Structure, node: SyntaxNode) => {
       return node.name === "CodeMark";
     case "Link":
       // Preview shows the readable label and hides both punctuation and destination.
-      return node.name === "LinkMark" || node.name === "URL";
+      return (
+        node.name === "LinkMark" ||
+        node.name === "URL" ||
+        node.name === "LinkTitle" ||
+        node.name === "LinkLabel"
+      );
     case "Autolink":
       // An autolink's URL is also its label, so only its angle brackets disappear.
       return node.name === "LinkMark";
@@ -119,24 +145,75 @@ const rangesContainEachOther = (left: SyntaxNode, right: SyntaxNode) =>
   (left.from <= right.from && left.to >= right.to) ||
   (right.from <= left.from && right.to >= left.to);
 
-export const planLivePreview = (state: EditorState): PlannedDecoration[] => {
-  const structures: Structure[] = [];
-  const markerCandidates: { owner: Structure; node: SyntaxNode }[] = [];
+const normalizeRanges = (
+  docLength: number,
+  ranges: readonly LivePreviewRange[] | undefined,
+): LivePreviewRange[] => {
+  if (docLength === 0) return [];
+  const requested = ranges ?? [{ from: 0, to: docLength }];
+  const normalized = requested
+    .map((range) => {
+      let from = Math.max(0, Math.min(range.from, range.to, docLength));
+      let to = Math.max(0, Math.min(Math.max(range.from, range.to), docLength));
+      if (from === to) {
+        if (to < docLength) to += 1;
+        else from -= 1;
+      }
+      return { from, to };
+    })
+    .filter(({ from, to }) => from >= 0 && to > from)
+    .sort((left, right) => left.from - right.from || left.to - right.to);
 
-  const visit = (node: SyntaxNode, parentStructure: Structure | null) => {
-    let current = parentStructure;
-    if (isStructure(node)) {
-      current = { node };
-      structures.push(current);
+  const merged: LivePreviewRange[] = [];
+  for (const range of normalized) {
+    const previous = merged.at(-1);
+    if (previous && range.from <= previous.to) {
+      previous.to = Math.max(previous.to, range.to);
+    } else {
+      merged.push({ ...range });
     }
-    if (current && shouldReplace(current, node)) {
-      markerCandidates.push({ owner: current, node });
-    }
-    for (let child = node.firstChild; child; child = child.nextSibling) {
-      visit(child, current);
-    }
-  };
-  visit(syntaxTree(state).topNode, null);
+  }
+  return merged;
+};
+
+export const planLivePreview = (
+  state: EditorState,
+  ranges?: readonly LivePreviewRange[],
+  diagnostics?: LivePreviewDiagnostics,
+): PlannedDecoration[] => {
+  const structures: Structure[] = [];
+  const markerCandidates: { owner: Structure; node: MarkerNode }[] = [];
+  const tree = syntaxTree(state);
+
+  for (const range of normalizeRanges(state.doc.length, ranges)) {
+    const nodeNames: string[] = [];
+    const structureStack: Structure[] = [];
+    const createdStructure: boolean[] = [];
+    tree.iterate({
+      from: range.from,
+      to: range.to,
+      enter(nodeRef) {
+        if (diagnostics) diagnostics.visitedNodes += 1;
+        const node = nodeRef.node;
+        const createsStructure = isStructure(node, nodeNames.at(-1) ?? null);
+        nodeNames.push(node.name);
+        createdStructure.push(createsStructure);
+        if (createsStructure) {
+          const structure = { node };
+          structures.push(structure);
+          structureStack.push(structure);
+        }
+        const current = structureStack.at(-1);
+        if (current && shouldReplace(current, node)) {
+          markerCandidates.push({ owner: current, node });
+        }
+      },
+      leave() {
+        nodeNames.pop();
+        if (createdStructure.pop()) structureStack.pop();
+      },
+    });
+  }
 
   const directlySelected = structures.filter(({ node }) => selectionIntersects(state, node));
   const revealed = (structure: Structure) =>
@@ -162,7 +239,38 @@ export const planLivePreview = (state: EditorState): PlannedDecoration[] => {
       });
     }
   }
+  const markersByOwner = new Map<Structure, MarkerNode[]>();
   for (const { owner, node } of markerCandidates) {
+    const markers = markersByOwner.get(owner) ?? [];
+    markers.push(node);
+    markersByOwner.set(owner, markers);
+  }
+  const effectiveMarkerCandidates: { owner: Structure; node: MarkerNode }[] = [];
+  for (const [owner, markers] of markersByOwner) {
+    if (owner.node.name === "Link" && markers.some(({ name }) => name === "LinkTitle")) {
+      const opening = markers.find(
+        (node) => node.name === "LinkMark" && state.sliceDoc(node.from, node.to) === "(",
+      );
+      const closing = markers.find(
+        (node) => node.name === "LinkMark" && state.sliceDoc(node.from, node.to) === ")",
+      );
+      if (opening && closing) {
+        for (const node of markers) {
+          if (node.to <= opening.from || node.from >= closing.to) {
+            effectiveMarkerCandidates.push({ owner, node });
+          }
+        }
+        effectiveMarkerCandidates.push({
+          owner,
+          node: { from: opening.from, to: closing.to, name: "LinkDestination" },
+        });
+        continue;
+      }
+    }
+    for (const node of markers) effectiveMarkerCandidates.push({ owner, node });
+  }
+
+  for (const { owner, node } of effectiveMarkerCandidates) {
     if (!revealed(owner)) {
       const source = state.sliceDoc(node.from, node.to);
       if (owner.node.name === "ListItem") {
@@ -212,8 +320,8 @@ class HorizontalRuleWidget extends WidgetType {
   toDOM() {
     const rule = document.createElement("span");
     rule.className = "cm-live-preview-horizontal-rule";
-    rule.setAttribute("role", "presentation");
-    rule.setAttribute("aria-hidden", "true");
+    rule.setAttribute("role", "separator");
+    rule.setAttribute("aria-label", "分隔线");
     return rule;
   }
 
@@ -266,7 +374,10 @@ class TaskCheckboxWidget extends WidgetType {
     checkbox.checked = this.checked;
     checkbox.disabled = true;
     checkbox.tabIndex = -1;
-    checkbox.setAttribute("aria-hidden", "true");
+    checkbox.setAttribute("role", "checkbox");
+    checkbox.setAttribute("aria-checked", String(this.checked));
+    checkbox.setAttribute("aria-disabled", "true");
+    checkbox.setAttribute("aria-label", this.checked ? "已完成任务" : "未完成任务");
     return checkbox;
   }
 
@@ -277,45 +388,72 @@ class TaskCheckboxWidget extends WidgetType {
   }
 }
 
-const decorationsFor = (state: EditorState): DecorationSet => {
-  const decorations = planLivePreview(state).map((item) => {
+const planningRanges = (view: EditorView): LivePreviewRange[] => [
+  ...view.visibleRanges,
+  ...view.state.selection.ranges.map(({ from, to }) => ({ from, to })),
+];
+
+const decorationSetsFor = (
+  state: EditorState,
+  ranges?: readonly LivePreviewRange[],
+): { decorations: DecorationSet; atomicRanges: DecorationSet } => {
+  const decorations: ReturnType<Decoration["range"]>[] = [];
+  const atomicRanges: ReturnType<Decoration["range"]>[] = [];
+  for (const item of planLivePreview(state, ranges)) {
+    let decoration: ReturnType<Decoration["range"]>;
     if (item.kind === "mark") {
-      return Decoration.mark({ class: item.className }).range(item.from, item.to);
-    }
-    if (item.kind === "horizontal-rule") {
-      return Decoration.replace({ widget: new HorizontalRuleWidget() }).range(
+      decorations.push(
+        Decoration.mark({ class: item.className }).range(item.from, item.to),
+      );
+      continue;
+    } else if (item.kind === "horizontal-rule") {
+      decoration = Decoration.replace({ widget: new HorizontalRuleWidget() }).range(
         item.from,
         item.to,
       );
-    }
-    if (item.kind === "list-marker") {
-      return Decoration.replace({
+    } else if (item.kind === "list-marker") {
+      decoration = Decoration.replace({
         widget: new ListMarkerWidget(item.displayText ?? "•"),
       }).range(item.from, item.to);
-    }
-    if (item.kind === "task-checkbox") {
-      return Decoration.replace({
+    } else if (item.kind === "task-checkbox") {
+      decoration = Decoration.replace({
         widget: new TaskCheckboxWidget(item.checked ?? false),
       }).range(item.from, item.to);
+    } else {
+      decoration = Decoration.replace({}).range(item.from, item.to);
     }
-    return Decoration.replace({}).range(item.from, item.to);
-  });
-  return Decoration.set(decorations, true);
+    decorations.push(decoration);
+    atomicRanges.push(decoration);
+  }
+  return {
+    decorations: Decoration.set(decorations, true),
+    atomicRanges: Decoration.set(atomicRanges, true),
+  };
 };
 
 const refreshLivePreview = StateEffect.define<null>();
 
 class LivePreviewPlugin {
   decorations: DecorationSet;
-  private composing = false;
+  atomicRanges: DecorationSet;
+  private composing: boolean;
 
   constructor(view: EditorView) {
-    this.decorations = decorationsFor(view.state);
+    this.composing = view.compositionStarted;
+    if (this.composing) {
+      this.decorations = Decoration.none;
+      this.atomicRanges = Decoration.none;
+    } else {
+      const sets = decorationSetsFor(view.state, planningRanges(view));
+      this.decorations = sets.decorations;
+      this.atomicRanges = sets.atomicRanges;
+    }
   }
 
   update(update: ViewUpdate) {
     if (this.composing) {
       this.decorations = Decoration.none;
+      this.atomicRanges = Decoration.none;
       return;
     }
     const syntaxChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
@@ -329,25 +467,34 @@ class LivePreviewPlugin {
       syntaxChanged ||
       explicitlyRefreshed
     ) {
-      this.decorations = decorationsFor(update.state);
+      const sets = decorationSetsFor(update.state, planningRanges(update.view));
+      this.decorations = sets.decorations;
+      this.atomicRanges = sets.atomicRanges;
     }
   }
 
   startComposition(view: EditorView) {
     this.composing = true;
     this.decorations = Decoration.none;
+    this.atomicRanges = Decoration.none;
     view.dispatch({ effects: refreshLivePreview.of(null) });
   }
 
   endComposition(view: EditorView) {
     this.composing = false;
-    this.decorations = decorationsFor(view.state);
+    const sets = decorationSetsFor(view.state, planningRanges(view));
+    this.decorations = sets.decorations;
+    this.atomicRanges = sets.atomicRanges;
     view.dispatch({ effects: refreshLivePreview.of(null) });
   }
 }
 
 const livePreviewPlugin = ViewPlugin.fromClass(LivePreviewPlugin, {
   decorations: (plugin) => plugin.decorations,
+  provide: (plugin) =>
+    EditorView.atomicRanges.of(
+      (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none,
+    ),
   eventHandlers: {
     compositionstart(_event, view) {
       this.startComposition(view);
@@ -382,6 +529,7 @@ const livePreviewTheme = EditorView.baseTheme({
     borderLeft: "0.2em solid rgba(127, 127, 127, 0.45)",
   },
   ".cm-live-preview-link": { textDecoration: "underline" },
+  ".cm-live-preview-reference-definition": { opacity: "0.75" },
   ".cm-live-preview-list-marker": {
     display: "inline-block",
     minWidth: "1em",

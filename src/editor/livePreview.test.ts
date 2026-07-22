@@ -105,6 +105,13 @@ describe("planLivePreview", () => {
       .toHaveLength(2);
   });
 
+  it("reveals both adjacent structures when the cursor sits on their shared boundary", () => {
+    const doc = "*one*~~two~~";
+    const boundary = doc.indexOf("~~");
+    const state = createState(doc, [{ anchor: boundary }]);
+    expect(hiddenSource(state, planLivePreview(state))).toEqual([]);
+  });
+
   it("reveals every structure touched by multiple cursors and selections", () => {
     const doc = "*one* and **two** and ~~three~~";
     const state = createState(doc, [
@@ -152,6 +159,37 @@ describe("planLivePreview", () => {
     expect(markedAs(plan, "cm-live-preview-link")).toHaveLength(1);
   });
 
+  it("hides inline link destinations, titles, and delimiters while keeping the label", () => {
+    const doc = "[label](url \"title\") outside";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    expect(syntaxTree(state).toString()).toContain("URL,LinkTitle");
+    expect(hiddenSource(state, planLivePreview(state))).toEqual([
+      "[",
+      "]",
+      "(url \"title\")",
+    ]);
+  });
+
+  it("hides a reference link label but keeps and marks its definition as source", () => {
+    const doc = "[label][ref]\n\n[ref]: https://example.com \"Title\"\n\noutside";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const tree = syntaxTree(state).toString();
+    expect(tree).toContain("LinkLabel");
+    expect(tree).toContain("LinkReference");
+    const plan = planLivePreview(state);
+    expect(hiddenSource(state, plan)).toEqual(["[", "]", "[ref]"]);
+    expect(markedAs(plan, "cm-live-preview-reference-definition")).toHaveLength(1);
+  });
+
+  it("marks bare GFM URLs without replacing their readable text", () => {
+    const doc = "https://example.com and www.example.com outside";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    expect(syntaxTree(state).toString()).toContain("Paragraph(URL,URL)");
+    const plan = planLivePreview(state);
+    expect(hiddenSource(state, plan)).toEqual([]);
+    expect(markedAs(plan, "cm-live-preview-link")).toHaveLength(2);
+  });
+
   it("plans non-interactive checked and unchecked task widgets from GFM nodes", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const state = createState(doc, [{ anchor: doc.length }]);
@@ -168,6 +206,29 @@ describe("planLivePreview", () => {
     expect(hidden).not.toContain("[ ]");
     expect(hidden.filter((source) => source === "-")).toHaveLength(1);
     expect(hidden).toContain("[x]");
+  });
+
+  it("limits planned decorations and syntax visits to requested document ranges", () => {
+    const lines = Array.from({ length: 600 }, (_, index) => `**item-${index}**`);
+    const doc = lines.join("\n\n");
+    const targetText = "**item-100**";
+    const targetFrom = doc.indexOf(targetText);
+    const targetTo = targetFrom + targetText.length;
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const fullDiagnostics = { visitedNodes: 0 };
+    const rangeDiagnostics = { visitedNodes: 0 };
+
+    const fullPlan = planLivePreview(state, undefined, fullDiagnostics);
+    const rangePlan = planLivePreview(
+      state,
+      [{ from: targetFrom + 2, to: targetTo - 2 }],
+      rangeDiagnostics,
+    );
+
+    expect(rangePlan).not.toHaveLength(0);
+    expect(rangePlan.every(({ from, to }) => from >= targetFrom && to <= targetTo)).toBe(true);
+    expect(rangePlan.length).toBeLessThan(fullPlan.length / 100);
+    expect(rangeDiagnostics.visitedNodes).toBeLessThan(fullDiagnostics.visitedNodes / 100);
   });
 });
 
@@ -190,6 +251,30 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
+  it("renders a titled inline link as only its readable label", () => {
+    const view = createView("[label](url \"title\") outside");
+    expect(view.contentDOM.textContent).toBe("label outside");
+    view.destroy();
+  });
+
+  it("exposes replacement and widget ranges as atomic without making marks atomic", () => {
+    const view = createView("**world**\n\n- [ ] todo\n\noutside");
+    const ranges: { from: number; to: number }[] = [];
+    for (const provider of view.state.facet(EditorView.atomicRanges)) {
+      provider(view).between(0, view.state.doc.length, (from, to) => {
+        ranges.push({ from, to });
+      });
+    }
+    expect(ranges).toEqual([
+      { from: 0, to: 2 },
+      { from: 7, to: 9 },
+      { from: 11, to: 12 },
+      { from: 13, to: 16 },
+    ]);
+    expect(ranges).not.toContainEqual({ from: 0, to: 9 });
+    view.destroy();
+  });
+
   it("applies minimal semantic styling to live preview marks", () => {
     const view = createView("# heading\n\n**strong** and *em*");
     view.dispatch({ selection: { anchor: view.state.doc.length } });
@@ -209,6 +294,28 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
+  it("keeps decorations disabled through composition document updates", () => {
+    const view = createView();
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    view.dispatch({ changes: { from: 2, to: 7, insert: "中文" } });
+    expect(view.state.doc.toString()).toBe("**中文** rest");
+    expect(view.contentDOM.textContent).toContain("**中文**");
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(view.contentDOM.textContent).not.toContain("**");
+    view.destroy();
+  });
+
+  it("uses separator and readable checkbox semantics for widgets", () => {
+    const view = createView("---\n\n- [x] done\n\noutside");
+    const rule = view.dom.querySelector(".cm-live-preview-horizontal-rule");
+    const checkbox = view.dom.querySelector(".cm-live-preview-task-checkbox");
+    expect(rule).toHaveAttribute("role", "separator");
+    expect(checkbox).toHaveAttribute("role", "checkbox");
+    expect(checkbox).toHaveAttribute("aria-checked", "true");
+    expect(checkbox).toHaveAccessibleName("已完成任务");
+    view.destroy();
+  });
+
   it("renders task widgets as disabled, hidden-from-ARIA controls that cannot edit the document", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const view = createView(doc);
@@ -224,7 +331,9 @@ describe("livePreviewExtension", () => {
     for (const checkbox of checkboxes) {
       expect(checkbox.disabled).toBe(true);
       expect(checkbox.tabIndex).toBe(-1);
-      expect(checkbox).toHaveAttribute("aria-hidden", "true");
+      expect(checkbox).toHaveAttribute("role", "checkbox");
+      expect(checkbox).toHaveAttribute("aria-checked", String(checkbox.checked));
+      expect(checkbox).toHaveAttribute("aria-disabled", "true");
       checkbox.click();
     }
     expect(view.state.doc.toString()).toBe(doc);
