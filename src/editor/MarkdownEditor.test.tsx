@@ -26,6 +26,12 @@ const moveToEnd = () => {
   view.dispatch({ selection: { anchor: view.state.doc.length } });
 };
 
+const editorView = () => {
+  const view = EditorView.findFromDOM(content());
+  if (!view) throw new Error("EditorView not found");
+  return view;
+};
+
 describe("MarkdownEditor", () => {
   it.each([
     ["- item", "- item\n- "],
@@ -74,5 +80,47 @@ describe("MarkdownEditor", () => {
     const view = renderEditor();
     view.unmount();
     expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("starts without live preview when sourceMode is true", () => {
+    renderEditor({ value: "**world** rest", sourceMode: true });
+    moveToEnd();
+    expect(content().textContent).toContain("**world**");
+    expect(document.querySelector(".cm-live-preview-strong")).toBeNull();
+  });
+
+  it("toggles live preview in the same view without changing selection or firing onChange", () => {
+    const onChange = vi.fn();
+    const rendered = renderEditor({ value: "**world** rest", sourceMode: false, onChange });
+    moveToEnd();
+    const root = rendered.container.querySelector(".cm-editor");
+    const view = editorView();
+    const selection = view.state.selection;
+    expect(content().textContent).not.toContain("**");
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+    expect(editorView()).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(content().textContent).toContain("**world**");
+    expect(onChange).not.toHaveBeenCalled();
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
+    expect(editorView()).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(content().textContent).not.toContain("**");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("preserves undo history across sourceMode toggles", async () => {
+    const user = userEvent.setup();
+    const rendered = renderEditor({ value: "text", sourceMode: false });
+    moveToEnd();
+    await user.keyboard("!");
+    expect(editorView().state.doc.toString()).toBe("text!");
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    await user.keyboard("{Control>}z{/Control}");
+    expect(editorView().state.doc.toString()).toBe("text");
   });
 });

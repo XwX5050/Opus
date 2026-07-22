@@ -27,7 +27,10 @@ export interface EditorCommands {
   onReopenClosed(): void;
 }
 
-export const editorExtensions = (commands: EditorCommands): Extension => [
+export const editorExtensions = (
+  commands: EditorCommands,
+  livePreview: Extension = [],
+): Extension => [
   highlightSpecialChars(),
   history(),
   drawSelection(),
@@ -38,6 +41,7 @@ export const editorExtensions = (commands: EditorCommands): Extension => [
   bracketMatching(),
   EditorView.lineWrapping,
   markdown({ codeLanguages: languages, extensions: [GFM], addKeymap: false }),
+  livePreview,
   keymap.of([
     {
       key: "Mod-s",

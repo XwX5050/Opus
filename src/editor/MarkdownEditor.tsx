@@ -1,7 +1,13 @@
 import { useEffect, useRef } from "react";
-import { Annotation, EditorState, Transaction } from "@codemirror/state";
+import {
+  Annotation,
+  Compartment,
+  EditorState,
+  Transaction,
+} from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { editorExtensions } from "./editorExtensions";
+import { livePreviewExtension } from "./livePreview";
 
 const externalValueSync = Annotation.define<boolean>();
 
@@ -24,6 +30,8 @@ export default function MarkdownEditor({
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const livePreviewCompartmentRef = useRef(new Compartment());
+  const previousSourceModeRef = useRef(sourceMode);
   const callbacksRef = useRef({ onChange, onSave, onReopenClosed });
   callbacksRef.current = { onChange, onSave, onReopenClosed };
 
@@ -34,10 +42,15 @@ export default function MarkdownEditor({
       state: EditorState.create({
         doc: value,
         extensions: [
-          editorExtensions({
-            onSave: () => callbacksRef.current.onSave(),
-            onReopenClosed: () => callbacksRef.current.onReopenClosed(),
-          }),
+          editorExtensions(
+            {
+              onSave: () => callbacksRef.current.onSave(),
+              onReopenClosed: () => callbacksRef.current.onReopenClosed(),
+            },
+            livePreviewCompartmentRef.current.of(
+              sourceMode ? [] : livePreviewExtension(),
+            ),
+          ),
           EditorView.contentAttributes.of({
             "aria-label": "Markdown 编辑器",
           }),
@@ -75,6 +88,17 @@ export default function MarkdownEditor({
       ],
     });
   }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || previousSourceModeRef.current === sourceMode) return;
+    previousSourceModeRef.current = sourceMode;
+    view.dispatch({
+      effects: livePreviewCompartmentRef.current.reconfigure(
+        sourceMode ? [] : livePreviewExtension(),
+      ),
+    });
+  }, [sourceMode]);
 
   return (
     <div
