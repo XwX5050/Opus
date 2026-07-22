@@ -201,7 +201,7 @@ export function App() {
 }
 ```
 
-Configure Vitest in `vite.config.ts` with `environment: "jsdom"`, `setupFiles: "./vitest.setup.ts"`, and `restoreMocks: true`. Import `@testing-library/jest-dom/vitest` from `vitest.setup.ts`. Configure Markdown as `markdown({ codeLanguages: languages, extensions: [GFM] })` so fenced code blocks use CodeMirror's language descriptions without adding a second Markdown parser.
+Configure Vitest in `vite.config.ts` with `environment: "jsdom"`, `setupFiles: "./vitest.setup.ts"`, and `restoreMocks: true`. Import `@testing-library/jest-dom/vitest` from `vitest.setup.ts`.
 
 - [ ] **Step 6: Run all bootstrap gates**
 
@@ -324,6 +324,15 @@ export interface DocumentSnapshot {
   savedText: string; hasUtf8Bom: boolean; newline: Newline;
   modifiedUnixMs: number | null; status: "clean" | "dirty" | "conflict" | "missing";
 }
+export interface ClosedTab {
+  document: DocumentSnapshot;
+  closedIndex: number;
+}
+export interface DocumentState {
+  tabs: DocumentSnapshot[];
+  activeId: string | null;
+  recentlyClosed: ClosedTab[];
+}
 export interface OpenedFile {
   path: string; text: string; hasUtf8Bom: boolean;
   newline: Newline; modifiedUnixMs: number;
@@ -343,7 +352,7 @@ export interface DocumentPort {
 
 - [ ] **Step 2: Write reducer tests before implementation**
 
-Tests must prove: new untitled tab, open file, path de-duplication, edit marks dirty, successful save marks clean, close selects neighbor, and external conflict never discards local text.
+Tests must prove: new untitled tab, open file, path de-duplication, edit marks dirty, successful save marks clean, close selects neighbor, external conflict never discards local text, closing records a maximum-20-entry recently-closed stack, and reopening restores the most recently closed tab at its previous index.
 
 ```ts
 it("focuses an existing path instead of duplicating it", () => {
@@ -352,17 +361,25 @@ it("focuses an existing path instead of duplicating it", () => {
   expect(twice.tabs).toHaveLength(1);
   expect(twice.activeId).toBe(twice.tabs[0].id);
 });
+
+it("reopens the most recently closed tab", () => {
+  const closed = documentReducer(twoTabState, { type: "closeConfirmed", id: "b", disposition: "saved" });
+  const reopened = documentReducer(closed, { type: "reopenLastClosed" });
+  expect(reopened.tabs.map(tab => tab.id)).toEqual(["a", "b"]);
+  expect(reopened.activeId).toBe("b");
+  expect(reopened.recentlyClosed).toHaveLength(0);
+});
 ```
 
 - [ ] **Step 3: Run the reducer tests red**
 
 Run: `npm test -- src/document/documentReducer.test.ts`
 
-Expected: FAIL because `reduce` is missing.
+Expected: FAIL because `documentReducer` is missing.
 
 - [ ] **Step 4: Implement a discriminated-union reducer**
 
-Export `DocumentState`, `DocumentAction`, `initialDocumentState`, and `documentReducer`. Keep IDs stable and compare normalized paths before adding a tab. No Tauri or React imports are allowed in this file.
+Export `DocumentState`, `DocumentAction`, `initialDocumentState`, and `documentReducer`. `DocumentAction` includes `{ type: "closeConfirmed"; id; disposition: "saved" | "discarded" }` and `{ type: "reopenLastClosed" }`. A discarded dirty tab records `savedText` rather than the discarded edits; a discarded untitled tab records an empty clean snapshot. Cap `recentlyClosed` at 20, keep IDs stable, and compare normalized paths before adding or reopening a tab. If the path is already open, reopening focuses the existing tab and removes the stack entry. No Tauri or React imports are allowed in this file.
 
 - [ ] **Step 5: Add an in-memory port for tests and Storybook-free demos**
 
@@ -455,7 +472,7 @@ git commit -m "feat: connect document IO to Tauri"
 
 - [ ] **Step 1: Write component tests for the basic notepad workflow**
 
-Use `MemoryDocumentPort` to test: empty state buttons; opening two files creates two tabs; editing adds the dirty dot; `⌘S` calls save; closing dirty tab shows 保存/放弃/取消; opening the same path focuses its tab.
+Use `MemoryDocumentPort` to test: empty state buttons; opening two files creates two tabs; editing adds the dirty dot; `⌘S` calls save; closing dirty tab shows 保存/放弃/取消; opening the same path focuses its tab; closing a clean tab then pressing `⌘⇧T` restores and focuses it; `⌘⇧T` with an empty stack is a no-op.
 
 - [ ] **Step 2: Run tests red**
 
@@ -472,16 +489,32 @@ export interface MarkdownEditorProps {
   value: string;
   onChange(value: string): void;
   onSave(): void;
+  onReopenClosed(): void;
   sourceMode: boolean;
   documentPath: string | null;
 }
 ```
 
-Create one `EditorView` on mount, dispatch external changes without adding them to history, and destroy the view on unmount. Add history, default/highlight/special-char keymaps, line wrapping, Markdown language support, and a custom `Mod-s` binding.
+Create one `EditorView` on mount, dispatch external changes without adding them to history, and destroy the view on unmount. Configure the language with `markdown({ codeLanguages: languages, extensions: [GFM] })`, so fenced code blocks use CodeMirror language descriptions without adding another Markdown parser. Add history, default/highlight/special-char keymaps, line wrapping, `markdownKeymap`, and custom `Mod-s` plus `Mod-Shift-t` bindings.
+
+Use this keymap order so Markdown structural commands receive Enter before the generic newline command:
+
+```ts
+keymap.of([
+  { key: "Mod-s", preventDefault: true, run: () => { onSave(); return true; } },
+  { key: "Mod-Shift-t", preventDefault: true, run: () => { onReopenClosed(); return true; } },
+  ...markdownKeymap,
+  ...defaultKeymap,
+  ...historyKeymap,
+  ...searchKeymap,
+]);
+```
+
+Add editor tests that place the cursor after `- item` and `> quote`, press Enter, and assert the raw document becomes `- item\n- ` and `> quote\n> `. Also verify Enter on an empty list item exits the list according to `markdownKeymap` behavior.
 
 - [ ] **Step 4: Implement the controller and shell**
 
-`useAppController(port)` owns the reducer, async open/save operations, and close-confirm state. `AppShell` renders titlebar, tab strip, active editor, empty state, and accessible modal dialogs. Keep the sidebar slot collapsed.
+`useAppController(port)` owns the reducer, async open/save operations, close-confirm state, and `reopenClosed()`. `AppShell` renders titlebar, tab strip, active editor, empty state, and accessible modal dialogs. Bind `⌘⇧T` at the shell when focus is outside CodeMirror and through the editor keymap when focus is inside it, with one event handled only once. Keep the sidebar slot collapsed.
 
 - [ ] **Step 5: Run tests and a local desktop smoke test**
 
@@ -617,6 +650,8 @@ git commit -m "feat: render LaTeX formulas inline"
 - Modify: `src/document/tauriDocumentPort.ts`
 - Modify: `src/document/memoryDocumentPort.ts`
 - Modify: `src-tauri/src/document_commands.rs`
+- Create: `src-tauri/src/asset_scope.rs`
+- Create: `src-tauri/tests/asset_scope.rs`
 - Modify: `src-tauri/capabilities/default.json`
 
 - [ ] **Step 1: Add failing search-panel tests**
@@ -644,7 +679,24 @@ The production adapter opens a save dialog for every paste, defaults to the docu
 
 Tests cover PNG clipboard paste, cancel, unsaved document, and dropping an existing image file without copying it. Insert Markdown as `![image](escaped-path)` in one undoable transaction.
 
-Add image-widget tests for relative, absolute, `https:`, missing, and non-image URLs. Resolve relative paths from the active document directory; use Tauri `convertFileSrc` for local previews and ordinary `https:` URLs for network images. When a document opens, the Rust command adds its parent directory to the asset-protocol scope so sibling relative images can load; it removes that dynamic scope when no open document or workspace needs it. Do not grant a static home-directory or whole-filesystem scope. Mount widgets only near the visible ranges, reveal Markdown source when selected, show alt text plus a broken-image indicator on load failure, and never execute `javascript:` or arbitrary HTML URLs.
+Add image-widget tests for relative, absolute, `https:`, missing, and non-image URLs. Resolve relative paths from the active document directory; use Tauri `convertFileSrc` for local previews and ordinary `https:` URLs for network images. Mount widgets only near the visible ranges, reveal Markdown source when selected, show alt text plus a broken-image indicator on load failure, and never execute `javascript:` or arbitrary HTML URLs.
+
+Extract a reference-counted `AssetScopeRegistry` in Rust. Before wiring it to Tauri, add integration tests with temporary directories proving: opening a document allows only its parent directory; two tabs in the same parent require two releases before removal; closing the last consumer removes access; a workspace grants recursive access only inside its root; `..` and symlink escapes are rejected; no static home-directory or whole-filesystem glob exists in `default.json`. Then wire registry acquire/release calls to Tauri's asset-protocol scope and the tab/workspace lifecycle.
+
+```rust
+#[test]
+fn shared_parent_scope_is_removed_only_after_last_tab_closes() {
+    let mut scopes = AssetScopeRegistry::default();
+    scopes.acquire_document("tab-a", "/notes/a.md").unwrap();
+    scopes.acquire_document("tab-b", "/notes/b.md").unwrap();
+    scopes.release_consumer("tab-a").unwrap();
+    assert!(scopes.allows(Path::new("/notes/image.png")));
+    scopes.release_consumer("tab-b").unwrap();
+    assert!(!scopes.allows(Path::new("/notes/image.png")));
+}
+```
+
+Add `acquire_document_scope(consumer_id, path)`, `acquire_workspace_scope(consumer_id, root)`, and `release_asset_scope(consumer_id)` Tauri commands. The controller acquires only after the reducer accepts a genuinely new tab/workspace, so duplicate-path focus cannot leak a reference; it releases that stable consumer ID on close. Adapter tests assert acquire/release calls are issued exactly once and that releasing one of two consumers sharing a parent does not remove the other consumer's access.
 
 Run: `npm test -- src/editor/search.test.tsx src/editor/imagePaste.test.ts src/editor/imageWidgets.test.ts`
 
@@ -653,7 +705,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/editor src/document
+git add src/editor src/document src-tauri/src/asset_scope.rs src-tauri/tests/asset_scope.rs src-tauri/src/document_commands.rs src-tauri/capabilities/default.json
 git commit -m "feat: add search replace and image insertion"
 ```
 
@@ -678,6 +730,14 @@ Test top-level lazy listing, directories-before-files sorting, `.md`/`.markdown`
 - [ ] **Step 2: Implement workspace commands**
 
 Expose `choose_workspace`, `list_directory(root, relative)`, `create_markdown_file`, `rename_entry`, and `trash_entry`. Deletion must use a recoverable system-trash implementation, never recursive permanent deletion.
+
+Extend `DocumentPort` with the exact workspace entry points used by the empty state and recent list:
+
+```ts
+export interface WorkspaceRoot { path: string; title: string; }
+chooseWorkspace(): Promise<WorkspaceRoot | null>;
+openWorkspacePath(path: string): Promise<WorkspaceRoot>;
+```
 
 Run `cargo add trash --manifest-path src-tauri/Cargo.toml` and implement `trash_entry` with that crate. The UI labels the action “移到废纸篓”, and a failed trash operation leaves the tree unchanged.
 
@@ -718,6 +778,8 @@ git commit -m "feat: add optional folder drawer"
 - Create: `src/recovery/RecoveryDialog.tsx`
 - Create: `src/recovery/RecoveryDialog.test.tsx`
 - Modify: `src/app/useAppController.ts`
+- Modify: `src/app/AppShell.tsx`
+- Modify: `src/app/AppShell.test.tsx`
 - Modify: `src/document/types.ts`
 
 - [ ] **Step 1: Write state-transition tests for disk events**
@@ -749,9 +811,13 @@ Persist tab metadata separately from dirty draft content. Recovery records inclu
 
 Persist the last window size/position, recent file/folder paths, open-tab order, active tab, theme, and editor preferences. Debounce dirty draft writes by 2 seconds and flush on window close. Cap recent items at 10 and silently remove paths that no longer exist only after the user attempts to open them.
 
+Render the persisted recent list in `AppShell` only when no tabs are open. Show at most 10 entries with file/folder icons and full paths as accessible descriptions; clicking a file calls `openPath`, clicking a folder opens the sidebar, and a failed missing-path open removes that item after showing a non-blocking message.
+
 - [ ] **Step 5: Implement conflict/recovery dialogs and verify**
 
 Conflict actions are “载入磁盘版本”, “保留当前版本”, and “另存为”. Recovery actions are “恢复”, “查看源码”, and “丢弃”. All destructive choices require explicit clicks.
+
+Add controller/component tests for a `DocumentPortError` during save: the active tab remains dirty with its text unchanged; the error dialog exposes “重试” and “另存为”; “重试” calls `save` again for the same tab; “另存为” calls `saveAs`; canceling the save-as dialog returns to the still-dirty tab. Add empty-state tests proving persisted recent files and folders render, open through the correct port method, and disappear only after a confirmed `not_found` result.
 
 Run: `npm test && cargo test --manifest-path src-tauri/Cargo.toml`
 
@@ -871,6 +937,8 @@ npm run perf
 
 Expected: JSON report includes hardware, macOS, build SHA, five samples, medians, p95 values, and pass/fail per budget.
 
+In `docs/performance.md`, define Gatekeeper handling exactly: install the same signed/notarized build and launch it once to complete quarantine/Gatekeeper verification; record that first launch separately as informational `gatekeeper_first_launch_ms`; quit and confirm no process remains. A cold-start sample is the first launch after reboot of that already-approved build, so five cold samples require five reboot cycles. A hot-start sample begins immediately after a normal quit of the already-approved build. The 2-second cold budget excludes only the separately recorded first-verification launch, not ordinary process or WebView startup.
+
 - [ ] **Step 6: Commit**
 
 ```bash
@@ -960,9 +1028,11 @@ Then follow `docs/testing.md` on an Apple Silicon Mac and verify the built bundl
 |---|---|
 | Tauri/React/CodeMirror/Lezer architecture | Tasks 1, 3, 4, 6 |
 | Arbitrary files, tabs, save/save-as, close protection | Tasks 2–5, 13 |
+| Recently closed stack and `⌘⇧T` reopening | Tasks 3, 5, 13 |
 | Finder/file association and drag/drop | Tasks 4, 13 |
 | Optional lazy folder drawer and file operations | Task 9 |
 | Markdown/GFM live preview and source mode | Tasks 5–6 |
+| Markdown list/quote continuation keymap | Task 5 |
 | KaTeX inline/block math and error fallback | Task 7 |
 | Current-document search/replace | Task 8 |
 | Local/network image display and explicit paste saving | Task 8 |
