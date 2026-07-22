@@ -293,6 +293,41 @@ describe("documentReducer", () => {
     expect(state.tabs[0].pendingSave).toBeUndefined();
   });
 
+  it("fails closed when a save result path differs from the frozen target", () => {
+    const saving = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile({ path: "/notes/a.md" }) },
+      { type: "textChanged", id: "doc-1", text: "unconfirmed local text" },
+      {
+        type: "saveRequested",
+        id: "doc-1",
+        target: { path: "/notes/expected.md", expectedVersion: null },
+      },
+    ]);
+    const pending = saving.tabs[0].pendingSave!;
+    expect(Object.isFrozen(pending)).toBe(true);
+    expect(pending.targetPath).toBe("/notes/expected.md");
+
+    const completed = documentReducer(saving, {
+      type: "saveSucceeded",
+      requestId: pending.requestId,
+      result: {
+        path: "/notes/unexpected.md",
+        modifiedUnixMs: 999,
+        version: "unexpected-version",
+      },
+    });
+
+    expect(completed.tabs[0]).toMatchObject({
+      path: "/notes/a.md",
+      text: "unconfirmed local text",
+      savedText: "saved",
+      modifiedUnixMs: 100,
+      version: "v1",
+      status: "conflict",
+    });
+    expect(completed.tabs[0].pendingSave).toBeUndefined();
+  });
+
   it("generates monotonic request ids and ignores out-of-order completion", () => {
     const first = reduce([
       { type: "fileOpened", id: "doc-1", file: openedFile({ text: "base" }) },
