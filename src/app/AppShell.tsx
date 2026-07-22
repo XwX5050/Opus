@@ -19,6 +19,7 @@ export default function AppShell({
   const dialogRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const pendingTabFocusRef = useRef<"close" | "reopen" | null>(null);
   const active = controller.state.tabs.find(
     (tab) => tab.id === controller.state.activeId,
   );
@@ -26,13 +27,40 @@ export default function AppShell({
     (tab) => tab.id === controller.closeDocumentId,
   );
 
+  const reopenClosed = () => {
+    if (controller.state.recentlyClosed.length === 0) return;
+    pendingTabFocusRef.current = "reopen";
+    controller.reopenClosed();
+  };
+
+  const closeTab = (id: string) => {
+    const document = controller.state.tabs.find((tab) => tab.id === id);
+    if (document?.status === "clean" && !document.pendingSave) {
+      pendingTabFocusRef.current = "close";
+    }
+    controller.close(id);
+  };
+
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (closing) return;
     if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "t") return;
     if ((event.target as HTMLElement).closest(".cm-editor")) return;
     event.preventDefault();
-    controller.reopenClosed();
+    reopenClosed();
   };
+
+  useEffect(() => {
+    if (!pendingTabFocusRef.current) return;
+    pendingTabFocusRef.current = null;
+    const target = controller.state.activeId
+      ? document.getElementById(`document-tab-${controller.state.activeId}`)
+      : document.querySelector<HTMLElement>('[aria-label="空白状态"] button');
+    target?.focus();
+  }, [
+    controller.state.activeId,
+    controller.state.recentlyClosed.length,
+    controller.state.tabs.length,
+  ]);
 
   useEffect(() => {
     if (closing) {
@@ -111,6 +139,7 @@ export default function AppShell({
           <>
             <button type="button" onClick={controller.newDocument}>新建</button>
             <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
+            <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
           </>
         )}
       </header>
@@ -135,7 +164,7 @@ export default function AppShell({
                 type="button"
                 aria-label={`关闭 ${tab.title}`}
                 disabled={Boolean(tab.pendingSave)}
-                onClick={() => controller.close(tab.id)}
+                onClick={() => closeTab(tab.id)}
               >
                 ×
               </button>
@@ -157,7 +186,7 @@ export default function AppShell({
             value={active.text}
             onChange={(text) => controller.changeText(active.id, text)}
             onSave={() => void controller.save(active.id)}
-            onReopenClosed={controller.reopenClosed}
+            onReopenClosed={reopenClosed}
             sourceMode
             documentPath={active.path}
           />

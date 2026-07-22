@@ -70,6 +70,7 @@ describe("AppShell", () => {
 
     expect(screen.getByRole("button", { name: "新建" })).toBeVisible();
     expect(screen.getByRole("button", { name: "打开文件" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
   });
 
   it("opens two files as tabs and focuses an equivalent path instead of duplicating it", async () => {
@@ -81,6 +82,7 @@ describe("AppShell", () => {
     const { rerender } = render(<AppShell port={port} />);
 
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    expect(editor()).not.toHaveFocus();
     const tabs = within(screen.getByRole("tablist")).getAllByRole("tab");
     expect(tabs).toHaveLength(2);
     expect(tabs[0]).toHaveAttribute("tabindex", "-1");
@@ -156,6 +158,61 @@ describe("AppShell", () => {
     await user.keyboard("{Control>}s{/Control}");
     expect(collision.writes).toHaveLength(0);
     expect(await screen.findByRole("alert")).toHaveTextContent(/已打开|冲突/);
+  });
+
+  it("saves an existing file through the reachable Save As action", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort(
+      [file("/notes/original.md")],
+      { path: "/notes/copy.md", expectedVersion: null },
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("copy contents"));
+
+    await user.click(screen.getByRole("button", { name: "另存为…" }));
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: /copy\.md/ })).toBeVisible());
+    expect(port.writes).toHaveLength(1);
+    expect(port.writes[0]).toMatchObject({
+      targetPath: "/notes/copy.md",
+      text: "copy contents",
+      expectedVersion: null,
+    });
+  });
+
+  it("leaves an existing document unchanged when Save As is cancelled", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([file("/notes/original.md")], null);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("local edit"));
+
+    await user.click(screen.getByRole("button", { name: "另存为…" }));
+
+    expect(port.chosenTitles).toEqual(["original.md"]);
+    expect(port.writes).toHaveLength(0);
+    expect(screen.getByRole("tab", { name: /original\.md/ })).toHaveTextContent("●");
+    expect(editor()).toHaveTextContent("local edit");
+  });
+
+  it("blocks Save As to another open tab and retains both documents", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort(
+      [file("/notes/a.md", "alpha"), file("/notes/b.md", "bravo")],
+      { path: "/NOTES/b.md", expectedVersion: "version:/notes/b.md" },
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("tab", { name: /a\.md/ }));
+
+    await user.click(screen.getByRole("button", { name: "另存为…" }));
+
+    expect(port.writes).toHaveLength(0);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/冲突/);
+    expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByRole("tab", { name: /a\.md/ })).toBeVisible();
+    expect(screen.getByRole("tab", { name: /b\.md/ })).toBeVisible();
   });
 
   it("waits for a close-save, closes on success, and retains dirty text after failure", async () => {
@@ -237,15 +294,45 @@ describe("AppShell", () => {
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
     await user.click(screen.getByRole("button", { name: "关闭 b.md" }));
-    expect(screen.getByRole("tab", { name: /a\.md/ })).toHaveAttribute("aria-selected", "true");
+    const adjacent = screen.getByRole("tab", { name: /a\.md/ });
+    expect(adjacent).toHaveAttribute("aria-selected", "true");
+    expect(adjacent).toHaveFocus();
 
     screen.getByRole("main").focus();
     await user.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
-    expect(screen.getByRole("tab", { name: /b\.md/ })).toHaveAttribute("aria-selected", "true");
+    const reopened = screen.getByRole("tab", { name: /b\.md/ });
+    expect(reopened).toHaveAttribute("aria-selected", "true");
+    expect(reopened).toHaveFocus();
     expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
 
     await user.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
     expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("focuses an already-open restored path and consumes the reopen focus request", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([file("/a.md", "a"), file("/b.md", "b")]);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "关闭 b.md" }));
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const activeB = screen.getByRole("tab", { name: /b\.md/ });
+    expect(activeB).toHaveAttribute("aria-selected", "true");
+
+    screen.getByRole("main").focus();
+    await user.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+
+    expect(activeB).toHaveFocus();
+    expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("moves focus to the empty-state action after closing the final clean tab", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={new InspectablePort([file("/only.md")])} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "关闭 only.md" }));
+
+    expect(screen.getByRole("button", { name: "新建" })).toHaveFocus();
   });
 
   it("disposes an injected event bridge safely after unmount", async () => {
