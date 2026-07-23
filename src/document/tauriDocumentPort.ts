@@ -105,6 +105,41 @@ export interface OpenPathSubscriptions {
   dispose(): Promise<void>;
 }
 
+export interface ImageDrop {
+  readonly paths: ReadonlyArray<string>;
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Subscribes to natively dropped image files. Tauri 2 with the default
+ * `dragDropEnabled: true` delivers drops only through the native window
+ * event (see src-tauri/src/lib.rs); the webview never receives HTML5 drops
+ * with real file paths, so image insertion is driven by this event.
+ */
+export async function subscribeToImageDrops(
+  onImages: (drop: ImageDrop) => void,
+  signal?: AbortSignal,
+): Promise<UnlistenFn> {
+  const unlisten = await listen<{ paths: string[]; x: number; y: number }>(
+    "image-files-dropped",
+    (event) => {
+      // Native coordinates are physical pixels; the editor works in CSS pixels.
+      const scale = window.devicePixelRatio || 1;
+      onImages({
+        paths: [...event.payload.paths],
+        x: event.payload.x / scale,
+        y: event.payload.y / scale,
+      });
+    },
+  );
+  if (signal?.aborted) {
+    unlisten();
+    return () => {};
+  }
+  return unlisten;
+}
+
 export async function subscribeToOpenPaths(port: DocumentPort, onFiles: (files: ReadonlyArray<OpenedFile>) => void, onDirectory: (path: string) => void = () => {}, onError: DocumentPortErrorHandler = () => {}, signal?: AbortSignal): Promise<OpenPathSubscriptions> {
   let isReady = false;
   let disposed = false;

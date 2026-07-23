@@ -26,6 +26,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
     async ready() {},
     async dispose() {},
   }),
+  subscribeToImageDrops: async () => () => {},
   tauriImagePreviewUrl: (path: string) => path,
 }));
 

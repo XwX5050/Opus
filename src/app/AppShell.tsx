@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
-import { tauriImagePreviewUrl } from "../document/tauriDocumentPort";
-import MarkdownEditor from "../editor/MarkdownEditor";
+import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
+import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
 import { type EventSubscriber, useAppController } from "./useAppController";
+
+export type ImageDropSubscriber = (
+  onImages: (drop: ImageDrop) => void,
+  signal?: AbortSignal,
+) => Promise<() => void>;
 
 export interface AppShellProps {
   port: DocumentPort;
   subscribeToEvents?: EventSubscriber | null;
+  subscribeToImageDrops?: ImageDropSubscriber | null;
   externalError?: string | null;
   onDismissExternalError?: () => void;
 }
@@ -14,11 +20,14 @@ export interface AppShellProps {
 export default function AppShell({
   port,
   subscribeToEvents = null,
+  subscribeToImageDrops = null,
   externalError = null,
   onDismissExternalError,
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
   const [sourceMode, setSourceMode] = useState(false);
+  const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
+  const imageDropSequenceRef = useRef(0);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLElement>(null);
@@ -30,6 +39,24 @@ export default function AppShell({
   const closing = controller.state.tabs.find(
     (tab) => tab.id === controller.closeDocumentId,
   );
+
+  useEffect(() => {
+    if (!subscribeToImageDrops) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void subscribeToImageDrops((drop) => {
+      if (disposed) return;
+      imageDropSequenceRef.current += 1;
+      setImageDrop({ sequence: imageDropSequenceRef.current, ...drop });
+    }).then((created) => {
+      if (disposed) created();
+      else unlisten = created;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [subscribeToImageDrops]);
 
   const reopenClosed = () => {
     if (controller.state.recentlyClosed.length === 0) return;
@@ -209,6 +236,7 @@ export default function AppShell({
             documentPath={active.path}
             saveClipboardImage={(input) => port.saveClipboardImage(input)}
             resolveImageUrl={tauriImagePreviewUrl}
+            imageDrop={imageDrop}
           />
         ) : (
           <div aria-label="空白状态" style={{ display: "grid", placeItems: "center", gap: 12 }}>

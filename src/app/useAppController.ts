@@ -39,6 +39,10 @@ export function useAppController(
   const [error, setError] = useState<string | null>(null);
   // Stable consumer IDs (tab IDs) that currently hold an asset scope.
   const acquiredScopeIds = useRef(new Set<string>());
+  // Per-consumer promise chain serializing backend scope operations, so a
+  // release (or a re-acquire after close→reopen with the same tab ID) can
+  // never overtake a still-pending acquire and leak a registry reference.
+  const scopeOperationChains = useRef(new Map<string, Promise<void>>());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -69,20 +73,42 @@ export function useAppController(
     return `document-${idSequence.current}`;
   }, []);
 
+  const enqueueScopeOperation = useCallback((id: string, operation: () => Promise<void>) => {
+    const previous = scopeOperationChains.current.get(id) ?? Promise.resolve();
+    const next = previous.then(operation).catch(() => {
+      // Individual operations handle their own errors; the chain must not break.
+    });
+    scopeOperationChains.current.set(id, next);
+    void next.then(() => {
+      if (scopeOperationChains.current.get(id) === next) {
+        scopeOperationChains.current.delete(id);
+      }
+    });
+  }, []);
+
   const acquireDocumentScope = useCallback((tab: DocumentSnapshot) => {
     if (tab.path === null || acquiredScopeIds.current.has(tab.id)) return;
+    const path = tab.path;
     acquiredScopeIds.current.add(tab.id);
-    void port.acquireDocumentScope(tab.id, tab.path).catch(() => {
-      acquiredScopeIds.current.delete(tab.id);
+    enqueueScopeOperation(tab.id, async () => {
+      try {
+        await port.acquireDocumentScope(tab.id, path);
+      } catch {
+        acquiredScopeIds.current.delete(tab.id);
+      }
     });
-  }, [port]);
+  }, [enqueueScopeOperation, port]);
 
   const releaseDocumentScope = useCallback((id: string) => {
     if (!acquiredScopeIds.current.delete(id)) return;
-    void port.releaseAssetScope(id).catch(() => {
-      // Scope release is best-effort; the registry is ref-counted per consumer.
+    enqueueScopeOperation(id, async () => {
+      try {
+        await port.releaseAssetScope(id);
+      } catch {
+        // Scope release is best-effort; the registry is ref-counted per consumer.
+      }
     });
-  }, [port]);
+  }, [enqueueScopeOperation, port]);
 
   const addOpenedFiles = useCallback((files: ReadonlyArray<OpenedFile>) => {
     for (const openedFile of files) {
@@ -261,16 +287,14 @@ export function useAppController(
     if (added) acquireDocumentScope(added);
   }, [acquireDocumentScope, dispatch]);
 
-  // Release every still-held scope when the controller unmounts.
+  // Release every still-held scope when the controller unmounts, keeping the
+  // same acquire-then-release serialization as tab closes.
   useEffect(() => {
     const acquired = acquiredScopeIds.current;
     return () => {
-      for (const id of acquired) {
-        void port.releaseAssetScope(id).catch(() => {});
-      }
-      acquired.clear();
+      for (const id of [...acquired]) releaseDocumentScope(id);
     };
-  }, [port]);
+  }, [releaseDocumentScope]);
 
   useEffect(() => {
     if (!subscribeToEvents) return;

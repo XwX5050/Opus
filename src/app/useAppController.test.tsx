@@ -44,6 +44,7 @@ type ScopeCall =
 
 class ScopeAwareControllerPort implements DocumentPort {
   readonly scopeCalls: ScopeCall[] = [];
+  acquireGate: ((consumerId: string) => Promise<void>) | null = null;
 
   constructor(private readonly files: OpenedFile[]) {}
 
@@ -57,6 +58,7 @@ class ScopeAwareControllerPort implements DocumentPort {
   async write(): Promise<SavedFile> { throw new DocumentPortError("io", "not writable"); }
   async saveClipboardImage() { return null; }
   async acquireDocumentScope(consumerId: string, path: string) {
+    if (this.acquireGate) await this.acquireGate(consumerId);
     this.scopeCalls.push({ kind: "acquire", consumerId, path });
   }
   async acquireWorkspaceScope() {}
@@ -229,19 +231,23 @@ describe("useAppController asset scopes", () => {
 
     // Closing tab A releases only its own consumer ID; tab B, which shares
     // the same parent directory, keeps its access.
-    expect(port.scopeCalls).toEqual([
-      { kind: "acquire", consumerId: tabA.id, path: "/notes/a.md" },
-      { kind: "acquire", consumerId: tabB.id, path: "/notes/b.md" },
-      { kind: "release", consumerId: tabA.id },
-    ]);
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: tabA.id, path: "/notes/a.md" },
+        { kind: "acquire", consumerId: tabB.id, path: "/notes/b.md" },
+        { kind: "release", consumerId: tabA.id },
+      ]),
+    );
 
     hook.unmount();
-    expect(
-      port.scopeCalls
-        .filter((call) => call.kind === "release")
-        .map((call) => call.consumerId)
-        .sort(),
-    ).toEqual([tabA.id, tabB.id].sort());
+    await waitFor(() =>
+      expect(
+        port.scopeCalls
+          .filter((call) => call.kind === "release")
+          .map((call) => call.consumerId)
+          .sort(),
+      ).toEqual([tabA.id, tabB.id].sort()),
+    );
   });
 
   it("does not acquire again when opening a duplicate path only focuses the tab", async () => {
@@ -256,7 +262,7 @@ describe("useAppController asset scopes", () => {
     hook.unmount();
   });
 
-  it("re-acquires when a closed tab is reopened", async () => {
+  it("re-acquires when a closed tab is reopened, serialized behind the release", async () => {
     const port = new ScopeAwareControllerPort([scopedFile("/notes/a.md")]);
     const hook = renderHook(() => useAppController(port));
 
@@ -265,11 +271,15 @@ describe("useAppController asset scopes", () => {
     act(() => hook.result.current.close(tab.id));
     act(() => hook.result.current.reopenClosed());
 
-    expect(port.scopeCalls).toEqual([
-      { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
-      { kind: "release", consumerId: tab.id },
-      { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
-    ]);
+    // The re-acquire reuses the same tab ID, so the backend must observe
+    // acquire → release → acquire in order to keep the refcount balanced.
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "release", consumerId: tab.id },
+        { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
+      ]),
+    );
     hook.unmount();
   });
 
@@ -281,6 +291,30 @@ describe("useAppController asset scopes", () => {
 
     expect(hook.result.current.state.tabs).toHaveLength(1);
     expect(port.scopeCalls).toEqual([]);
+    hook.unmount();
+  });
+
+  it("serializes release behind a still-pending acquire so the backend sees acquire-then-release", async () => {
+    let resolveAcquire!: () => void;
+    const port = new ScopeAwareControllerPort([scopedFile("/notes/a.md")]);
+    port.acquireGate = () => new Promise<void>((resolve) => { resolveAcquire = resolve; });
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openFiles());
+    const tab = hook.result.current.state.tabs[0];
+
+    // Close while the acquire is still in flight: neither call has reached
+    // the backend yet, and the release must wait for the acquire.
+    act(() => hook.result.current.close(tab.id));
+    expect(port.scopeCalls).toEqual([]);
+
+    resolveAcquire();
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "release", consumerId: tab.id },
+      ]),
+    );
     hook.unmount();
   });
 });

@@ -52,20 +52,29 @@ const parentDirectoryOf = (path: string): string | null => {
  * destination must not be rendered as an image. Only `http(s):` network
  * URLs and local paths with a known image extension are allowed; every
  * other scheme (`javascript:`, `data:`, `file:`, …) is rejected, so a
- * malicious destination never reaches an `<img>` element.
+ * malicious destination never reaches an `<img>` element. A throwing
+ * resolver (e.g. no Tauri runtime) yields null instead of breaking the
+ * editor.
  */
 export const resolveImageSrc = (
   url: string,
   documentPath: string | null,
   resolveLocalUrl: LocalImageUrlResolver,
 ): string | null => {
+  const local = (path: string) => {
+    try {
+      return resolveLocalUrl(path);
+    } catch {
+      return null;
+    }
+  };
   if (!url || !hasImageExtension(url)) return null;
   if (NETWORK_URL.test(url)) return url;
   if (ANY_SCHEME.test(url) && !WINDOWS_ABSOLUTE.test(url)) return null;
-  if (url.startsWith("/") || WINDOWS_ABSOLUTE.test(url)) return resolveLocalUrl(url);
+  if (url.startsWith("/") || WINDOWS_ABSOLUTE.test(url)) return local(url);
   const directory = documentPath === null ? null : parentDirectoryOf(documentPath);
   if (!directory) return null;
-  return resolveLocalUrl(directory === "/" ? `/${url}` : `${directory}/${url}`);
+  return local(directory === "/" ? `/${url}` : `${directory}/${url}`);
 };
 
 const selectionIntersects = (state: EditorState, range: ImageWidgetRange) =>

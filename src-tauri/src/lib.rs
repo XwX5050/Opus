@@ -62,14 +62,30 @@ pub fn run() {
             }
         }
         if let tauri::RunEvent::WindowEvent {
-            event: tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }),
+            event: tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }),
             ..
         } = event
         {
+            // Tauri 2 with the default `dragDropEnabled: true` delivers drops
+            // only through this native event (the webview never sees HTML5
+            // drops, and DOM File objects would carry no real paths anyway).
+            // Image files are emitted for in-place insertion into the active
+            // editor; everything else keeps the open-as-document behavior.
+            let (images, documents) = open_events::partition_dropped_paths(paths);
+            if !images.is_empty() {
+                let _ = handle.emit(
+                    "image-files-dropped",
+                    open_events::ImageDropPayload {
+                        paths: images,
+                        x: position.x,
+                        y: position.y,
+                    },
+                );
+            }
             if let Some(payload) = run_queue
                 .lock()
                 .expect("open path queue poisoned")
-                .enqueue(paths)
+                .enqueue(documents)
             {
                 let _ = handle.emit("open-paths", payload);
             }

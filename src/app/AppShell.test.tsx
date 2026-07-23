@@ -78,6 +78,30 @@ describe("AppShell", () => {
     expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
   });
 
+  it("inserts image files dropped on the window into the active editor", async () => {
+    const user = userEvent.setup();
+    let dropHandler!: (drop: { paths: string[]; x: number; y: number }) => void;
+    const subscribeToImageDrops = vi.fn(
+      async (handler: (drop: { paths: string[]; x: number; y: number }) => void) => {
+        dropHandler = handler;
+        return () => {};
+      },
+    );
+    render(
+      <AppShell
+        port={new InspectablePort([file("/notes/a.md", "hello")])}
+        subscribeToImageDrops={subscribeToImageDrops}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    act(() => dropHandler({ paths: ["/notes/pic.png"], x: 0, y: 0 }));
+
+    const view = EditorView.findFromDOM(editor());
+    expect(view?.state.doc.toString()).toContain("![image](/notes/pic.png)");
+    expect(subscribeToImageDrops).toHaveBeenCalledOnce();
+  });
+
   it("defaults to live preview and toggles source mode without rebuilding the editor", async () => {
     const user = userEvent.setup();
     render(

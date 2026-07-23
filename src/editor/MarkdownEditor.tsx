@@ -8,12 +8,19 @@ import {
 import { EditorView } from "@codemirror/view";
 import type { ClipboardImageInput } from "../document/DocumentPort";
 import { editorExtensions } from "./editorExtensions";
-import { imagePasteExtension } from "./imagePaste";
+import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
 import { mathWidgetsExtension } from "./mathWidgets";
 
 const externalValueSync = Annotation.define<boolean>();
+
+export interface EditorImageDrop {
+  readonly sequence: number;
+  readonly paths: ReadonlyArray<string>;
+  readonly x: number;
+  readonly y: number;
+}
 
 export interface MarkdownEditorProps {
   value: string;
@@ -24,6 +31,7 @@ export interface MarkdownEditorProps {
   documentPath: string | null;
   saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
   resolveImageUrl(path: string): string;
+  imageDrop?: EditorImageDrop | null;
 }
 
 export default function MarkdownEditor({
@@ -35,6 +43,7 @@ export default function MarkdownEditor({
   documentPath,
   saveClipboardImage,
   resolveImageUrl,
+  imageDrop = null,
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -127,6 +136,21 @@ export default function MarkdownEditor({
     // Preview extensions read live refs; rebuilding them on toggle is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceMode]);
+
+  // A drop delivered before this editor mounted is stale: only drops with a
+  // newer sequence are inserted.
+  const consumedImageDropRef = useRef(imageDrop?.sequence ?? 0);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !imageDrop || imageDrop.sequence === consumedImageDropRef.current) return;
+    consumedImageDropRef.current = imageDrop.sequence;
+    insertDroppedImages(
+      view,
+      imageDrop.paths,
+      view.posAtCoords({ x: imageDrop.x, y: imageDrop.y }),
+    );
+  }, [imageDrop]);
 
   return (
     <div

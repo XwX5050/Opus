@@ -1,4 +1,5 @@
 use markdown_edit_lib::document_commands::save_clipboard_image_impl;
+use markdown_edit_lib::document_io::write_image_bytes;
 
 #[test]
 fn clipboard_image_is_written_to_a_validated_png_path() {
@@ -55,4 +56,23 @@ fn clipboard_image_reports_a_missing_parent() {
     let path = dir.path().join("missing").join("image.png");
 
     assert!(save_clipboard_image_impl(path, &[1], "image/png").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn write_image_bytes_preserves_existing_unix_mode_bits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    std::fs::write(&path, b"original").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+    write_image_bytes(&path, b"replacement").unwrap();
+
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
 }

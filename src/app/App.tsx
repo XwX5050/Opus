@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { createTauriDocumentPort, subscribeToOpenPaths } from "../document/tauriDocumentPort";
+import { createTauriDocumentPort, subscribeToImageDrops, subscribeToOpenPaths } from "../document/tauriDocumentPort";
 import AppShell from "./AppShell";
 
 export default function App() {
@@ -12,6 +12,7 @@ export default function App() {
     <AppShell
       port={port}
       subscribeToEvents={subscribeToOpenPaths}
+      subscribeToImageDrops={subscribeToImageDrops}
       externalError={portError}
       onDismissExternalError={() => setPortError(null)}
     />

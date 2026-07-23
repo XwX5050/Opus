@@ -45,6 +45,25 @@ const insertImageMarkdown = (
   });
 };
 
+/**
+ * Inserts `![image](path)` references for dropped image files in a single
+ * undoable transaction at `at` (or the cursor when null). Used by both the
+ * native image-drop event and the DOM drop fallback.
+ */
+export const insertDroppedImages = (
+  view: EditorView,
+  paths: ReadonlyArray<string>,
+  at: number | null,
+) => {
+  const text = paths.map(markdownImageText).join("\n");
+  const from = at ?? view.state.selection.main.head;
+  view.dispatch({
+    changes: { from, insert: text },
+    selection: { anchor: from + text.length },
+    userEvent: "input.drop",
+  });
+};
+
 const droppedFilePath = (file: File, transfer: DataTransfer): string | null => {
   // Tauri/Electron-style File objects may carry the absolute source path.
   const carried = (file as File & { path?: string }).path;
@@ -66,6 +85,13 @@ const droppedFilePath = (file: File, transfer: DataTransfer): string | null => {
  * `![image](path)` in a single undoable transaction; cancelling the dialog
  * inserts nothing. Dropped image files are referenced in place, never
  * copied.
+ *
+ * Note: in the packaged app, Tauri 2's default `dragDropEnabled: true`
+ * routes drops to the native window handler (src-tauri/src/lib.rs), which
+ * emits `image-files-dropped`; this DOM drop handler is a fallback for
+ * environments where HTML5 drops do fire. Dropped `File` objects only
+ * carry a usable path on runtimes that inject one (Tauri v1/Electron
+ * style) or via a `file://` uri-list.
  */
 export const imagePasteExtension = (options: ImagePasteOptions): Extension =>
   EditorView.domEventHandlers({
@@ -107,6 +133,6 @@ export const imagePasteExtension = (options: ImagePasteOptions): Extension =>
       if (!path) return;
       event.preventDefault();
       const at = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      insertImageMarkdown(view, path, at ?? view.state.selection.main.head, "input.drop");
+      insertDroppedImages(view, [path], at);
     },
   });

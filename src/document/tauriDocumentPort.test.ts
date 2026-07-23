@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open, save: mocks.save
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: mocks.emit }));
 
 import { DocumentPortError } from "./DocumentPort";
-import { createTauriDocumentPort, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
+import { createTauriDocumentPort, subscribeToImageDrops, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
 
 describe("tauri document port", () => {
   beforeEach(() => vi.resetAllMocks());
@@ -277,5 +277,46 @@ describe("tauri document port clipboard images and asset scopes", () => {
     mocks.convertFileSrc.mockReturnValue("asset://localhost/notes/pic.png");
     expect(tauriImagePreviewUrl("/notes/pic.png")).toBe("asset://localhost/notes/pic.png");
     expect(mocks.convertFileSrc).toHaveBeenCalledWith("/notes/pic.png");
+  });
+});
+
+describe("subscribeToImageDrops", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("maps native drop payloads to CSS coordinates and cloned paths", async () => {
+    let handler!: (event: { payload: { paths: string[]; x: number; y: number } }) => void;
+    const unlisten = vi.fn();
+    mocks.listen.mockImplementation(async (_name, value) => { handler = value; return unlisten; });
+    const onImages = vi.fn();
+
+    const stop = await subscribeToImageDrops(onImages);
+    expect(mocks.listen).toHaveBeenCalledWith("image-files-dropped", expect.any(Function));
+    handler({ payload: { paths: ["/p/pic.png"], x: 200, y: 100 } });
+
+    const scale = window.devicePixelRatio || 1;
+    expect(onImages).toHaveBeenCalledWith({
+      paths: ["/p/pic.png"],
+      x: 200 / scale,
+      y: 100 / scale,
+    });
+    stop();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("unlistens without delivering when the signal aborts before registration finishes", async () => {
+    let finishListening!: (unlisten: () => void) => void;
+    const registered = new Promise<() => void>((resolve) => { finishListening = resolve; });
+    mocks.listen.mockReturnValue(registered);
+    const unlisten = vi.fn();
+    const controller = new AbortController();
+
+    const subscribing = subscribeToImageDrops(vi.fn(), controller.signal);
+    controller.abort();
+    finishListening(unlisten);
+
+    const stop = await subscribing;
+    expect(unlisten).toHaveBeenCalledOnce();
+    stop();
+    expect(unlisten).toHaveBeenCalledOnce();
   });
 });

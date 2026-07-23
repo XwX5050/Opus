@@ -177,4 +177,32 @@ describe("MarkdownEditor", () => {
     content().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
     expect(content()).not.toHaveTextContent("**");
   });
+
+  it("inserts a native image drop once, escapes it, and reports the change", () => {
+    const onChange = vi.fn();
+    const rendered = renderEditor({ value: "hello", onChange });
+    const drop = { sequence: 1, paths: ["/p/pic one.png"], x: 0, y: 0 };
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} imageDrop={drop} />);
+    expect(editorView().state.doc.toString()).toBe("![image](</p/pic one.png>)hello");
+    expect(onChange).toHaveBeenCalledWith("![image](</p/pic one.png>)hello");
+
+    // The same drop (same sequence) must not be inserted twice.
+    rendered.rerender(<MarkdownEditor {...rendered.props} imageDrop={{ ...drop }} />);
+    expect(editorView().state.doc.toString()).toBe("![image](</p/pic one.png>)hello");
+
+    // A newer drop is inserted (jsdom has no layout; posAtCoords yields 0).
+    rendered.rerender(
+      <MarkdownEditor {...rendered.props} imageDrop={{ sequence: 2, paths: ["/q/x.png"], x: 0, y: 0 }} />,
+    );
+    expect(editorView().state.doc.toString()).toBe("![image](/q/x.png)![image](</p/pic one.png>)hello");
+  });
+
+  it("ignores an image drop that predates the editor mount", () => {
+    renderEditor({
+      value: "hello",
+      imageDrop: { sequence: 1, paths: ["/p/pic.png"], x: 0, y: 0 },
+    });
+    expect(editorView().state.doc.toString()).toBe("hello");
+  });
 });

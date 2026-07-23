@@ -100,6 +100,32 @@ fn is_markdown(path: &Path) -> bool {
         .is_some_and(|x| x.eq_ignore_ascii_case("md") || x.eq_ignore_ascii_case("markdown"))
 }
 
+const IMAGE_EXTENSIONS: [&str; 9] = [
+    "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg", "ico",
+];
+
+pub fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| IMAGE_EXTENSIONS.iter().any(|ext| x.eq_ignore_ascii_case(ext)))
+}
+
+/// Payload for the `image-files-dropped` event. `x`/`y` are the physical
+/// drop coordinates reported by the native drag-drop event.
+#[derive(Clone, Debug, Serialize)]
+pub struct ImageDropPayload {
+    pub paths: Vec<PathBuf>,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Splits natively dropped paths into `(images, rest)`: images are inserted
+/// into the editor as `![image](path)` references, everything else flows
+/// through the regular open-as-document pipeline.
+pub fn partition_dropped_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    paths.into_iter().partition(|path| is_image_path(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +140,28 @@ mod tests {
             "--flag",
         ]);
         assert_eq!(paths, vec![PathBuf::from("/tmp/a b.md")]);
+    }
+
+    #[test]
+    fn partitions_dropped_paths_into_images_and_other_files() {
+        let (images, rest) = partition_dropped_paths(vec![
+            PathBuf::from("/tmp/photo.PNG"),
+            PathBuf::from("/tmp/note.md"),
+            PathBuf::from("/tmp/pic.webp"),
+            PathBuf::from("/tmp/folder"),
+            PathBuf::from("/tmp/archive.tar.gz"),
+        ]);
+        assert_eq!(
+            images,
+            vec![PathBuf::from("/tmp/photo.PNG"), PathBuf::from("/tmp/pic.webp")]
+        );
+        assert_eq!(
+            rest,
+            vec![
+                PathBuf::from("/tmp/note.md"),
+                PathBuf::from("/tmp/folder"),
+                PathBuf::from("/tmp/archive.tar.gz"),
+            ]
+        );
     }
 }

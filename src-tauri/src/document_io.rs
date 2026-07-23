@@ -313,9 +313,15 @@ pub fn write_document(
 pub fn write_image_bytes(path: &Path, bytes: &[u8]) -> Result<(), DocumentIoError> {
     let destination = resolve_write_path(path)?;
     let parent = parent_directory(&destination)?;
+    let existing_permissions = existing_mode_permissions(&destination)?;
 
     let (temporary_path, mut temporary_file) = create_sibling_temp(parent, &destination)?;
     let result = (|| {
+        if let Some(permissions) = existing_permissions {
+            temporary_file
+                .set_permissions(permissions)
+                .map_err(|error| map_io_error(&destination, error))?;
+        }
         temporary_file
             .write_all(bytes)
             .map_err(|error| map_io_error(&destination, error))?;
