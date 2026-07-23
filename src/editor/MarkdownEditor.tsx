@@ -6,7 +6,10 @@ import {
   Transaction,
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import type { ClipboardImageInput } from "../document/DocumentPort";
 import { editorExtensions } from "./editorExtensions";
+import { imagePasteExtension } from "./imagePaste";
+import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
 import { mathWidgetsExtension } from "./mathWidgets";
 
@@ -19,6 +22,8 @@ export interface MarkdownEditorProps {
   onReopenClosed(): void;
   sourceMode: boolean;
   documentPath: string | null;
+  saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
+  resolveImageUrl(path: string): string;
 }
 
 export default function MarkdownEditor({
@@ -28,13 +33,28 @@ export default function MarkdownEditor({
   onReopenClosed,
   sourceMode,
   documentPath,
+  saveClipboardImage,
+  resolveImageUrl,
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewCompartmentRef = useRef(new Compartment());
   const previousSourceModeRef = useRef(sourceMode);
+  const documentPathRef = useRef(documentPath);
+  documentPathRef.current = documentPath;
   const callbacksRef = useRef({ onChange, onSave, onReopenClosed });
   callbacksRef.current = { onChange, onSave, onReopenClosed };
+  const imageSupportRef = useRef({ saveClipboardImage, resolveImageUrl });
+  imageSupportRef.current = { saveClipboardImage, resolveImageUrl };
+
+  const previewExtensions = () => [
+    livePreviewExtension(),
+    mathWidgetsExtension(),
+    imageWidgetsExtension({
+      getDocumentPath: () => documentPathRef.current,
+      resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
+    }),
+  ];
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -49,11 +69,14 @@ export default function MarkdownEditor({
               onReopenClosed: () => callbacksRef.current.onReopenClosed(),
             },
             previewCompartmentRef.current.of(
-              sourceMode
-                ? []
-                : [livePreviewExtension(), mathWidgetsExtension()],
+              sourceMode ? [] : previewExtensions(),
             ),
           ),
+          imagePasteExtension({
+            saveClipboardImage: (input) =>
+              imageSupportRef.current.saveClipboardImage(input),
+            getDocumentPath: () => documentPathRef.current,
+          }),
           EditorView.contentAttributes.of({
             "aria-label": "Markdown 编辑器",
           }),
@@ -98,11 +121,11 @@ export default function MarkdownEditor({
     previousSourceModeRef.current = sourceMode;
     view.dispatch({
       effects: previewCompartmentRef.current.reconfigure(
-        sourceMode
-          ? []
-          : [livePreviewExtension(), mathWidgetsExtension()],
+        sourceMode ? [] : previewExtensions(),
       ),
     });
+    // Preview extensions read live refs; rebuilding them on toggle is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceMode]);
 
   return (

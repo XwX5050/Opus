@@ -56,6 +56,10 @@ class InspectablePort implements DocumentPort {
       version: "saved-v2",
     });
   }
+  async saveClipboardImage() { return null; }
+  async acquireDocumentScope() {}
+  async acquireWorkspaceScope() {}
+  async releaseAssetScope() {}
 }
 
 const editor = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });

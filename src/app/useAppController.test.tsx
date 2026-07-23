@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { DocumentPort, SavedFile } from "../document/DocumentPort";
+import { DocumentPortError } from "../document/DocumentPort";
 import type { OpenedFile, PendingWriteRequest, SaveTarget } from "../document/types";
 import { useAppController } from "./useAppController";
 
@@ -31,7 +32,47 @@ class InspectableControllerPort implements DocumentPort {
     this.requests.push(request);
     return this.writeResult;
   }
+  async saveClipboardImage() { return null; }
+  async acquireDocumentScope() {}
+  async acquireWorkspaceScope() {}
+  async releaseAssetScope() {}
 }
+
+type ScopeCall =
+  | { kind: "acquire"; consumerId: string; path: string }
+  | { kind: "release"; consumerId: string };
+
+class ScopeAwareControllerPort implements DocumentPort {
+  readonly scopeCalls: ScopeCall[] = [];
+
+  constructor(private readonly files: OpenedFile[]) {}
+
+  async chooseAndOpenFiles() { return [...this.files]; }
+  async openPath(path: string) {
+    const opened = this.files.find((candidate) => candidate.path === path);
+    if (!opened) throw new DocumentPortError("not_found", path);
+    return opened;
+  }
+  async chooseSavePath() { return null; }
+  async write(): Promise<SavedFile> { throw new DocumentPortError("io", "not writable"); }
+  async saveClipboardImage() { return null; }
+  async acquireDocumentScope(consumerId: string, path: string) {
+    this.scopeCalls.push({ kind: "acquire", consumerId, path });
+  }
+  async acquireWorkspaceScope() {}
+  async releaseAssetScope(consumerId: string) {
+    this.scopeCalls.push({ kind: "release", consumerId });
+  }
+}
+
+const scopedFile = (path: string): OpenedFile => ({
+  path,
+  text: "text",
+  hasUtf8Bom: false,
+  newline: "lf",
+  modifiedUnixMs: 1,
+  version: `version:${path}`,
+});
 
 describe("useAppController", () => {
   it("passes the exact frozen reducer request to write and keeps later edits dirty", async () => {
@@ -133,6 +174,10 @@ describe("useAppController", () => {
       async write(request) {
         return { path: request.targetPath, modifiedUnixMs: 2, version: "v2" };
       },
+      async saveClipboardImage() { return null; },
+      async acquireDocumentScope() {},
+      async acquireWorkspaceScope() {},
+      async releaseAssetScope() {},
     };
     const hook = renderHook(() => useAppController(port));
     const openingAction = hook.result.current.openFiles();
@@ -162,5 +207,80 @@ describe("useAppController", () => {
     await saving;
     expect(hook.result.current.state).toBe(stateBeforeUnmount);
     expect(stateBeforeUnmount.tabs[0].pendingSave).toBeDefined();
+  });
+});
+
+describe("useAppController asset scopes", () => {
+  it("acquires once per genuinely new tab, releases on close, and keeps a same-parent sibling held", async () => {
+    const port = new ScopeAwareControllerPort([
+      scopedFile("/notes/a.md"),
+      scopedFile("/notes/b.md"),
+    ]);
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openFiles());
+    const [tabA, tabB] = hook.result.current.state.tabs;
+    expect(port.scopeCalls).toEqual([
+      { kind: "acquire", consumerId: tabA.id, path: "/notes/a.md" },
+      { kind: "acquire", consumerId: tabB.id, path: "/notes/b.md" },
+    ]);
+
+    act(() => hook.result.current.close(tabA.id));
+
+    // Closing tab A releases only its own consumer ID; tab B, which shares
+    // the same parent directory, keeps its access.
+    expect(port.scopeCalls).toEqual([
+      { kind: "acquire", consumerId: tabA.id, path: "/notes/a.md" },
+      { kind: "acquire", consumerId: tabB.id, path: "/notes/b.md" },
+      { kind: "release", consumerId: tabA.id },
+    ]);
+
+    hook.unmount();
+    expect(
+      port.scopeCalls
+        .filter((call) => call.kind === "release")
+        .map((call) => call.consumerId)
+        .sort(),
+    ).toEqual([tabA.id, tabB.id].sort());
+  });
+
+  it("does not acquire again when opening a duplicate path only focuses the tab", async () => {
+    const port = new ScopeAwareControllerPort([scopedFile("/notes/a.md")]);
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openFiles());
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+
+    expect(hook.result.current.state.tabs).toHaveLength(1);
+    expect(port.scopeCalls.filter((call) => call.kind === "acquire")).toHaveLength(1);
+    hook.unmount();
+  });
+
+  it("re-acquires when a closed tab is reopened", async () => {
+    const port = new ScopeAwareControllerPort([scopedFile("/notes/a.md")]);
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openFiles());
+    const tab = hook.result.current.state.tabs[0];
+    act(() => hook.result.current.close(tab.id));
+    act(() => hook.result.current.reopenClosed());
+
+    expect(port.scopeCalls).toEqual([
+      { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
+      { kind: "release", consumerId: tab.id },
+      { kind: "acquire", consumerId: tab.id, path: "/notes/a.md" },
+    ]);
+    hook.unmount();
+  });
+
+  it("never acquires a scope for an unsaved document", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    const hook = renderHook(() => useAppController(port));
+
+    act(() => hook.result.current.newDocument());
+
+    expect(hook.result.current.state.tabs).toHaveLength(1);
+    expect(port.scopeCalls).toEqual([]);
+    hook.unmount();
   });
 });

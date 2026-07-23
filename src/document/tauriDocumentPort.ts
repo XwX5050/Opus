@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DocumentPort, DocumentPortErrorCode, SavedFile } from "./DocumentPort";
+import type { ClipboardImageInput, DocumentPort, DocumentPortErrorCode, SavedFile } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
 import type { OpenedFile, PendingWriteRequest, SaveTarget } from "./types";
 
@@ -19,6 +19,23 @@ function failure(error: unknown): DocumentPortError {
 
 const opened = (dto: OpenDto): OpenedFile => ({ path: dto.path, text: dto.text, hasUtf8Bom: dto.has_utf8_bom, newline: dto.newline, modifiedUnixMs: dto.modified_unix_ms, version: dto.version });
 const saved = (dto: SaveDto): SavedFile => ({ path: dto.path, modifiedUnixMs: dto.modified_unix_ms, version: dto.version });
+
+// The asset-protocol URL builder lives here so that the rest of the app never
+// imports @tauri-apps/api/core directly.
+export const tauriImagePreviewUrl = (path: string): string => convertFileSrc(path);
+
+const parentDirectoryOf = (path: string): string | null => {
+  const normalized = path.replaceAll("\\", "/");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) return index === 0 ? "/" : null;
+  return normalized.slice(0, index);
+};
+
+const timestampedImageName = (mimeType: ClipboardImageInput["mimeType"], now: Date): string => {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `image-${stamp}.${mimeType === "image/png" ? "png" : "jpg"}`;
+};
 
 export interface DocumentPortErrorContext {
   readonly path: string;
@@ -56,6 +73,29 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       try {
         return saved(await invoke<SaveDto>("save_document", { request: { request_id: request.requestId, document_id: request.documentId, target_path: request.targetPath, text: request.text, has_utf8_bom: request.hasUtf8Bom, newline: request.newline, expected_version: request.expectedVersion, path_platform: request.pathPlatform } }));
       } catch (error) { throw failure(error); }
+    },
+    async saveClipboardImage(input: ClipboardImageInput): Promise<string | null> {
+      const name = timestampedImageName(input.mimeType, new Date());
+      const directory = input.documentPath === null ? null : parentDirectoryOf(input.documentPath);
+      const path = await save({
+        defaultPath: directory ? `${directory}/${name}` : name,
+        filters: [{ name: "Image", extensions: [input.mimeType === "image/png" ? "png" : "jpg"] }],
+      });
+      if (path === null) return null;
+      try {
+        await invoke("save_clipboard_image", { path, bytes: Array.from(input.bytes), mime_type: input.mimeType });
+      } catch (error) { throw failure(error); }
+      if (directory && path.startsWith(`${directory}/`)) return path.slice(directory.length + 1);
+      return path;
+    },
+    async acquireDocumentScope(consumerId: string, path: string): Promise<void> {
+      try { await invoke("acquire_document_scope", { consumer_id: consumerId, path }); } catch (error) { throw failure(error); }
+    },
+    async acquireWorkspaceScope(consumerId: string, root: string): Promise<void> {
+      try { await invoke("acquire_workspace_scope", { consumer_id: consumerId, root }); } catch (error) { throw failure(error); }
+    },
+    async releaseAssetScope(consumerId: string): Promise<void> {
+      try { await invoke("release_asset_scope", { consumer_id: consumerId }); } catch (error) { throw failure(error); }
     },
   };
 }

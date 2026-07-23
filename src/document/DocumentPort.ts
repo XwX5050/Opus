@@ -27,9 +27,19 @@ export interface SavedFile {
   readonly version: string;
 }
 
+export interface ClipboardImageInput {
+  readonly bytes: Uint8Array;
+  readonly mimeType: "image/png" | "image/jpeg";
+  readonly documentPath: string | null;
+}
+
 export interface DocumentPort {
   chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>>;
   openPath(path: string): Promise<OpenedFile>;
   chooseSavePath(suggestedName: string): Promise<SaveTarget | null>;
   write(request: PendingWriteRequest): Promise<SavedFile>;
+  saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
+  acquireDocumentScope(consumerId: string, path: string): Promise<void>;
+  acquireWorkspaceScope(consumerId: string, root: string): Promise<void>;
+  releaseAssetScope(consumerId: string): Promise<void>;
 }

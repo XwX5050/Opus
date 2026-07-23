@@ -12,6 +12,8 @@ const renderEditor = (overrides: Partial<React.ComponentProps<typeof MarkdownEdi
     onReopenClosed: vi.fn(),
     sourceMode: true,
     documentPath: "/notes/a.md",
+    saveClipboardImage: vi.fn(async () => null),
+    resolveImageUrl: (path: string) => `asset://localhost${path}`,
     ...overrides,
   };
   return { props, ...render(<MarkdownEditor {...props} />) };

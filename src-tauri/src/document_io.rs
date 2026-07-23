@@ -308,6 +308,34 @@ pub fn write_document(
     result
 }
 
+/// Writes opaque binary payload (clipboard image bytes) to `path` through
+/// the same atomic sibling-temp + rename strategy as document writes.
+pub fn write_image_bytes(path: &Path, bytes: &[u8]) -> Result<(), DocumentIoError> {
+    let destination = resolve_write_path(path)?;
+    let parent = parent_directory(&destination)?;
+
+    let (temporary_path, mut temporary_file) = create_sibling_temp(parent, &destination)?;
+    let result = (|| {
+        temporary_file
+            .write_all(bytes)
+            .map_err(|error| map_io_error(&destination, error))?;
+        temporary_file
+            .flush()
+            .map_err(|error| map_io_error(&destination, error))?;
+        temporary_file
+            .sync_all()
+            .map_err(|error| map_io_error(&destination, error))?;
+        drop(temporary_file);
+        fs::rename(&temporary_path, &destination)
+            .map_err(|error| map_io_error(&destination, error))
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
 fn output_bytes(text: &str, bom: bool, newline: Newline) -> Vec<u8> {
     let mut output = Vec::new();
     if bom {

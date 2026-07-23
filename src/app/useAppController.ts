@@ -6,7 +6,7 @@ import {
   initialDocumentState,
   type DocumentAction,
 } from "../document/documentReducer";
-import type { OpenedFile } from "../document/types";
+import type { DocumentSnapshot, OpenedFile } from "../document/types";
 import type { OpenPathSubscriptions } from "../document/tauriDocumentPort";
 
 export type EventSubscriber = (
@@ -37,6 +37,8 @@ export function useAppController(
   const [closeDocumentId, setCloseDocumentId] = useState<string | null>(null);
   const [closeSaving, setCloseSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Stable consumer IDs (tab IDs) that currently hold an asset scope.
+  const acquiredScopeIds = useRef(new Set<string>());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -67,11 +69,34 @@ export function useAppController(
     return `document-${idSequence.current}`;
   }, []);
 
+  const acquireDocumentScope = useCallback((tab: DocumentSnapshot) => {
+    if (tab.path === null || acquiredScopeIds.current.has(tab.id)) return;
+    acquiredScopeIds.current.add(tab.id);
+    void port.acquireDocumentScope(tab.id, tab.path).catch(() => {
+      acquiredScopeIds.current.delete(tab.id);
+    });
+  }, [port]);
+
+  const releaseDocumentScope = useCallback((id: string) => {
+    if (!acquiredScopeIds.current.delete(id)) return;
+    void port.releaseAssetScope(id).catch(() => {
+      // Scope release is best-effort; the registry is ref-counted per consumer.
+    });
+  }, [port]);
+
   const addOpenedFiles = useCallback((files: ReadonlyArray<OpenedFile>) => {
     for (const openedFile of files) {
-      dispatch({ type: "fileOpened", id: nextId(), file: openedFile });
+      const id = nextId();
+      const before = stateRef.current;
+      const next = dispatch({ type: "fileOpened", id, file: openedFile });
+      // Only a genuinely new tab acquires a scope; duplicate-path opens just
+      // focus the existing tab and must not leak a reference.
+      const added = next.tabs.find(
+        (tab) => tab.id === id && !before.tabs.some((tab) => tab.id === id),
+      );
+      if (added) acquireDocumentScope(added);
     }
-  }, [dispatch, nextId]);
+  }, [acquireDocumentScope, dispatch, nextId]);
 
   const openFiles = useCallback(async () => {
     const generation = lifecycleGenerationRef.current;
@@ -184,8 +209,9 @@ export function useAppController(
       setCloseDocumentId(id);
       return;
     }
-    dispatch({ type: "closeConfirmed", id, disposition: "saved" });
-  }, [dispatch]);
+    const next = dispatch({ type: "closeConfirmed", id, disposition: "saved" });
+    if (!next.tabs.some((tab) => tab.id === id)) releaseDocumentScope(id);
+  }, [dispatch, releaseDocumentScope]);
 
   const confirmClose = useCallback(async (choice: CloseChoice) => {
     const id = closeDocumentId;
@@ -196,7 +222,8 @@ export function useAppController(
     }
     if (choice === "discard") {
       setCloseDocumentId(null);
-      dispatch({ type: "closeConfirmed", id, disposition: "discarded" });
+      const next = dispatch({ type: "closeConfirmed", id, disposition: "discarded" });
+      if (!next.tabs.some((tab) => tab.id === id)) releaseDocumentScope(id);
       return;
     }
     const generation = lifecycleGenerationRef.current;
@@ -209,7 +236,8 @@ export function useAppController(
       if (!isCurrent(generation)) return;
       const document = stateRef.current.tabs.find((tab) => tab.id === id);
       if (saved && document?.status === "clean" && !document.pendingSave) {
-        dispatch({ type: "closeConfirmed", id, disposition: "saved" });
+        const next = dispatch({ type: "closeConfirmed", id, disposition: "saved" });
+        if (!next.tabs.some((tab) => tab.id === id)) releaseDocumentScope(id);
         setCloseDocumentId(null);
       }
     } finally {
@@ -218,11 +246,31 @@ export function useAppController(
         if (isCurrent(generation)) setCloseSaving(false);
       }
     }
-  }, [closeDocumentId, dispatch, isCurrent, save]);
+  }, [closeDocumentId, dispatch, isCurrent, releaseDocumentScope, save]);
 
   const reopenClosed = useCallback(() => {
-    dispatch({ type: "reopenLastClosed" });
-  }, [dispatch]);
+    const reopeningId = stateRef.current.recentlyClosed[0]?.document.id;
+    const before = stateRef.current;
+    const next = dispatch({ type: "reopenLastClosed" });
+    if (!reopeningId) return;
+    const added = next.tabs.find(
+      (tab) =>
+        tab.id === reopeningId &&
+        !before.tabs.some((tab) => tab.id === reopeningId),
+    );
+    if (added) acquireDocumentScope(added);
+  }, [acquireDocumentScope, dispatch]);
+
+  // Release every still-held scope when the controller unmounts.
+  useEffect(() => {
+    const acquired = acquiredScopeIds.current;
+    return () => {
+      for (const id of acquired) {
+        void port.releaseAssetScope(id).catch(() => {});
+      }
+      acquired.clear();
+    };
+  }, [port]);
 
   useEffect(() => {
     if (!subscribeToEvents) return;

@@ -1,3 +1,4 @@
+pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
 pub mod open_events;
@@ -11,9 +12,14 @@ pub fn run() {
     let run_queue = Arc::clone(&open_queue);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(document_commands::SharedAssetScopes::default())
         .invoke_handler(tauri::generate_handler![
             document_commands::open_document,
-            document_commands::save_document
+            document_commands::save_document,
+            document_commands::save_clipboard_image,
+            document_commands::acquire_document_scope,
+            document_commands::acquire_workspace_scope,
+            document_commands::release_asset_scope
         ])
         .setup(move |app| {
             let initial = open_events::normalize_open_paths(std::env::args().skip(1));

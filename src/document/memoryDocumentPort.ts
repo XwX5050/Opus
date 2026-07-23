@@ -1,5 +1,6 @@
 import {
   DocumentPortError,
+  type ClipboardImageInput,
   type DocumentPort,
   type SavedFile,
 } from "./DocumentPort";
@@ -15,17 +16,36 @@ export interface MemoryDocumentPortOptions {
   readonly savePath?: string | null;
   readonly chosenPaths?: ReadonlyArray<string>;
   readonly pathPlatform?: PathPlatform;
+  readonly clipboardImagePath?: string | null;
+}
+
+export type MemoryScopeCall =
+  | { readonly kind: "document"; readonly consumerId: string; readonly path: string }
+  | { readonly kind: "workspace"; readonly consumerId: string; readonly root: string }
+  | { readonly kind: "release"; readonly consumerId: string };
+
+export interface MemoryClipboardImageSave {
+  readonly bytes: Uint8Array;
+  readonly mimeType: ClipboardImageInput["mimeType"];
+  readonly documentPath: string | null;
 }
 
 const cloneOpenedFile = (file: OpenedFile): OpenedFile => ({ ...file });
 const cloneRequest = (request: PendingWriteRequest): PendingWriteRequest =>
   Object.freeze({ ...request });
+const cloneImageSave = (save: MemoryClipboardImageSave): MemoryClipboardImageSave => ({
+  bytes: new Uint8Array(save.bytes),
+  mimeType: save.mimeType,
+  documentPath: save.documentPath,
+});
 
 export class MemoryDocumentPort implements DocumentPort {
   readonly #files: Map<string, OpenedFile>;
   readonly #options: MemoryDocumentPortOptions;
   readonly #pathPlatform: PathPlatform;
   readonly #writes: PendingWriteRequest[] = [];
+  readonly #clipboardImageSaves: MemoryClipboardImageSave[] = [];
+  readonly #scopeCalls: MemoryScopeCall[] = [];
   #nextRevision = 1;
 
   constructor(
@@ -47,6 +67,14 @@ export class MemoryDocumentPort implements DocumentPort {
 
   get writes(): ReadonlyArray<PendingWriteRequest> {
     return this.#writes.map(cloneRequest);
+  }
+
+  get clipboardImageSaves(): ReadonlyArray<MemoryClipboardImageSave> {
+    return this.#clipboardImageSaves.map(cloneImageSave);
+  }
+
+  get scopeCalls(): ReadonlyArray<MemoryScopeCall> {
+    return this.#scopeCalls.map((call) => ({ ...call }));
   }
 
   async chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>> {
@@ -104,5 +132,28 @@ export class MemoryDocumentPort implements DocumentPort {
       version,
     });
     return { path: displayPath, modifiedUnixMs, version };
+  }
+
+  async saveClipboardImage(input: ClipboardImageInput): Promise<string | null> {
+    this.#clipboardImageSaves.push(
+      cloneImageSave({
+        bytes: input.bytes,
+        mimeType: input.mimeType,
+        documentPath: input.documentPath,
+      }),
+    );
+    return this.#options.clipboardImagePath ?? null;
+  }
+
+  async acquireDocumentScope(consumerId: string, path: string): Promise<void> {
+    this.#scopeCalls.push({ kind: "document", consumerId, path });
+  }
+
+  async acquireWorkspaceScope(consumerId: string, root: string): Promise<void> {
+    this.#scopeCalls.push({ kind: "workspace", consumerId, root });
+  }
+
+  async releaseAssetScope(consumerId: string): Promise<void> {
+    this.#scopeCalls.push({ kind: "release", consumerId });
   }
 }

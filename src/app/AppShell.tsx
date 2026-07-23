@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
+import { tauriImagePreviewUrl } from "../document/tauriDocumentPort";
 import MarkdownEditor from "../editor/MarkdownEditor";
 import { type EventSubscriber, useAppController } from "./useAppController";
 
@@ -206,6 +207,8 @@ export default function AppShell({
             onReopenClosed={reopenClosed}
             sourceMode={sourceMode}
             documentPath={active.path}
+            saveClipboardImage={(input) => port.saveClipboardImage(input)}
+            resolveImageUrl={tauriImagePreviewUrl}
           />
         ) : (
           <div aria-label="空白状态" style={{ display: "grid", placeItems: "center", gap: 12 }}>

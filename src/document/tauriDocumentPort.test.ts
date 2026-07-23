@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), open: vi.fn(), save: vi.fn(), listen: vi.fn(), emit: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), open: vi.fn(), save: vi.fn(), listen: vi.fn(), emit: vi.fn(), convertFileSrc: vi.fn() }));
 const { invoke, open } = mocks;
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke, convertFileSrc: mocks.convertFileSrc }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open, save: mocks.save }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: mocks.emit }));
 
 import { DocumentPortError } from "./DocumentPort";
-import { createTauriDocumentPort, subscribeToOpenPaths } from "./tauriDocumentPort";
+import { createTauriDocumentPort, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
 
 describe("tauri document port", () => {
   beforeEach(() => vi.resetAllMocks());
@@ -169,5 +169,113 @@ describe("tauri document port", () => {
     await subscription.ready();
     await subscription.dispose();
     expect(unlisten).toHaveBeenCalledOnce();
+  });
+});
+
+describe("tauri document port clipboard images and asset scopes", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("returns null without writing when the image save dialog is cancelled", async () => {
+    mocks.save.mockResolvedValue(null);
+    const port = createTauriDocumentPort();
+    const result = await port.saveClipboardImage({
+      bytes: new Uint8Array([1, 2, 3]),
+      mimeType: "image/png",
+      documentPath: "/notes/a.md",
+    });
+    expect(result).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("defaults the dialog to the document directory with a timestamped png name", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 6, 23, 9, 5, 7));
+      mocks.save.mockResolvedValue("/notes/image-20260723-090507.png");
+      invoke.mockResolvedValue(undefined);
+      const port = createTauriDocumentPort();
+      const bytes = new Uint8Array([137, 80, 78, 71]);
+      const result = await port.saveClipboardImage({
+        bytes,
+        mimeType: "image/png",
+        documentPath: "/notes/a.md",
+      });
+      expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({
+        defaultPath: "/notes/image-20260723-090507.png",
+      }));
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("save_clipboard_image", {
+        path: "/notes/image-20260723-090507.png",
+        bytes: [137, 80, 78, 71],
+        mime_type: "image/png",
+      });
+      expect(result).toBe("image-20260723-090507.png");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a jpeg extension and returns an absolute path outside the document directory", async () => {
+    mocks.save.mockResolvedValue("/elsewhere/pic.jpg");
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    const result = await port.saveClipboardImage({
+      bytes: new Uint8Array([255, 216]),
+      mimeType: "image/jpeg",
+      documentPath: "/notes/a.md",
+    });
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({
+      defaultPath: expect.stringMatching(/^\/notes\/image-\d{8}-\d{6}\.jpg$/),
+    }));
+    expect(invoke).toHaveBeenCalledWith("save_clipboard_image", {
+      path: "/elsewhere/pic.jpg",
+      bytes: [255, 216],
+      mime_type: "image/jpeg",
+    });
+    expect(result).toBe("/elsewhere/pic.jpg");
+  });
+
+  it("still opens a dialog with a sensible default for an unsaved document", async () => {
+    mocks.save.mockResolvedValue("/tmp/image-1.png");
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    const result = await port.saveClipboardImage({
+      bytes: new Uint8Array([1]),
+      mimeType: "image/png",
+      documentPath: null,
+    });
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({
+      defaultPath: expect.stringMatching(/^image-\d{8}-\d{6}\.png$/),
+    }));
+    expect(result).toBe("/tmp/image-1.png");
+  });
+
+  it("propagates structured write failures from save_clipboard_image", async () => {
+    mocks.save.mockResolvedValue("/notes/image.png");
+    invoke.mockRejectedValue({ code: "permission_denied", message: "nope" });
+    const port = createTauriDocumentPort();
+    await expect(port.saveClipboardImage({
+      bytes: new Uint8Array([1]),
+      mimeType: "image/png",
+      documentPath: "/notes/a.md",
+    })).rejects.toMatchObject({ code: "permission_denied" });
+  });
+
+  it("issues acquire and release scope commands exactly once each", async () => {
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    await port.acquireDocumentScope("tab-1", "/notes/a.md");
+    await port.acquireWorkspaceScope("ws-1", "/notes");
+    await port.releaseAssetScope("tab-1");
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenNthCalledWith(1, "acquire_document_scope", { consumer_id: "tab-1", path: "/notes/a.md" });
+    expect(invoke).toHaveBeenNthCalledWith(2, "acquire_workspace_scope", { consumer_id: "ws-1", root: "/notes" });
+    expect(invoke).toHaveBeenNthCalledWith(3, "release_asset_scope", { consumer_id: "tab-1" });
+  });
+
+  it("exposes convertFileSrc through the preview URL helper", () => {
+    mocks.convertFileSrc.mockReturnValue("asset://localhost/notes/pic.png");
+    expect(tauriImagePreviewUrl("/notes/pic.png")).toBe("asset://localhost/notes/pic.png");
+    expect(mocks.convertFileSrc).toHaveBeenCalledWith("/notes/pic.png");
   });
 });
