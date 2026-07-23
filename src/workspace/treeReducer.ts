@@ -18,6 +18,7 @@ export type TreeAction =
   | { type: "loadRequested"; path: string }
   | { type: "loadSucceeded"; path: string; children: ReadonlyArray<DirectoryEntry> }
   | { type: "loadFailed"; path: string }
+  | { type: "loadRetried"; path: string }
   | { type: "directoryToggled"; path: string }
   | { type: "filterChanged"; filter: string }
   | { type: "entryCreated"; parentPath: string; entry: DirectoryEntry }
@@ -130,6 +131,10 @@ export function treeReducer(state: TreeState, action: TreeAction): TreeState {
         loading: withSet(state.loading, action.path, false),
         failed: withSet(state.failed, action.path, true),
       };
+    case "loadRetried":
+      // Clearing the failure flag makes the directory eligible for
+      // `pendingLoads` again, so the next render re-requests it.
+      return { ...state, failed: withSet(state.failed, action.path, false) };
     case "directoryToggled": {
       if (state.expanded.has(action.path)) {
         // Collapsing keeps cached children so re-expanding is free.

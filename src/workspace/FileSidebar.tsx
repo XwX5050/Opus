@@ -27,11 +27,12 @@ export interface FileSidebarProps {
 
 type Editing =
   | { readonly kind: "create" }
-  | { readonly kind: "rename"; readonly path: string; readonly name: string };
+  | { readonly kind: "rename"; readonly path: string };
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+// Path math assumes POSIX separators — deliberate: this is a macOS-only app.
 const parentPathOf = (path: string): string => path.slice(0, path.lastIndexOf("/"));
 
 function NameInput({
@@ -43,15 +44,20 @@ function NameInput({
   onCommit: (value: string) => void;
   onCancel: () => void;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Focus and select once on mount only. A ref callback would get a new
+  // identity every render, so a background tree update would re-select the
+  // text and the user's next keystroke would wipe it.
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
   return (
     <input
       type="text"
       aria-label="文件名"
       defaultValue={defaultValue}
-      ref={(element) => {
-        element?.focus();
-        element?.select();
-      }}
+      ref={inputRef}
       onKeyDown={(event) => {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -274,6 +280,21 @@ export default function FileSidebar({
         }
       />
       {error && <div role="alert">{error}</div>}
+      {[...state.failed]
+        .filter((path) => path === root.path || state.expanded.has(path))
+        .map((path) => (
+          <div key={path} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ flex: 1 }}>
+              加载失败：{path === root.path ? root.title : relativeOf(path)}
+            </span>
+            <button
+              type="button"
+              onClick={() => dispatch({ type: "loadRetried", path })}
+            >
+              重试
+            </button>
+          </div>
+        ))}
       {editing?.kind === "create" && (
         <NameInput onCommit={(name) => void commitCreate(name)} onCancel={() => setEditing(null)} />
       )}
@@ -328,7 +349,7 @@ export default function FileSidebar({
                 onClick={(event) => {
                   event.stopPropagation();
                   setError(null);
-                  setEditing({ kind: "rename", path: entry.path, name: entry.name });
+                  setEditing({ kind: "rename", path: entry.path });
                 }}
               >
                 重命名

@@ -211,3 +211,80 @@ fn trash_entry_rejects_escapes_and_the_root_itself_without_deleting() {
     assert!(root.exists());
     assert!(outside_file.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn trash_entry_on_an_in_root_symlink_trashes_the_link_not_the_target() {
+    use std::os::unix::fs::symlink;
+    let (_dir, root) = populated_root();
+    symlink(root.join("b.md"), root.join("notes").join("alias.md")).unwrap();
+
+    trash_entry(&root, Path::new("notes/alias.md")).unwrap();
+
+    assert!(std::fs::symlink_metadata(root.join("notes").join("alias.md")).is_err());
+    assert_eq!(std::fs::read(root.join("b.md")).unwrap(), b"b");
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_entry_on_an_in_root_symlink_renames_the_link_not_the_target() {
+    use std::os::unix::fs::symlink;
+    let (_dir, root) = populated_root();
+    symlink(root.join("b.md"), root.join("alias.md")).unwrap();
+
+    let renamed = rename_entry(&root, Path::new("alias.md"), "renamed.md").unwrap();
+
+    assert_eq!(renamed.name, "renamed.md");
+    assert!(std::fs::symlink_metadata(root.join("alias.md")).is_err());
+    assert_eq!(
+        std::fs::read_link(root.join("renamed.md")).unwrap(),
+        root.join("b.md")
+    );
+    assert_eq!(std::fs::read(root.join("b.md")).unwrap(), b"b");
+}
+
+#[cfg(unix)]
+#[test]
+fn trash_and_rename_reject_symlinks_escaping_the_root() {
+    use std::os::unix::fs::symlink;
+    let (_dir, root) = populated_root();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("keep.md");
+    std::fs::write(&outside_file, b"keep").unwrap();
+    symlink(&outside_file, root.join("escape.md")).unwrap();
+
+    assert!(is_outside_root(
+        &trash_entry(&root, Path::new("escape.md")).unwrap_err()
+    ));
+    assert!(is_outside_root(
+        &rename_entry(&root, Path::new("escape.md"), "x.md").unwrap_err()
+    ));
+    assert!(root.join("escape.md").exists());
+    assert_eq!(std::fs::read(&outside_file).unwrap(), b"keep");
+}
+
+#[test]
+fn rename_entry_to_the_same_name_succeeds_as_a_no_op() {
+    let (_dir, root) = populated_root();
+
+    let renamed = rename_entry(&root, Path::new("b.md"), "b.md").unwrap();
+
+    assert_eq!(renamed.name, "b.md");
+    assert_eq!(std::fs::read(root.join("b.md")).unwrap(), b"b");
+}
+
+#[cfg(unix)]
+#[test]
+fn create_markdown_file_never_writes_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+    let (_dir, root) = populated_root();
+    let outside = tempfile::tempdir().unwrap();
+    // A dangling symlink inside the root points at a would-be outside file.
+    symlink(outside.path().join("ghost.md"), root.join("ghost.md")).unwrap();
+
+    assert!(matches!(
+        create_markdown_file(&root, Path::new("ghost.md")).unwrap_err(),
+        WorkspaceError::AlreadyExists { .. }
+    ));
+    assert!(!outside.path().join("ghost.md").exists());
+}

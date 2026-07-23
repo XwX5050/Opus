@@ -56,6 +56,8 @@ export class MemoryDocumentPort implements DocumentPort {
 
   /** When set, trashEntry rejects with this error instead of deleting. */
   trashFailure: DocumentPortError | null = null;
+  /** When set, listDirectory rejects with this error instead of listing. */
+  listFailure: DocumentPortError | null = null;
 
   constructor(
     files: Map<string, OpenedFile>,
@@ -237,6 +239,7 @@ export class MemoryDocumentPort implements DocumentPort {
     relative: string,
   ): Promise<ReadonlyArray<DirectoryEntry>> {
     this.#listCalls.push({ root, relative });
+    if (this.listFailure) throw this.listFailure;
     const directory = this.#resolveDirectory(root, relative);
     const prefix = `${this.#key(directory)}/`;
     const directories = new Map<string, string>();

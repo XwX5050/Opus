@@ -217,4 +217,88 @@ describe("FileSidebar", () => {
 
     expect(onCloseWorkspace).toHaveBeenCalledOnce();
   });
+
+  it("keeps typed rename text when a background listing update re-renders", async () => {
+    const user = userEvent.setup();
+    const port = makePort();
+    // Hold the "drafts" listing so its loadSucceeded lands while the user is
+    // typing in the rename input, simulating a background tree update.
+    let releaseListing!: () => void;
+    const original = port.listDirectory.bind(port);
+    vi.spyOn(port, "listDirectory").mockImplementation(
+      async (rootPath: string, relative: string) => {
+        if (relative === "drafts") {
+          await new Promise<void>((resolve) => {
+            releaseListing = resolve;
+          });
+        }
+        return original(rootPath, relative);
+      },
+    );
+    renderSidebar(port);
+    const betaRow = await screen.findByRole("treeitem", { name: "Beta.markdown" });
+
+    await user.click(screen.getByRole("treeitem", { name: "drafts" }));
+    await user.click(within(betaRow).getByRole("button", { name: "重命名" }));
+    const input = screen.getByRole("textbox", { name: "文件名" });
+    await user.clear(input);
+    await user.type(input, "draf");
+
+    releaseListing();
+    await screen.findByRole("treeitem", { name: "gamma.md" });
+    expect(input).toHaveFocus();
+
+    // userEvent.keyboard types into the focused element without clicking, so
+    // a re-select on re-render would replace the typed text instead of adding.
+    await user.keyboard("t");
+    expect(input).toHaveValue("draft");
+  });
+
+  it("shows a retry row when a listing fails and re-requests on retry", async () => {
+    const user = userEvent.setup();
+    const { port } = renderSidebar();
+    await screen.findByRole("treeitem", { name: "drafts" });
+
+    port.listFailure = new DocumentPortError("io", "listing failed");
+    await user.click(screen.getByRole("treeitem", { name: "drafts" }));
+
+    expect(await screen.findByText("加载失败：drafts")).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: "gamma.md" })).not.toBeInTheDocument();
+    expect(port.listCalls).toEqual([
+      { root: "/notes", relative: "" },
+      { root: "/notes", relative: "drafts" },
+    ]);
+
+    port.listFailure = null;
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    await screen.findByRole("treeitem", { name: "gamma.md" });
+    expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
+    expect(port.listCalls).toEqual([
+      { root: "/notes", relative: "" },
+      { root: "/notes", relative: "drafts" },
+      { root: "/notes", relative: "drafts" },
+    ]);
+  });
+
+  it("shows no failure UI for a genuinely empty directory", async () => {
+    const user = userEvent.setup();
+    const { port } = renderSidebar();
+    await screen.findByRole("treeitem", { name: "archive" });
+
+    await user.click(screen.getByRole("treeitem", { name: "archive" }));
+
+    await waitFor(() =>
+      expect(port.listCalls).toEqual([
+        { root: "/notes", relative: "" },
+        { root: "/notes", relative: "archive" },
+      ]),
+    );
+    expect(screen.getByRole("treeitem", { name: "archive" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
 });

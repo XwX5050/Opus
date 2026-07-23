@@ -119,6 +119,35 @@ fn resolve_existing(root: &Path, relative: &Path) -> Result<PathBuf, WorkspaceEr
     Ok(canonical)
 }
 
+/// Resolves an existing entry for a mutation (rename/trash). Unlike
+/// `resolve_existing`, the returned path is the joined, non-canonical one:
+/// once the canonical boundary check proves the entry stays inside the root,
+/// the operation must act on the entry itself so that trashing or renaming
+/// an in-root symlink moves the link, not its target. The workspace root
+/// itself is never a valid mutation target.
+fn resolve_entry_for_mutation(root: &Path, relative: &Path) -> Result<PathBuf, WorkspaceError> {
+    let root = canonical_root(root)?;
+    let candidate = root.join(relative);
+    fs::symlink_metadata(&candidate).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => WorkspaceError::NotFound { path: candidate.clone() },
+        _ => WorkspaceError::Io {
+            path: candidate.clone(),
+            source: error,
+        },
+    })?;
+    let canonical = fs::canonicalize(&candidate).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => WorkspaceError::NotFound { path: candidate.clone() },
+        _ => WorkspaceError::Io {
+            path: candidate.clone(),
+            source: error,
+        },
+    })?;
+    if canonical == root || !canonical.starts_with(&root) {
+        return Err(WorkspaceError::OutsideRoot { path: canonical });
+    }
+    Ok(candidate)
+}
+
 /// Resolves the parent directory of a not-yet-existing target and returns
 /// the canonical target path after the boundary check.
 fn resolve_new_target(root: &Path, relative: &Path) -> Result<PathBuf, WorkspaceError> {
@@ -218,13 +247,19 @@ pub fn create_markdown_file(root: &Path, relative: &Path) -> Result<DirectoryEnt
         });
     }
     let target = resolve_new_target(root, relative)?;
-    if target.exists() {
-        return Err(WorkspaceError::AlreadyExists { path: target });
-    }
-    fs::write(&target, b"").map_err(|error| WorkspaceError::Io {
-        path: target.clone(),
-        source: error,
-    })?;
+    // `create_new` is atomic: no exists-then-write race, and it refuses to
+    // follow a symlink (even a dangling one) at the target path.
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::AlreadyExists => WorkspaceError::AlreadyExists { path: target.clone() },
+            _ => WorkspaceError::Io {
+                path: target.clone(),
+                source: error,
+            },
+        })?;
     Ok(DirectoryEntry {
         name: target.file_name().unwrap().to_string_lossy().into_owned(),
         path: target,
@@ -234,12 +269,11 @@ pub fn create_markdown_file(root: &Path, relative: &Path) -> Result<DirectoryEnt
 
 /// Renames an entry within its own directory. `to_name` must be a plain
 /// entry name (no separators, not hidden); Markdown files keep a Markdown
-/// extension so they cannot be renamed out of the listing.
+/// extension so they cannot be renamed out of the listing. Renaming an
+/// in-root symlink renames the link, never its target, and renaming to the
+/// current name succeeds as a no-op.
 pub fn rename_entry(root: &Path, from: &Path, to_name: &str) -> Result<DirectoryEntry, WorkspaceError> {
-    let source = resolve_existing(root, from)?;
-    if source == canonical_root(root)? {
-        return Err(WorkspaceError::OutsideRoot { path: source });
-    }
+    let source = resolve_entry_for_mutation(root, from)?;
     let valid_name = !to_name.is_empty()
         && !to_name.starts_with('.')
         && Path::new(to_name).components().count() == 1
@@ -253,7 +287,7 @@ pub fn rename_entry(root: &Path, from: &Path, to_name: &str) -> Result<Directory
     if source.is_file() && !is_markdown(&target) {
         return Err(WorkspaceError::NotMarkdown { path: target });
     }
-    if target.exists() {
+    if target != source && target.exists() {
         return Err(WorkspaceError::AlreadyExists { path: target });
     }
     fs::rename(&source, &target).map_err(|error| WorkspaceError::Io {
@@ -268,14 +302,11 @@ pub fn rename_entry(root: &Path, from: &Path, to_name: &str) -> Result<Directory
 }
 
 /// Moves an entry to the operating system's trash so the operation stays
-/// recoverable; permanent recursive deletion is never used. The workspace
+/// recoverable; permanent recursive deletion is never used. An in-root
+/// symlink is trashed as a link, leaving its target intact; the workspace
 /// root itself and anything escaping it are rejected before touching disk.
 pub fn trash_entry(root: &Path, relative: &Path) -> Result<(), WorkspaceError> {
-    let canonical_root = canonical_root(root)?;
-    let target = resolve_existing(root, relative)?;
-    if target == canonical_root {
-        return Err(WorkspaceError::OutsideRoot { path: target });
-    }
+    let target = resolve_entry_for_mutation(root, relative)?;
     move_to_system_trash(&target)
 }
 
@@ -294,6 +325,6 @@ fn move_to_system_trash(target: &Path) -> Result<(), WorkspaceError> {
     let result = trash::delete(target);
     result.map_err(|error| WorkspaceError::Io {
         path: target.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::Other, error),
+        source: io::Error::other(error),
     })
 }

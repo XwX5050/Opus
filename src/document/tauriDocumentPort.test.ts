@@ -280,6 +280,46 @@ describe("tauri document port clipboard images and asset scopes", () => {
   });
 });
 
+describe("tauri document port workspace commands", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("maps list_directory DTOs to camelCase entries", async () => {
+    invoke.mockResolvedValue([
+      { name: "notes", path: "/ws/notes", is_directory: true },
+      { name: "a.md", path: "/ws/a.md", is_directory: false },
+    ]);
+
+    const entries = await createTauriDocumentPort().listDirectory("/ws", "");
+
+    expect(invoke).toHaveBeenCalledWith("list_directory", { root: "/ws", relative: "" });
+    expect(entries).toEqual([
+      { name: "notes", path: "/ws/notes", isDirectory: true },
+      { name: "a.md", path: "/ws/a.md", isDirectory: false },
+    ]);
+  });
+
+  it("passes rename_entry's new name as snake case to_name", async () => {
+    invoke.mockResolvedValue({ name: "renamed.md", path: "/ws/renamed.md", is_directory: false });
+
+    const entry = await createTauriDocumentPort().renameEntry("/ws", "old.md", "renamed.md");
+
+    expect(invoke).toHaveBeenCalledWith("rename_entry", { root: "/ws", from: "old.md", to_name: "renamed.md" });
+    expect(entry).toEqual({ name: "renamed.md", path: "/ws/renamed.md", isDirectory: false });
+  });
+
+  it("returns null when the workspace picker is cancelled and maps a chosen root", async () => {
+    invoke.mockResolvedValueOnce(null).mockResolvedValueOnce({ path: "/ws", title: "ws" });
+    const port = createTauriDocumentPort();
+
+    await expect(port.chooseWorkspace()).resolves.toBeNull();
+    await expect(port.chooseWorkspace()).resolves.toEqual({ path: "/ws", title: "ws" });
+    expect(invoke.mock.calls).toEqual([
+      ["choose_workspace"],
+      ["choose_workspace"],
+    ]);
+  });
+});
+
 describe("subscribeToImageDrops", () => {
   beforeEach(() => vi.resetAllMocks());
 
