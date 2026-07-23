@@ -2,12 +2,14 @@ pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
 pub mod open_events;
+pub mod recovery;
+pub mod watch;
 pub mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use std::sync::{Arc, Mutex};
-    use tauri::{Emitter, Listener};
+    use tauri::{Emitter, Listener, Manager};
     let open_queue = Arc::new(Mutex::new(open_events::OpenPathQueue::default()));
     let setup_queue = Arc::clone(&open_queue);
     let run_queue = Arc::clone(&open_queue);
@@ -26,7 +28,14 @@ pub fn run() {
             document_commands::list_directory,
             document_commands::create_markdown_file,
             document_commands::rename_entry,
-            document_commands::trash_entry
+            document_commands::trash_entry,
+            document_commands::watch_document,
+            document_commands::watch_workspace,
+            document_commands::unwatch,
+            document_commands::write_recovery_draft,
+            document_commands::list_recovery_drafts,
+            document_commands::read_recovery_draft,
+            document_commands::discard_recovery_draft
         ])
         .setup(move |app| {
             let initial = open_events::normalize_open_paths(std::env::args().skip(1));
@@ -45,6 +54,13 @@ pub fn run() {
                     let _ = handle.emit("open-paths", payload);
                 }
             });
+            let disk_handle = app.handle().clone();
+            app.manage(document_commands::SharedWatchService::new(watch::WatchService::new(
+                watch::DEFAULT_DEBOUNCE_WINDOW,
+                move |event| {
+                    let _ = disk_handle.emit("document-disk-event", &event);
+                },
+            )));
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

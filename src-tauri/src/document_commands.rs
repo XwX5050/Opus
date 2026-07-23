@@ -1,5 +1,7 @@
 use crate::asset_scope::{AcquiredScope, AssetScopeError, AssetScopeRegistry};
 use crate::document_io::{self, DocumentIoError, Newline};
+use crate::recovery::{DraftInfo, DraftRecord, RecoveryError, RecoveryStore};
+use crate::watch::{WatchError, WatchService};
 use crate::workspace::{self, DirectoryEntry, WorkspaceError, WorkspaceRootInfo};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -8,6 +10,7 @@ use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 pub type SharedAssetScopes = Mutex<AssetScopeRegistry>;
+pub type SharedWatchService = Mutex<WatchService>;
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -330,4 +333,125 @@ pub fn rename_entry(
 #[tauri::command]
 pub fn trash_entry(root: PathBuf, relative: PathBuf) -> Result<(), CommandError> {
     workspace::trash_entry(&root, &relative).map_err(map_workspace_error)
+}
+
+fn map_watch_error(error: WatchError) -> CommandError {
+    CommandError {
+        code: "io".into(),
+        message: error.to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn watch_document(
+    service: tauri::State<'_, SharedWatchService>,
+    consumer_id: String,
+    path: PathBuf,
+) -> Result<(), CommandError> {
+    service
+        .lock()
+        .expect("watch service poisoned")
+        .watch_document(&consumer_id, &path)
+        .map_err(map_watch_error)
+}
+
+#[tauri::command]
+pub fn watch_workspace(
+    service: tauri::State<'_, SharedWatchService>,
+    consumer_id: String,
+    root: PathBuf,
+) -> Result<(), CommandError> {
+    service
+        .lock()
+        .expect("watch service poisoned")
+        .watch_workspace(&consumer_id, &root)
+        .map_err(map_watch_error)
+}
+
+#[tauri::command]
+pub fn unwatch(
+    service: tauri::State<'_, SharedWatchService>,
+    consumer_id: String,
+) -> Result<(), CommandError> {
+    service
+        .lock()
+        .expect("watch service poisoned")
+        .unwatch(&consumer_id)
+        .map_err(map_watch_error)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WriteDraftRequest {
+    pub draft_id: String,
+    pub original_path: Option<PathBuf>,
+    pub title: String,
+    pub text: String,
+    pub has_utf8_bom: bool,
+    pub newline: Newline,
+    pub saved_text_hash: String,
+    pub saved_version: Option<String>,
+}
+
+fn map_recovery_error(error: RecoveryError) -> CommandError {
+    let code = match &error {
+        RecoveryError::NotFound { .. } => "not_found",
+        _ => "io",
+    };
+    CommandError {
+        code: code.into(),
+        message: error.to_string(),
+    }
+}
+
+fn recovery_store(app: &tauri::AppHandle) -> Result<RecoveryStore, CommandError> {
+    let data_dir = app.path().app_data_dir().map_err(|error| CommandError {
+        code: "io".into(),
+        message: error.to_string(),
+    })?;
+    Ok(RecoveryStore::new(data_dir.join("recovery")))
+}
+
+#[tauri::command]
+pub fn write_recovery_draft(
+    app: tauri::AppHandle,
+    request: WriteDraftRequest,
+) -> Result<DraftInfo, CommandError> {
+    let draft = DraftRecord {
+        draft_id: request.draft_id,
+        original_path: request.original_path,
+        title: request.title,
+        text: request.text,
+        has_utf8_bom: request.has_utf8_bom,
+        newline: request.newline,
+        saved_text_hash: request.saved_text_hash,
+        saved_version: request.saved_version,
+    };
+    recovery_store(&app)?
+        .write_draft(&draft)
+        .map_err(map_recovery_error)
+}
+
+#[tauri::command]
+pub fn list_recovery_drafts(app: tauri::AppHandle) -> Result<Vec<DraftInfo>, CommandError> {
+    recovery_store(&app)?.list_drafts().map_err(map_recovery_error)
+}
+
+#[tauri::command]
+pub fn read_recovery_draft(
+    app: tauri::AppHandle,
+    draft_id: String,
+) -> Result<DraftRecord, CommandError> {
+    recovery_store(&app)?
+        .read_draft(&draft_id)
+        .map_err(map_recovery_error)
+}
+
+#[tauri::command]
+pub fn discard_recovery_draft(
+    app: tauri::AppHandle,
+    draft_id: String,
+) -> Result<(), CommandError> {
+    recovery_store(&app)?
+        .discard_draft(&draft_id)
+        .map_err(map_recovery_error)
 }

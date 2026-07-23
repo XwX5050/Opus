@@ -8,9 +8,12 @@ import {
 } from "./DocumentPort";
 import { normalizePathKey } from "./documentReducer";
 import type {
+  DiskEvent,
   OpenedFile,
   PathPlatform,
   PendingWriteRequest,
+  RecoveryDraft,
+  RecoveryDraftInfo,
   SaveTarget,
 } from "./types";
 
@@ -21,12 +24,19 @@ export interface MemoryDocumentPortOptions {
   readonly clipboardImagePath?: string | null;
   readonly workspace?: WorkspaceRoot | null;
   readonly directories?: ReadonlyArray<string>;
+  /** Pre-seeded recovery drafts, as if left behind by a crashed session. */
+  readonly drafts?: ReadonlyArray<RecoveryDraft>;
 }
 
 export type MemoryScopeCall =
   | { readonly kind: "document"; readonly consumerId: string; readonly path: string }
   | { readonly kind: "workspace"; readonly consumerId: string; readonly root: string }
   | { readonly kind: "release"; readonly consumerId: string };
+
+export type MemoryWatchCall =
+  | { readonly kind: "document"; readonly consumerId: string; readonly path: string }
+  | { readonly kind: "workspace"; readonly consumerId: string; readonly root: string }
+  | { readonly kind: "unwatch"; readonly consumerId: string };
 
 export interface MemoryClipboardImageSave {
   readonly bytes: Uint8Array;
@@ -52,7 +62,11 @@ export class MemoryDocumentPort implements DocumentPort {
   readonly #scopeCalls: MemoryScopeCall[] = [];
   readonly #directories = new Map<string, string>();
   readonly #listCalls: { root: string; relative: string }[] = [];
+  readonly #watchCalls: MemoryWatchCall[] = [];
+  readonly #drafts = new Map<string, { record: RecoveryDraft; updatedUnixMs: number }>();
+  readonly #diskHandlers = new Set<(event: DiskEvent) => void>();
   #nextRevision = 1;
+  #nextDraftStamp = 1;
 
   /** When set, trashEntry rejects with this error instead of deleting. */
   trashFailure: DocumentPortError | null = null;
@@ -87,6 +101,12 @@ export class MemoryDocumentPort implements DocumentPort {
     }
     for (const file of this.#files.values()) {
       this.#registerAncestors(file.path);
+    }
+    for (const draft of options.drafts ?? []) {
+      this.#drafts.set(draft.draftId, {
+        record: { ...draft },
+        updatedUnixMs: this.#nextDraftStamp++,
+      });
     }
   }
 
@@ -388,5 +408,82 @@ export class MemoryDocumentPort implements DocumentPort {
       throw new DocumentPortError("not_found", `Workspace not found: ${root}`);
     }
     return `${root}/${relative}`;
+  }
+
+  get watchCalls(): ReadonlyArray<MemoryWatchCall> {
+    return this.#watchCalls.map((call) => ({ ...call }));
+  }
+
+  async watchDocument(consumerId: string, path: string): Promise<void> {
+    this.#watchCalls.push({ kind: "document", consumerId, path });
+  }
+
+  async watchWorkspace(consumerId: string, root: string): Promise<void> {
+    this.#watchCalls.push({ kind: "workspace", consumerId, root });
+  }
+
+  async unwatch(consumerId: string): Promise<void> {
+    this.#watchCalls.push({ kind: "unwatch", consumerId });
+  }
+
+  async subscribeToDiskEvents(
+    handler: (event: DiskEvent) => void,
+  ): Promise<() => void> {
+    this.#diskHandlers.add(handler);
+    return () => {
+      this.#diskHandlers.delete(handler);
+    };
+  }
+
+  /** Test hook: delivers a scripted disk event to all subscribers. */
+  emitDiskEvent(event: DiskEvent): void {
+    for (const handler of [...this.#diskHandlers]) handler({ ...event });
+  }
+
+  get drafts(): ReadonlyArray<RecoveryDraft> {
+    return [...this.#drafts.values()].map((entry) => ({ ...entry.record }));
+  }
+
+  async listDrafts(): Promise<ReadonlyArray<RecoveryDraftInfo>> {
+    return [...this.#drafts.values()]
+      .map((entry) => this.#info(entry))
+      .sort((a, b) => a.draftId.localeCompare(b.draftId));
+  }
+
+  async readDraft(draftId: string): Promise<RecoveryDraft> {
+    const entry = this.#drafts.get(draftId);
+    if (!entry) {
+      throw new DocumentPortError("not_found", `No recovery draft: ${draftId}`);
+    }
+    return { ...entry.record };
+  }
+
+  async writeDraft(draft: RecoveryDraft): Promise<RecoveryDraftInfo> {
+    const entry = {
+      record: { ...draft },
+      updatedUnixMs: this.#nextDraftStamp++,
+    };
+    this.#drafts.set(entry.record.draftId, entry);
+    return this.#info(entry);
+  }
+
+  async discardDraft(draftId: string): Promise<void> {
+    if (!this.#drafts.delete(draftId)) {
+      throw new DocumentPortError("not_found", `No recovery draft: ${draftId}`);
+    }
+  }
+
+  #info(entry: {
+    record: RecoveryDraft;
+    updatedUnixMs: number;
+  }): RecoveryDraftInfo {
+    return {
+      draftId: entry.record.draftId,
+      originalPath: entry.record.originalPath,
+      title: entry.record.title,
+      savedTextHash: entry.record.savedTextHash,
+      savedVersion: entry.record.savedVersion,
+      updatedUnixMs: entry.updatedUnixMs,
+    };
   }
 }

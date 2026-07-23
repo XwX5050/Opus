@@ -360,3 +360,98 @@ describe("subscribeToImageDrops", () => {
     expect(unlisten).toHaveBeenCalledOnce();
   });
 });
+
+describe("tauri document port disk watching and recovery drafts", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("issues watch and unwatch commands with snake case consumer ids", async () => {
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    await port.watchDocument("tab-1", "/notes/a.md");
+    await port.watchWorkspace("ws-1", "/notes");
+    await port.unwatch("tab-1");
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenNthCalledWith(1, "watch_document", { consumer_id: "tab-1", path: "/notes/a.md" });
+    expect(invoke).toHaveBeenNthCalledWith(2, "watch_workspace", { consumer_id: "ws-1", root: "/notes" });
+    expect(invoke).toHaveBeenNthCalledWith(3, "unwatch", { consumer_id: "tab-1" });
+  });
+
+  it("maps structured watch command errors", async () => {
+    invoke.mockRejectedValue({ code: "io", message: "file watching is unavailable" });
+    await expect(createTauriDocumentPort().watchDocument("tab-1", "/notes/a.md")).rejects.toMatchObject({ code: "io", message: "file watching is unavailable" });
+  });
+
+  it("listens to document-disk-event and maps every payload kind", async () => {
+    let handler!: (event: { payload: unknown }) => void;
+    const unlisten = vi.fn();
+    mocks.listen.mockImplementation(async (_name, value) => { handler = value; return unlisten; });
+    const onDiskEvent = vi.fn();
+
+    const stop = await createTauriDocumentPort().subscribeToDiskEvents(onDiskEvent);
+
+    expect(mocks.listen).toHaveBeenCalledWith("document-disk-event", expect.any(Function));
+    handler({ payload: { kind: "changed", path: "/notes/a.md", modified_unix_ms: 42, version: "v1" } });
+    handler({ payload: { kind: "missing", path: "/notes/b.md" } });
+    handler({ payload: { kind: "moved", from: "/notes/c.md", to: "/notes/d.md" } });
+    expect(onDiskEvent).toHaveBeenNthCalledWith(1, { kind: "changed", path: "/notes/a.md", modifiedUnixMs: 42, version: "v1" });
+    expect(onDiskEvent).toHaveBeenNthCalledWith(2, { kind: "missing", path: "/notes/b.md" });
+    expect(onDiskEvent).toHaveBeenNthCalledWith(3, { kind: "moved", from: "/notes/c.md", to: "/notes/d.md" });
+    stop();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("maps draft info DTOs from list_recovery_drafts", async () => {
+    invoke.mockResolvedValue([
+      { draft_id: "document-1", original_path: "/notes/a.md", title: "a", saved_text_hash: "h1", saved_version: "v1", updated_unix_ms: 99 },
+      { draft_id: "document-2", original_path: null, title: "untitled", saved_text_hash: "h2", saved_version: null, updated_unix_ms: 100 },
+    ]);
+    const drafts = await createTauriDocumentPort().listDrafts();
+    expect(invoke).toHaveBeenCalledWith("list_recovery_drafts");
+    expect(drafts).toEqual([
+      { draftId: "document-1", originalPath: "/notes/a.md", title: "a", savedTextHash: "h1", savedVersion: "v1", updatedUnixMs: 99 },
+      { draftId: "document-2", originalPath: null, title: "untitled", savedTextHash: "h2", savedVersion: null, updatedUnixMs: 100 },
+    ]);
+  });
+
+  it("passes write_recovery_draft's record as snake case and maps the info result", async () => {
+    invoke.mockResolvedValue({ draft_id: "document-1", original_path: "/notes/a.md", title: "a", saved_text_hash: "h1", saved_version: "v1", updated_unix_ms: 7 });
+    const info = await createTauriDocumentPort().writeDraft({
+      draftId: "document-1",
+      originalPath: "/notes/a.md",
+      title: "a",
+      text: "dirty text",
+      hasUtf8Bom: true,
+      newline: "cr_lf",
+      savedTextHash: "h1",
+      savedVersion: "v1",
+    });
+    expect(invoke).toHaveBeenCalledWith("write_recovery_draft", {
+      request: {
+        draft_id: "document-1",
+        original_path: "/notes/a.md",
+        title: "a",
+        text: "dirty text",
+        has_utf8_bom: true,
+        newline: "cr_lf",
+        saved_text_hash: "h1",
+        saved_version: "v1",
+      },
+    });
+    expect(info).toEqual({ draftId: "document-1", originalPath: "/notes/a.md", title: "a", savedTextHash: "h1", savedVersion: "v1", updatedUnixMs: 7 });
+  });
+
+  it("maps the full record from read_recovery_draft", async () => {
+    invoke.mockResolvedValue({ draft_id: "document-1", original_path: null, title: "t", text: "body", has_utf8_bom: false, newline: "lf", saved_text_hash: "h", saved_version: null });
+    const draft = await createTauriDocumentPort().readDraft("document-1");
+    expect(invoke).toHaveBeenCalledWith("read_recovery_draft", { draft_id: "document-1" });
+    expect(draft).toEqual({ draftId: "document-1", originalPath: null, title: "t", text: "body", hasUtf8Bom: false, newline: "lf", savedTextHash: "h", savedVersion: null });
+  });
+
+  it("invokes discard_recovery_draft and maps not_found errors", async () => {
+    invoke.mockResolvedValueOnce(undefined).mockRejectedValueOnce({ code: "not_found", message: "no recovery draft: x" });
+    const port = createTauriDocumentPort();
+    await port.discardDraft("document-1");
+    expect(invoke).toHaveBeenCalledWith("discard_recovery_draft", { draft_id: "document-1" });
+    await expect(port.discardDraft("x")).rejects.toMatchObject({ code: "not_found" });
+  });
+});

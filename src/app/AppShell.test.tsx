@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
-import type { OpenedFile, PendingWriteRequest, SaveTarget } from "../document/types";
+import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import AppShell from "./AppShell";
 
 const file = (path: string, text = "saved"): OpenedFile => ({
@@ -66,6 +66,14 @@ class InspectablePort implements DocumentPort {
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
+  async watchDocument() {}
+  async watchWorkspace() {}
+  async unwatch() {}
+  async subscribeToDiskEvents() { return () => {}; }
+  async listDrafts() { return []; }
+  async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
+  async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
+  async discardDraft() {}
 }
 
 const editor = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });

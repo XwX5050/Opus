@@ -3,12 +3,18 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
-import type { OpenedFile, PendingWriteRequest, SaveTarget } from "./types";
+import type { DiskEvent, OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
 
 type OpenDto = { path: string; text: string; has_utf8_bom: boolean; newline: OpenedFile["newline"]; modified_unix_ms: number; version: string };
 type SaveDto = { path: string; modified_unix_ms: number; version: string };
 type WorkspaceRootDto = { path: string; title: string };
 type DirectoryEntryDto = { name: string; path: string; is_directory: boolean };
+type DiskEventDto =
+  | { kind: "changed"; path: string; modified_unix_ms: number; version: string }
+  | { kind: "missing"; path: string }
+  | { kind: "moved"; from: string; to: string };
+type DraftInfoDto = { draft_id: string; original_path: string | null; title: string; saved_text_hash: string; saved_version: string | null; updated_unix_ms: number };
+type DraftDto = { draft_id: string; original_path: string | null; title: string; text: string; has_utf8_bom: boolean; newline: RecoveryDraft["newline"]; saved_text_hash: string; saved_version: string | null };
 const codes = new Set<DocumentPortErrorCode>(["invalid_utf8", "permission_denied", "not_found", "conflict", "io"]);
 
 function failure(error: unknown): DocumentPortError {
@@ -23,6 +29,14 @@ const opened = (dto: OpenDto): OpenedFile => ({ path: dto.path, text: dto.text, 
 const saved = (dto: SaveDto): SavedFile => ({ path: dto.path, modifiedUnixMs: dto.modified_unix_ms, version: dto.version });
 const workspaceRoot = (dto: WorkspaceRootDto): WorkspaceRoot => ({ path: dto.path, title: dto.title });
 const directoryEntry = (dto: DirectoryEntryDto): DirectoryEntry => ({ name: dto.name, path: dto.path, isDirectory: dto.is_directory });
+const diskEvent = (dto: DiskEventDto): DiskEvent =>
+  dto.kind === "changed"
+    ? { kind: "changed", path: dto.path, modifiedUnixMs: dto.modified_unix_ms, version: dto.version }
+    : dto.kind === "moved"
+      ? { kind: "moved", from: dto.from, to: dto.to }
+      : { kind: "missing", path: dto.path };
+const draftInfo = (dto: DraftInfoDto): RecoveryDraftInfo => ({ draftId: dto.draft_id, originalPath: dto.original_path, title: dto.title, savedTextHash: dto.saved_text_hash, savedVersion: dto.saved_version, updatedUnixMs: dto.updated_unix_ms });
+const draft = (dto: DraftDto): RecoveryDraft => ({ draftId: dto.draft_id, originalPath: dto.original_path, title: dto.title, text: dto.text, hasUtf8Bom: dto.has_utf8_bom, newline: dto.newline, savedTextHash: dto.saved_text_hash, savedVersion: dto.saved_version });
 
 // The asset-protocol URL builder lives here so that the rest of the app never
 // imports @tauri-apps/api/core directly.
@@ -121,6 +135,43 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async trashEntry(root: string, relative: string): Promise<void> {
       try { await invoke("trash_entry", { root, relative }); } catch (error) { throw failure(error); }
+    },
+    async watchDocument(consumerId: string, path: string): Promise<void> {
+      try { await invoke("watch_document", { consumer_id: consumerId, path }); } catch (error) { throw failure(error); }
+    },
+    async watchWorkspace(consumerId: string, root: string): Promise<void> {
+      try { await invoke("watch_workspace", { consumer_id: consumerId, root }); } catch (error) { throw failure(error); }
+    },
+    async unwatch(consumerId: string): Promise<void> {
+      try { await invoke("unwatch", { consumer_id: consumerId }); } catch (error) { throw failure(error); }
+    },
+    subscribeToDiskEvents(handler: (event: DiskEvent) => void): Promise<() => void> {
+      return listen<DiskEventDto>("document-disk-event", (event) => handler(diskEvent(event.payload)));
+    },
+    async listDrafts(): Promise<ReadonlyArray<RecoveryDraftInfo>> {
+      try { return (await invoke<DraftInfoDto[]>("list_recovery_drafts")).map(draftInfo); } catch (error) { throw failure(error); }
+    },
+    async readDraft(draftId: string): Promise<RecoveryDraft> {
+      try { return draft(await invoke<DraftDto>("read_recovery_draft", { draft_id: draftId })); } catch (error) { throw failure(error); }
+    },
+    async writeDraft(record: RecoveryDraft): Promise<RecoveryDraftInfo> {
+      try {
+        return draftInfo(await invoke<DraftInfoDto>("write_recovery_draft", {
+          request: {
+            draft_id: record.draftId,
+            original_path: record.originalPath,
+            title: record.title,
+            text: record.text,
+            has_utf8_bom: record.hasUtf8Bom,
+            newline: record.newline,
+            saved_text_hash: record.savedTextHash,
+            saved_version: record.savedVersion,
+          },
+        }));
+      } catch (error) { throw failure(error); }
+    },
+    async discardDraft(draftId: string): Promise<void> {
+      try { await invoke("discard_recovery_draft", { draft_id: draftId }); } catch (error) { throw failure(error); }
     },
   };
 }

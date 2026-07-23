@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
-import type { OpenedFile, PendingWriteRequest, SaveTarget } from "../document/types";
+import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import { useAppController } from "./useAppController";
 
 const file: OpenedFile = {
@@ -42,6 +42,14 @@ class InspectableControllerPort implements DocumentPort {
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
+  async watchDocument() {}
+  async watchWorkspace() {}
+  async unwatch() {}
+  async subscribeToDiskEvents() { return () => {}; }
+  async listDrafts() { return []; }
+  async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
+  async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
+  async discardDraft() {}
 }
 
 type ScopeCall =
@@ -81,6 +89,14 @@ class ScopeAwareControllerPort implements DocumentPort {
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
+  async watchDocument() {}
+  async watchWorkspace() {}
+  async unwatch() {}
+  async subscribeToDiskEvents() { return () => {}; }
+  async listDrafts() { return []; }
+  async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
+  async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
+  async discardDraft() {}
 }
 
 const scopedFile = (path: string): OpenedFile => ({
@@ -202,6 +218,14 @@ describe("useAppController", () => {
       async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
       async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
       async trashEntry() {},
+      async watchDocument() {},
+      async watchWorkspace() {},
+      async unwatch() {},
+      async subscribeToDiskEvents() { return () => {}; },
+      async listDrafts() { return []; },
+      async readDraft() { throw new DocumentPortError("not_found", "no drafts"); },
+      async writeDraft() { throw new DocumentPortError("io", "not supported"); },
+      async discardDraft() {},
     };
     const hook = renderHook(() => useAppController(port));
     const openingAction = hook.result.current.openFiles();

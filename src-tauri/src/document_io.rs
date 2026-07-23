@@ -88,6 +88,22 @@ pub fn read_document(path: &Path) -> Result<OpenedDocument, DocumentIoError> {
     })
 }
 
+/// Returns the modification time and opaque version of the file at `path`,
+/// computed exactly as `read_document` and `write_document_checked` compute
+/// them. Watchers use this to attach a version to change events without
+/// decoding the text.
+pub fn probe_version(path: &Path) -> Result<(u128, String), DocumentIoError> {
+    let mut file = fs::File::open(path).map_err(|error| map_io_error(path, error))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| map_io_error(path, error))?;
+    let metadata = file.metadata().map_err(|error| map_io_error(path, error))?;
+    Ok((
+        modified_unix_ms(&metadata, path)?,
+        version_for_bytes_and_metadata(&bytes, &metadata),
+    ))
+}
+
 fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bytes))
