@@ -8,6 +8,7 @@ import {
 import { EditorView } from "@codemirror/view";
 import { editorExtensions } from "./editorExtensions";
 import { livePreviewExtension } from "./livePreview";
+import { mathWidgetsExtension } from "./mathWidgets";
 
 const externalValueSync = Annotation.define<boolean>();
 
@@ -30,7 +31,7 @@ export default function MarkdownEditor({
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const livePreviewCompartmentRef = useRef(new Compartment());
+  const previewCompartmentRef = useRef(new Compartment());
   const previousSourceModeRef = useRef(sourceMode);
   const callbacksRef = useRef({ onChange, onSave, onReopenClosed });
   callbacksRef.current = { onChange, onSave, onReopenClosed };
@@ -47,8 +48,10 @@ export default function MarkdownEditor({
               onSave: () => callbacksRef.current.onSave(),
               onReopenClosed: () => callbacksRef.current.onReopenClosed(),
             },
-            livePreviewCompartmentRef.current.of(
-              sourceMode ? [] : livePreviewExtension(),
+            previewCompartmentRef.current.of(
+              sourceMode
+                ? []
+                : [livePreviewExtension(), mathWidgetsExtension()],
             ),
           ),
           EditorView.contentAttributes.of({
@@ -94,8 +97,10 @@ export default function MarkdownEditor({
     if (!view || previousSourceModeRef.current === sourceMode) return;
     previousSourceModeRef.current = sourceMode;
     view.dispatch({
-      effects: livePreviewCompartmentRef.current.reconfigure(
-        sourceMode ? [] : livePreviewExtension(),
+      effects: previewCompartmentRef.current.reconfigure(
+        sourceMode
+          ? []
+          : [livePreviewExtension(), mathWidgetsExtension()],
       ),
     });
   }, [sourceMode]);

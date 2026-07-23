@@ -21,6 +21,7 @@ import {
   keymap,
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
+import { mathMarkdownExtension } from "./mathExtension";
 
 export interface EditorCommands {
   onSave(): void;
@@ -40,7 +41,11 @@ export const editorExtensions = (
   syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
   bracketMatching(),
   EditorView.lineWrapping,
-  markdown({ codeLanguages: languages, extensions: [GFM], addKeymap: false }),
+  markdown({
+    codeLanguages: languages,
+    extensions: [GFM, mathMarkdownExtension],
+    addKeymap: false,
+  }),
   livePreview,
   keymap.of([
     {

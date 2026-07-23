@@ -137,6 +137,31 @@ describe("MarkdownEditor", () => {
     expect(editorView().state.doc.toString()).toBe("text");
   });
 
+  it("toggles math widgets and both Markdown/math atomic ranges in the same view", () => {
+    const value = "$x$ and **bold** outside";
+    const rendered = renderEditor({ value, sourceMode: false });
+    moveToEnd();
+    const view = editorView();
+    const root = rendered.container.querySelector(".cm-editor");
+
+    expect(document.querySelector(".md-math .katex")).not.toBeNull();
+    expect(atomicRanges(view)).toContainEqual({ from: 0, to: 3 });
+    expect(atomicRanges(view)).toContainEqual({ from: 8, to: 10 });
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    expect(editorView()).toBe(view);
+    expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+    expect(document.querySelector(".md-math")).toBeNull();
+    expect(content()).toHaveTextContent("$x$");
+    expect(atomicRanges(view)).toEqual([]);
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
+    expect(editorView()).toBe(view);
+    expect(document.querySelector(".md-math .katex")).not.toBeNull();
+    expect(atomicRanges(view)).toContainEqual({ from: 0, to: 3 });
+    expect(atomicRanges(view)).toContainEqual({ from: 8, to: 10 });
+  });
+
   it("keeps source revealed when preview is toggled during composition", () => {
     const rendered = renderEditor({ value: "**world** rest", sourceMode: false });
     moveToEnd();
