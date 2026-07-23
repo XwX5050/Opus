@@ -11,7 +11,7 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { searchKeymap } from "@codemirror/search";
+import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import {
   drawSelection,
@@ -27,6 +27,19 @@ export interface EditorCommands {
   onSave(): void;
   onReopenClosed(): void;
 }
+
+// Open the search panel and move focus into its replace field.
+const openSearchPanelForReplace = (view: EditorView): boolean => {
+  openSearchPanel(view);
+  const replace = view.dom.querySelector<HTMLInputElement>(
+    '.cm-panel.cm-search input[name="replace"]',
+  );
+  if (replace) {
+    replace.focus();
+    replace.select();
+  }
+  return true;
+};
 
 export const editorExtensions = (
   commands: EditorCommands,
@@ -47,6 +60,7 @@ export const editorExtensions = (
     addKeymap: false,
   }),
   livePreview,
+  search({ top: true }),
   keymap.of([
     {
       key: "Mod-s",
@@ -63,6 +77,12 @@ export const editorExtensions = (
         commands.onReopenClosed();
         return true;
       },
+    },
+    {
+      key: "Mod-Alt-f",
+      preventDefault: true,
+      scope: "editor search-panel",
+      run: openSearchPanelForReplace,
     },
     ...markdownKeymap,
     ...defaultKeymap,
