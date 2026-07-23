@@ -33,6 +33,17 @@ export interface ClipboardImageInput {
   readonly documentPath: string | null;
 }
 
+export interface WorkspaceRoot {
+  readonly path: string;
+  readonly title: string;
+}
+
+export interface DirectoryEntry {
+  readonly name: string;
+  readonly path: string;
+  readonly isDirectory: boolean;
+}
+
 export interface DocumentPort {
   chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>>;
   openPath(path: string): Promise<OpenedFile>;
@@ -42,4 +53,10 @@ export interface DocumentPort {
   acquireDocumentScope(consumerId: string, path: string): Promise<void>;
   acquireWorkspaceScope(consumerId: string, root: string): Promise<void>;
   releaseAssetScope(consumerId: string): Promise<void>;
+  chooseWorkspace(): Promise<WorkspaceRoot | null>;
+  openWorkspacePath(path: string): Promise<WorkspaceRoot>;
+  listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>>;
+  createMarkdownFile(root: string, relative: string): Promise<DirectoryEntry>;
+  renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry>;
+  trashEntry(root: string, relative: string): Promise<void>;
 }

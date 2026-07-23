@@ -2,6 +2,7 @@ pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
 pub mod open_events;
+pub mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,7 +20,13 @@ pub fn run() {
             document_commands::save_clipboard_image,
             document_commands::acquire_document_scope,
             document_commands::acquire_workspace_scope,
-            document_commands::release_asset_scope
+            document_commands::release_asset_scope,
+            document_commands::choose_workspace,
+            document_commands::open_workspace,
+            document_commands::list_directory,
+            document_commands::create_markdown_file,
+            document_commands::rename_entry,
+            document_commands::trash_entry
         ])
         .setup(move |app| {
             let initial = open_events::normalize_open_paths(std::env::args().skip(1));

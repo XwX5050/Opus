@@ -1,12 +1,14 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ClipboardImageInput, DocumentPort, DocumentPortErrorCode, SavedFile } from "./DocumentPort";
+import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
 import type { OpenedFile, PendingWriteRequest, SaveTarget } from "./types";
 
 type OpenDto = { path: string; text: string; has_utf8_bom: boolean; newline: OpenedFile["newline"]; modified_unix_ms: number; version: string };
 type SaveDto = { path: string; modified_unix_ms: number; version: string };
+type WorkspaceRootDto = { path: string; title: string };
+type DirectoryEntryDto = { name: string; path: string; is_directory: boolean };
 const codes = new Set<DocumentPortErrorCode>(["invalid_utf8", "permission_denied", "not_found", "conflict", "io"]);
 
 function failure(error: unknown): DocumentPortError {
@@ -19,6 +21,8 @@ function failure(error: unknown): DocumentPortError {
 
 const opened = (dto: OpenDto): OpenedFile => ({ path: dto.path, text: dto.text, hasUtf8Bom: dto.has_utf8_bom, newline: dto.newline, modifiedUnixMs: dto.modified_unix_ms, version: dto.version });
 const saved = (dto: SaveDto): SavedFile => ({ path: dto.path, modifiedUnixMs: dto.modified_unix_ms, version: dto.version });
+const workspaceRoot = (dto: WorkspaceRootDto): WorkspaceRoot => ({ path: dto.path, title: dto.title });
+const directoryEntry = (dto: DirectoryEntryDto): DirectoryEntry => ({ name: dto.name, path: dto.path, isDirectory: dto.is_directory });
 
 // The asset-protocol URL builder lives here so that the rest of the app never
 // imports @tauri-apps/api/core directly.
@@ -96,6 +100,27 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async releaseAssetScope(consumerId: string): Promise<void> {
       try { await invoke("release_asset_scope", { consumer_id: consumerId }); } catch (error) { throw failure(error); }
+    },
+    async chooseWorkspace(): Promise<WorkspaceRoot | null> {
+      try {
+        const dto = await invoke<WorkspaceRootDto | null>("choose_workspace");
+        return dto === null ? null : workspaceRoot(dto);
+      } catch (error) { throw failure(error); }
+    },
+    async openWorkspacePath(path: string): Promise<WorkspaceRoot> {
+      try { return workspaceRoot(await invoke<WorkspaceRootDto>("open_workspace", { root: path })); } catch (error) { throw failure(error); }
+    },
+    async listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>> {
+      try { return (await invoke<DirectoryEntryDto[]>("list_directory", { root, relative })).map(directoryEntry); } catch (error) { throw failure(error); }
+    },
+    async createMarkdownFile(root: string, relative: string): Promise<DirectoryEntry> {
+      try { return directoryEntry(await invoke<DirectoryEntryDto>("create_markdown_file", { root, relative })); } catch (error) { throw failure(error); }
+    },
+    async renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry> {
+      try { return directoryEntry(await invoke<DirectoryEntryDto>("rename_entry", { root, from, to_name: toName })); } catch (error) { throw failure(error); }
+    },
+    async trashEntry(root: string, relative: string): Promise<void> {
+      try { await invoke("trash_entry", { root, relative }); } catch (error) { throw failure(error); }
     },
   };
 }

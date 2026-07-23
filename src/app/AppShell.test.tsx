@@ -3,7 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
-import type { DocumentPort, SavedFile } from "../document/DocumentPort";
+import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { OpenedFile, PendingWriteRequest, SaveTarget } from "../document/types";
@@ -60,6 +60,12 @@ class InspectablePort implements DocumentPort {
   async acquireDocumentScope() {}
   async acquireWorkspaceScope() {}
   async releaseAssetScope() {}
+  async chooseWorkspace() { return null; }
+  async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
+  async listDirectory() { return []; }
+  async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async trashEntry() {}
 }
 
 const editor = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
@@ -479,5 +485,71 @@ describe("AppShell", () => {
     act(() => calls[1].onFiles([file("/notes/launch.md", "startup payload")]));
     expect(screen.getAllByRole("tab", { name: /launch\.md/ })).toHaveLength(1);
     expect(editor()).toHaveTextContent("startup payload");
+  });
+});
+
+describe("AppShell workspace drawer", () => {
+  const workspacePort = () =>
+    new MemoryDocumentPort(
+      new Map([["/notes/alpha.md", file("/notes/alpha.md")]]),
+      { workspace: { path: "/notes", title: "notes" } },
+    );
+
+  it("stays hidden for loose files and opens after 打开文件夹", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+
+    const sidebar = await screen.findByRole("complementary", { name: "文件侧栏" });
+    expect(within(sidebar).getByText("notes")).toBeInTheDocument();
+    expect(
+      await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens a clicked tree file in a tab", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "文件侧栏" });
+
+    await user.click(
+      await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
+    );
+
+    expect(screen.getAllByRole("tab", { name: /alpha\.md/ })).toHaveLength(1);
+    expect(editor()).toHaveTextContent("saved");
+  });
+
+  it("remains manually collapsible and expandable", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    await screen.findByRole("complementary", { name: "文件侧栏" });
+
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "展开侧栏" }));
+    expect(
+      await screen.findByRole("complementary", { name: "文件侧栏" }),
+    ).toBeInTheDocument();
+  });
+
+  it("closes the workspace from the sidebar and hides the drawer", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "文件侧栏" });
+
+    await user.click(
+      within(sidebar).getByRole("button", { name: "关闭文件夹" }),
+    );
+
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开侧栏" })).not.toBeInTheDocument();
   });
 });

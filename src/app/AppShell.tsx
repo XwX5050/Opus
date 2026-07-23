@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
+import FileSidebar from "../workspace/FileSidebar";
 import { type EventSubscriber, useAppController } from "./useAppController";
 
 export type ImageDropSubscriber = (
@@ -26,6 +27,8 @@ export default function AppShell({
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
   const [sourceMode, setSourceMode] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
   const imageDropSequenceRef = useRef(0);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
@@ -39,6 +42,12 @@ export default function AppShell({
   const closing = controller.state.tabs.find(
     (tab) => tab.id === controller.closeDocumentId,
   );
+
+  // Opening a workspace always reveals the drawer; it stays manually
+  // collapsible afterwards.
+  useEffect(() => {
+    if (workspacePath) setSidebarCollapsed(false);
+  }, [workspacePath]);
 
   useEffect(() => {
     if (!subscribeToImageDrops) return;
@@ -170,6 +179,7 @@ export default function AppShell({
           <>
             <button type="button" onClick={controller.newDocument}>新建</button>
             <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
+            <button type="button" onClick={() => void controller.openWorkspace()}>打开文件夹</button>
             <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
             <button
               type="button"
@@ -180,6 +190,9 @@ export default function AppShell({
               {sourceMode ? "源码模式" : "实时预览"}
             </button>
           </>
+        )}
+        {controller.workspace && sidebarCollapsed && (
+          <button type="button" onClick={() => setSidebarCollapsed(false)}>展开侧栏</button>
         )}
       </header>
 
@@ -222,9 +235,25 @@ export default function AppShell({
         role={active ? "tabpanel" : undefined}
         id={active ? `document-panel-${active.id}` : undefined}
         aria-labelledby={active ? `document-tab-${active.id}` : undefined}
-        style={{ minHeight: 0, padding: 8 }}
+        style={{ minHeight: 0, padding: 8, display: "flex", gap: 8 }}
       >
-        <aside hidden aria-label="文件侧栏" />
+        {controller.workspace && !sidebarCollapsed && (
+          <aside
+            aria-label="文件侧栏"
+            style={{ width: 260, minWidth: 220, maxWidth: 320, display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}
+          >
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setSidebarCollapsed(true)}>收起侧栏</button>
+            </div>
+            <FileSidebar
+              root={controller.workspace}
+              port={port}
+              onOpenFile={(path) => void controller.openPath(path)}
+              onCloseWorkspace={controller.closeWorkspace}
+            />
+          </aside>
+        )}
+        <div style={{ flex: 1, minWidth: 0, display: "grid" }}>
         {active ? (
           <MarkdownEditor
             key={active.id}
@@ -244,9 +273,11 @@ export default function AppShell({
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" onClick={controller.newDocument}>新建</button>
               <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
+              <button type="button" onClick={() => void controller.openWorkspace()}>打开文件夹</button>
             </div>
           </div>
         )}
+        </div>
       </section>
       </div>
 

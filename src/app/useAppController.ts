@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DocumentPort } from "../document/DocumentPort";
+import type { DocumentPort, WorkspaceRoot } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import {
   documentReducer,
@@ -37,6 +37,8 @@ export function useAppController(
   const [closeDocumentId, setCloseDocumentId] = useState<string | null>(null);
   const [closeSaving, setCloseSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<WorkspaceRoot | null>(null);
+  const workspacePathRef = useRef<string | null>(null);
   // Stable consumer IDs (tab IDs) that currently hold an asset scope.
   const acquiredScopeIds = useRef(new Set<string>());
   // Per-consumer promise chain serializing backend scope operations, so a
@@ -99,7 +101,7 @@ export function useAppController(
     });
   }, [enqueueScopeOperation, port]);
 
-  const releaseDocumentScope = useCallback((id: string) => {
+  const releaseScope = useCallback((id: string) => {
     if (!acquiredScopeIds.current.delete(id)) return;
     enqueueScopeOperation(id, async () => {
       try {
@@ -236,8 +238,8 @@ export function useAppController(
       return;
     }
     const next = dispatch({ type: "closeConfirmed", id, disposition: "saved" });
-    if (!next.tabs.some((tab) => tab.id === id)) releaseDocumentScope(id);
-  }, [dispatch, releaseDocumentScope]);
+    if (!next.tabs.some((tab) => tab.id === id)) releaseScope(id);
+  }, [dispatch, releaseScope]);
 
   const confirmClose = useCallback(async (choice: CloseChoice) => {
     const id = closeDocumentId;
@@ -249,7 +251,7 @@ export function useAppController(
     if (choice === "discard") {
       setCloseDocumentId(null);
       const next = dispatch({ type: "closeConfirmed", id, disposition: "discarded" });
-      if (!next.tabs.some((tab) => tab.id === id)) releaseDocumentScope(id);
+      if (!next.tabs.some((tab) => tab.id === id)) releaseScope(id);
       return;
     }
     const generation = lifecycleGenerationRef.current;
@@ -263,7 +265,7 @@ export function useAppController(
       const document = stateRef.current.tabs.find((tab) => tab.id === id);
       if (saved && document?.status === "clean" && !document.pendingSave) {
         const next = dispatch({ type: "closeConfirmed", id, disposition: "saved" });
-        if (!next.tabs.some((tab) => tab.id === id)) releaseDocumentScope(id);
+        if (!next.tabs.some((tab) => tab.id === id)) releaseScope(id);
         setCloseDocumentId(null);
       }
     } finally {
@@ -272,7 +274,7 @@ export function useAppController(
         if (isCurrent(generation)) setCloseSaving(false);
       }
     }
-  }, [closeDocumentId, dispatch, isCurrent, releaseDocumentScope, save]);
+  }, [closeDocumentId, dispatch, isCurrent, releaseScope, save]);
 
   const reopenClosed = useCallback(() => {
     const reopeningId = stateRef.current.recentlyClosed[0]?.document.id;
@@ -292,9 +294,64 @@ export function useAppController(
   useEffect(() => {
     const acquired = acquiredScopeIds.current;
     return () => {
-      for (const id of [...acquired]) releaseDocumentScope(id);
+      for (const id of [...acquired]) releaseScope(id);
     };
-  }, [releaseDocumentScope]);
+  }, [releaseScope]);
+
+  // Workspace scopes use a stable `workspace:<path>` consumer ID, distinct
+  // from the tab ID scheme, and follow the same discipline as tabs: acquire
+  // only for a genuinely new workspace, serialize operations per consumer.
+  const acquireWorkspaceScope = useCallback((root: WorkspaceRoot) => {
+    const consumerId = `workspace:${root.path}`;
+    if (acquiredScopeIds.current.has(consumerId)) return;
+    acquiredScopeIds.current.add(consumerId);
+    enqueueScopeOperation(consumerId, async () => {
+      try {
+        await port.acquireWorkspaceScope(consumerId, root.path);
+      } catch {
+        acquiredScopeIds.current.delete(consumerId);
+      }
+    });
+  }, [enqueueScopeOperation, port]);
+
+  const openWorkspaceRoot = useCallback((root: WorkspaceRoot) => {
+    if (workspacePathRef.current === root.path) return;
+    const previous = workspacePathRef.current;
+    workspacePathRef.current = root.path;
+    if (previous) releaseScope(`workspace:${previous}`);
+    if (mountedRef.current) setWorkspace(root);
+    acquireWorkspaceScope(root);
+  }, [acquireWorkspaceScope, releaseScope]);
+
+  const openWorkspace = useCallback(async () => {
+    const generation = lifecycleGenerationRef.current;
+    setError(null);
+    try {
+      const root = await port.chooseWorkspace();
+      if (root && isCurrent(generation)) openWorkspaceRoot(root);
+    } catch (caught) {
+      if (isCurrent(generation)) setError(errorMessage(caught));
+    }
+  }, [isCurrent, openWorkspaceRoot, port]);
+
+  const openWorkspacePath = useCallback(async (path: string) => {
+    const generation = lifecycleGenerationRef.current;
+    setError(null);
+    try {
+      const root = await port.openWorkspacePath(path);
+      if (isCurrent(generation)) openWorkspaceRoot(root);
+    } catch (caught) {
+      if (isCurrent(generation)) setError(errorMessage(caught));
+    }
+  }, [isCurrent, openWorkspaceRoot, port]);
+
+  const closeWorkspace = useCallback(() => {
+    const previous = workspacePathRef.current;
+    if (!previous) return;
+    workspacePathRef.current = null;
+    setWorkspace(null);
+    releaseScope(`workspace:${previous}`);
+  }, [releaseScope]);
 
   useEffect(() => {
     if (!subscribeToEvents) return;
@@ -304,7 +361,7 @@ export function useAppController(
     void subscribeToEvents(
       port,
       (files) => { if (!abortController.signal.aborted) addOpenedFiles(files); },
-      undefined,
+      (path) => { if (!abortController.signal.aborted) void openWorkspacePath(path); },
       (eventError) => { if (!abortController.signal.aborted) setError(eventError.message); },
       abortController.signal,
     ).then(async (created) => {
@@ -319,16 +376,20 @@ export function useAppController(
       abortController.abort();
       if (subscription) void subscription.dispose();
     };
-  }, [addOpenedFiles, port, subscribeToEvents]);
+  }, [addOpenedFiles, openWorkspacePath, port, subscribeToEvents]);
 
   return {
     state,
     closeDocumentId,
     closeSaving,
     error,
+    workspace,
     newDocument,
     openFiles,
     openPath,
+    openWorkspace,
+    openWorkspacePath,
+    closeWorkspace,
     activate: (id: string) => dispatch({ type: "activate", id }),
     changeText: (id: string, text: string) => dispatch({ type: "textChanged", id, text }),
     save,

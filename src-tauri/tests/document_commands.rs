@@ -1,7 +1,39 @@
+use markdown_edit_lib::asset_scope::AssetScopeRegistry;
 use markdown_edit_lib::document_commands::{
-    open_document_impl, save_document_impl, SaveDocumentRequest,
+    acquire_scoped, open_document_impl, save_document_impl, CommandError, SaveDocumentRequest,
+    SharedAssetScopes,
 };
 use markdown_edit_lib::document_io::Newline;
+
+#[test]
+fn failed_asset_scope_mirroring_releases_the_registry_reference() {
+    let scopes = SharedAssetScopes::new(AssetScopeRegistry::default());
+    let result = acquire_scoped(
+        &scopes,
+        "tab-a",
+        |registry| registry.acquire_document("tab-a", std::path::Path::new("/notes/a.md")),
+        |_acquired| {
+            Err(CommandError {
+                code: "io".into(),
+                message: "asset scope mirroring failed".into(),
+            })
+        },
+    );
+
+    assert_eq!(result.unwrap_err().message, "asset scope mirroring failed");
+    let registry = scopes.lock().unwrap();
+    assert!(!registry.allows(std::path::Path::new("/notes/image.png")));
+    drop(registry);
+    // The compensating release removed the consumer, so a later acquire for
+    // the same id reports the scope as newly added instead of double-counting.
+    let acquired = acquire_scoped(
+        &scopes,
+        "tab-a",
+        |registry| registry.acquire_document("tab-a", std::path::Path::new("/notes/a.md")),
+        |_acquired| Ok(()),
+    );
+    assert!(acquired.is_ok());
+}
 
 #[test]
 fn version_changes_when_equal_length_bytes_change_even_with_same_mtime_millis() {

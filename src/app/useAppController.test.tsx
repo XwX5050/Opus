@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { DocumentPort, SavedFile } from "../document/DocumentPort";
+import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import type { OpenedFile, PendingWriteRequest, SaveTarget } from "../document/types";
 import { useAppController } from "./useAppController";
@@ -36,6 +36,12 @@ class InspectableControllerPort implements DocumentPort {
   async acquireDocumentScope() {}
   async acquireWorkspaceScope() {}
   async releaseAssetScope() {}
+  async chooseWorkspace() { return null; }
+  async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
+  async listDirectory() { return []; }
+  async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async trashEntry() {}
 }
 
 type ScopeCall =
@@ -61,10 +67,20 @@ class ScopeAwareControllerPort implements DocumentPort {
     if (this.acquireGate) await this.acquireGate(consumerId);
     this.scopeCalls.push({ kind: "acquire", consumerId, path });
   }
-  async acquireWorkspaceScope() {}
+  async acquireWorkspaceScope(consumerId: string, root: string) {
+    if (this.acquireGate) await this.acquireGate(consumerId);
+    this.scopeCalls.push({ kind: "acquire", consumerId, path: root });
+  }
   async releaseAssetScope(consumerId: string) {
     this.scopeCalls.push({ kind: "release", consumerId });
   }
+  workspaceRoot: { path: string; title: string } | null = null;
+  async chooseWorkspace() { return this.workspaceRoot; }
+  async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
+  async listDirectory() { return []; }
+  async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async trashEntry() {}
 }
 
 const scopedFile = (path: string): OpenedFile => ({
@@ -180,6 +196,12 @@ describe("useAppController", () => {
       async acquireDocumentScope() {},
       async acquireWorkspaceScope() {},
       async releaseAssetScope() {},
+      async chooseWorkspace() { return null; },
+      async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; },
+      async listDirectory() { return []; },
+      async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
+      async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
+      async trashEntry() {},
     };
     const hook = renderHook(() => useAppController(port));
     const openingAction = hook.result.current.openFiles();
@@ -316,5 +338,108 @@ describe("useAppController asset scopes", () => {
       ]),
     );
     hook.unmount();
+  });
+});
+
+describe("useAppController workspace scopes", () => {
+  it("acquires under a stable workspace consumer id on genuine open and releases on close", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    port.workspaceRoot = { path: "/notes", title: "notes" };
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openWorkspace());
+
+    expect(hook.result.current.workspace).toEqual({ path: "/notes", title: "notes" });
+    expect(port.scopeCalls).toEqual([
+      { kind: "acquire", consumerId: "workspace:/notes", path: "/notes" },
+    ]);
+
+    act(() => hook.result.current.closeWorkspace());
+
+    expect(hook.result.current.workspace).toBeNull();
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: "workspace:/notes", path: "/notes" },
+        { kind: "release", consumerId: "workspace:/notes" },
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("does nothing when the folder picker is cancelled", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openWorkspace());
+
+    expect(hook.result.current.workspace).toBeNull();
+    expect(port.scopeCalls).toEqual([]);
+    hook.unmount();
+  });
+
+  it("replaces the workspace by releasing the old scope and acquiring the new one", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    port.workspaceRoot = { path: "/notes", title: "notes" };
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openWorkspace());
+
+    await act(() => hook.result.current.openWorkspacePath("/other"));
+
+    expect(hook.result.current.workspace).toEqual({ path: "/other", title: "other" });
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: "workspace:/notes", path: "/notes" },
+        { kind: "release", consumerId: "workspace:/notes" },
+        { kind: "acquire", consumerId: "workspace:/other", path: "/other" },
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("does not re-acquire when the already-open workspace path is opened again", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    port.workspaceRoot = { path: "/notes", title: "notes" };
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openWorkspace());
+
+    await act(() => hook.result.current.openWorkspacePath("/notes"));
+
+    expect(port.scopeCalls.filter((call) => call.kind === "acquire")).toHaveLength(1);
+    hook.unmount();
+  });
+
+  it("re-acquires a closed-then-reopened workspace serialized behind the release", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    port.workspaceRoot = { path: "/notes", title: "notes" };
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openWorkspace());
+
+    act(() => hook.result.current.closeWorkspace());
+    await act(() => hook.result.current.openWorkspace());
+
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: "workspace:/notes", path: "/notes" },
+        { kind: "release", consumerId: "workspace:/notes" },
+        { kind: "acquire", consumerId: "workspace:/notes", path: "/notes" },
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("releases the workspace scope on unmount", async () => {
+    const port = new ScopeAwareControllerPort([]);
+    port.workspaceRoot = { path: "/notes", title: "notes" };
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openWorkspace());
+
+    hook.unmount();
+
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "acquire", consumerId: "workspace:/notes", path: "/notes" },
+        { kind: "release", consumerId: "workspace:/notes" },
+      ]),
+    );
   });
 });
