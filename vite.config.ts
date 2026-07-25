@@ -10,6 +10,7 @@ export default defineConfig({
     setupFiles: './vitest.setup.ts',
     restoreMocks: true,
     // Playwright specs live in tests/e2e and run via `npm run test:e2e`.
-    exclude: [...defaultExclude, 'tests/e2e/**'],
+    // .worktrees holds development worktrees whose sources must not be tested here.
+    exclude: [...defaultExclude, 'tests/e2e/**', '.worktrees/**'],
   },
 });
