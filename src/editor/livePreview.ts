@@ -541,11 +541,11 @@ const livePreviewTheme = EditorView.baseTheme({
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   ".cm-live-preview-inline-code": {
-    backgroundColor: "rgba(127, 127, 127, 0.12)",
+    backgroundColor: "var(--surface)",
     borderRadius: "0.2em",
   },
   ".cm-live-preview-quote": {
-    borderLeft: "0.2em solid rgba(127, 127, 127, 0.45)",
+    borderLeft: "0.2em solid var(--text-muted)",
   },
   ".cm-live-preview-link": { textDecoration: "underline" },
   ".cm-live-preview-reference-definition": { opacity: "0.75" },
@@ -558,7 +558,7 @@ const livePreviewTheme = EditorView.baseTheme({
     pointerEvents: "none",
   },
   ".cm-live-preview-horizontal-rule": {
-    borderTop: "1px solid rgba(127, 127, 127, 0.45)",
+    borderTop: "1px solid var(--divider)",
     display: "inline-block",
     width: "100%",
   },

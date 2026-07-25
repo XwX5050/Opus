@@ -305,7 +305,7 @@ const mathWidgetsTheme = EditorView.baseTheme({
   ".md-math-inline": { display: "inline-block" },
   ".md-math-block": { display: "block", padding: "0.25em 0" },
   ".md-math-error": {
-    color: "#b42318",
+    color: "var(--danger)",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textDecoration: "underline wavy",
   },

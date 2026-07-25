@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import {
   fontFamilyStack,
   resolveTheme,
@@ -13,17 +13,26 @@ const query = (media: string): MediaQueryList | null =>
     : null;
 
 const systemDark = () => query("(prefers-color-scheme: dark)");
-const reducedMotion = () => query("(prefers-reduced-motion: reduce)");
 
 /**
  * Applies the chosen theme and editor preferences to the document root:
- * `data-theme` drives the token cascade, the `reduced-motion` class mirrors
- * the OS setting for JS consumers, and the editor preferences are published
- * as CSS custom properties. Preferences are applied as root variables only —
- * they are never written into Markdown documents.
+ * `data-theme` drives the token cascade and the editor preferences are
+ * published as CSS custom properties. Preferences are applied as root
+ * variables only — they are never written into Markdown documents.
  *
- * Without `matchMedia` (older WebViews, jsdom) the hook degrades to dark with
- * full motion, matching the app default.
+ * First-paint behavior: the persisted theme arrives asynchronously with the
+ * session, so the first frame always uses the dark default (the document
+ * background is consistent — nothing partially themed is painted). The DOM
+ * mutation runs in `useLayoutEffect`, i.e. synchronously before the browser
+ * paints the frame in which React learned the theme, so the dark→light
+ * transition is a single full flip bounded by the session-read latency
+ * rather than a progressive repaint.
+ *
+ * Reduced motion needs no JS: app.css disables nonessential transitions via
+ * `@media (prefers-reduced-motion: reduce)`.
+ *
+ * Without `matchMedia` (older WebViews, jsdom) the hook degrades to dark,
+ * matching the app default.
  */
 export function useTheme(
   preference: ThemePreference,
@@ -33,9 +42,6 @@ export function useTheme(
   // is consistent even before the media query is read.
   const [systemPrefersDark, setSystemPrefersDark] = useState(
     () => systemDark()?.matches ?? true,
-  );
-  const [motionReduced, setMotionReduced] = useState(
-    () => reducedMotion()?.matches ?? false,
   );
   const resolved = resolveTheme(preference, systemPrefersDark);
 
@@ -49,20 +55,9 @@ export function useTheme(
     return () => media.removeEventListener("change", onChange);
   }, []);
 
-  useEffect(() => {
-    const media = reducedMotion();
-    if (!media) return;
-    const onChange = (event: MediaQueryListEvent) =>
-      setMotionReduced(event.matches);
-    setMotionReduced(media.matches);
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = resolved;
-    root.classList.toggle("reduced-motion", motionReduced);
     root.style.setProperty(
       "--editor-body-size",
       `${editorPreferences.bodySizePx}px`,
@@ -79,7 +74,7 @@ export function useTheme(
       "--editor-body-font",
       fontFamilyStack(editorPreferences.fontFamily),
     );
-  }, [resolved, motionReduced, editorPreferences]);
+  }, [resolved, editorPreferences]);
 
   return resolved;
 }

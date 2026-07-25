@@ -30,6 +30,52 @@ const FONT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 const isPresetFont = (fontFamily: string): boolean =>
   (FONT_PRESETS as ReadonlyArray<string>).includes(fontFamily);
 
+interface NumberFieldProps {
+  readonly id: string;
+  readonly value: number;
+  readonly min: number;
+  readonly max: number;
+  readonly step?: number;
+  readonly onCommit: (value: number) => void;
+}
+
+/**
+ * Number input with a local string draft. Committing on every keystroke
+ * would re-render the field with the clamped value mid-typing (typing "18"
+ * at a 13–24 range becomes 13→138→24), so the draft commits on blur/Enter
+ * instead; the controller then clamps once. Invalid drafts snap back to the
+ * last committed value.
+ */
+function NumberField({ id, value, min, max, step, onCommit }: NumberFieldProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (raw: string) => {
+    setDraft(null);
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed) || parsed === value) return;
+    onCommit(parsed);
+  };
+
+  return (
+    <input
+      id={id}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draft ?? String(value)}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => commit(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit(event.currentTarget.value);
+        }
+      }}
+    />
+  );
+}
+
 /**
  * Theme and editor-preferences dialog. Changes apply (and persist)
  * immediately; values are clamped by the controller. Follows the same modal
@@ -86,16 +132,6 @@ export default function SettingsDialog({
   const update = (patch: Partial<EditorPreferences>) =>
     onEditorPreferencesChange({ ...editorPreferences, ...patch });
 
-  const updateNumber = (
-    key: "bodySizePx" | "lineHeight" | "contentWidthPx",
-    raw: string,
-  ) => {
-    const value = Number(raw);
-    // Ignore incomplete input (empty field); the controller clamps the rest.
-    if (raw.trim() === "" || Number.isNaN(value)) return;
-    update({ [key]: value });
-  };
-
   const limits = EDITOR_PREFERENCE_LIMITS;
 
   return (
@@ -126,37 +162,32 @@ export default function SettingsDialog({
         </select>
 
         <label htmlFor="settings-body-size">正文字号</label>
-        <input
+        <NumberField
           id="settings-body-size"
-          type="number"
           min={limits.bodySizePx.min}
           max={limits.bodySizePx.max}
           value={editorPreferences.bodySizePx}
-          onChange={(event) => updateNumber("bodySizePx", event.target.value)}
+          onCommit={(value) => update({ bodySizePx: value })}
         />
 
         <label htmlFor="settings-line-height">行高</label>
-        <input
+        <NumberField
           id="settings-line-height"
-          type="number"
           min={limits.lineHeight.min}
           max={limits.lineHeight.max}
           step={0.05}
           value={editorPreferences.lineHeight}
-          onChange={(event) => updateNumber("lineHeight", event.target.value)}
+          onCommit={(value) => update({ lineHeight: value })}
         />
 
         <label htmlFor="settings-content-width">内容宽度</label>
-        <input
+        <NumberField
           id="settings-content-width"
-          type="number"
           min={limits.contentWidthPx.min}
           max={limits.contentWidthPx.max}
           step={10}
           value={editorPreferences.contentWidthPx}
-          onChange={(event) =>
-            updateNumber("contentWidthPx", event.target.value)
-          }
+          onCommit={(value) => update({ contentWidthPx: value })}
         />
 
         <label htmlFor="settings-font">字体</label>

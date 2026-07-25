@@ -55,7 +55,6 @@ const installMatchMedia = (systemDark: boolean, reducedMotion: boolean) => {
 };
 
 const systemQuery = () => queries.get("(prefers-color-scheme: dark)")!;
-const motionQuery = () => queries.get("(prefers-reduced-motion: reduce)")!;
 
 const Probe = ({
   preference,
@@ -135,24 +134,6 @@ describe("useTheme", () => {
     const { getByTestId } = renderProbe("system");
     expect(getByTestId("resolved").textContent).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
-  });
-
-  it("toggles the reduced-motion class with the media query", () => {
-    installMatchMedia(true, false);
-    renderProbe("dark");
-    expect(document.documentElement.classList.contains("reduced-motion")).toBe(
-      false,
-    );
-
-    act(() => motionQuery().setMatches(true));
-    expect(document.documentElement.classList.contains("reduced-motion")).toBe(
-      true,
-    );
-
-    act(() => motionQuery().setMatches(false));
-    expect(document.documentElement.classList.contains("reduced-motion")).toBe(
-      false,
-    );
   });
 
   it("publishes editor preferences as root CSS custom properties", () => {

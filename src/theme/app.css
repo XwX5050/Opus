@@ -54,6 +54,10 @@ button:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
+button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
 button:disabled {
   opacity: 0.45;
 }
@@ -358,7 +362,7 @@ select {
 
 .cm-searchMatch {
   background: var(--search-match);
-  border-radius: 2px;
+  border-radius: var(--radius-small);
 }
 
 .cm-searchMatch-selected {
@@ -495,7 +499,7 @@ select {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--backdrop);
   z-index: 10;
 }
 

@@ -219,13 +219,16 @@ describe("accessibility: stylesheet guarantees", () => {
   });
 
   it("keeps component styles free of hardcoded colors", () => {
-    // Colors must resolve through tokens; raw hex literals in app.css would
-    // bypass theming.
+    // Colors must resolve through tokens; raw color literals in app.css
+    // would bypass theming.
     expect(appCss).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(appCss).not.toMatch(/\brgba?\(/);
   });
 
   it("defines both themes through data-theme tokens", () => {
     expect(tokensCss).toContain('[data-theme="dark"]');
     expect(tokensCss).toContain('[data-theme="light"]');
+    // The dialog backdrop is themed too (used by .dialog-overlay).
+    expect(tokensCss).toMatch(/--backdrop:/);
   });
 });

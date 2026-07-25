@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
+import type { PersistedSession } from "../document/types";
 import { DEFAULT_EDITOR_PREFERENCES } from "../theme/preferences";
 import AppShell from "./AppShell";
 
@@ -33,6 +34,35 @@ describe("settings: theme and editor preferences", () => {
     await waitFor(() =>
       expect(document.documentElement.dataset.theme).toBe("dark"),
     );
+  });
+
+  it("applies the persisted theme in a single flip after the session resolves", async () => {
+    // The persisted theme arrives asynchronously, so the first paint is the
+    // dark default; once loadSession resolves, useTheme swaps data-theme in
+    // a layout effect (before the next paint) — one full flip, no
+    // progressive re-theming.
+    const port = new MemoryDocumentPort(new Map());
+    let resolveSession!: (session: PersistedSession | null) => void;
+    vi.spyOn(port, "loadSession").mockImplementation(
+      () =>
+        new Promise<PersistedSession | null>((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    render(<AppShell port={port} />);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    await act(async () => {
+      resolveSession({
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        theme: "light",
+      });
+    });
+
+    expect(document.documentElement.dataset.theme).toBe("light");
   });
 
   it("applies persisted editor preferences as root CSS custom properties", async () => {
@@ -112,12 +142,68 @@ describe("settings: theme and editor preferences", () => {
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     fireEvent.change(bodySize, { target: { value: "20" } });
+    fireEvent.blur(bodySize);
 
     await waitFor(() =>
       expect(port.session?.editorPreferences?.bodySizePx).toBe(20),
     );
     expect(document.documentElement.style.getPropertyValue("--editor-body-size"))
       .toBe("20px");
+  });
+
+  it("lets the user type a multi-digit size without mid-typing clamping", async () => {
+    // Regression: committing (and clamping) on every keystroke turned typing
+    // "18" into 13→138→24. The draft must survive until blur/Enter.
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const bodySize = within(dialog).getByLabelText("正文字号");
+    await user.clear(bodySize);
+    await user.type(bodySize, "18");
+    // Nothing committed yet: the field shows the raw draft.
+    expect(bodySize).toHaveValue(18);
+    expect(port.session?.editorPreferences?.bodySizePx ?? 16).toBe(16);
+
+    await user.tab();
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.bodySizePx).toBe(18),
+    );
+    expect(bodySize).toHaveValue(18);
+  });
+
+  it("commits a number field on Enter", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const width = within(dialog).getByLabelText("内容宽度");
+    await user.clear(width);
+    await user.type(width, "640");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.contentWidthPx).toBe(640),
+    );
+    expect(width).toHaveValue(640);
+  });
+
+  it("snaps an invalid draft back to the committed value on blur", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const bodySize = within(dialog).getByLabelText("正文字号");
+    await user.clear(bodySize);
+    await user.tab();
+
+    expect(bodySize).toHaveValue(16);
   });
 
   it("clamps out-of-range edits instead of persisting them", async () => {
@@ -129,10 +215,12 @@ describe("settings: theme and editor preferences", () => {
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     fireEvent.change(bodySize, { target: { value: "99" } });
+    fireEvent.blur(bodySize);
 
     await waitFor(() =>
       expect(port.session?.editorPreferences?.bodySizePx).toBe(24),
     );
+    expect(bodySize).toHaveValue(24);
   });
 
   it("stores a custom font name chosen in the dialog", async () => {
