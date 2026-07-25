@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RecoveryDraftInfo } from "../document/types";
@@ -84,6 +84,32 @@ describe("RecoveryDialog", () => {
 
     await user.click(toggle);
     expect(screen.queryByText("source of draft-document-1")).not.toBeInTheDocument();
+  });
+
+  it("never shows a stale source under a different draft", async () => {
+    const user = userEvent.setup();
+    const resolvers = new Map<string, (text: string) => void>();
+    const readSource = vi.fn(
+      (draftId: string) =>
+        new Promise<string>((resolve) => resolvers.set(draftId, resolve)),
+    );
+    renderDialog(
+      [draft(), draft({ draftId: "draft-document-2", title: "b.md" })],
+      { readSource },
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "恢复未保存的更改" });
+    const toggles = within(dialog).getAllByRole("button", { name: "查看源码" });
+    await user.click(toggles[0]);
+    await user.click(toggles[1]);
+
+    // A's late resolve must not appear under the expanded B.
+    resolvers.get("draft-document-1")!("source of A");
+    await act(async () => {});
+    expect(screen.queryByText("source of A")).not.toBeInTheDocument();
+
+    resolvers.get("draft-document-2")!("source of B");
+    expect(await screen.findByText("source of B")).toBeVisible();
   });
 
   it("does not dismiss on Escape: every draft needs an explicit decision", async () => {

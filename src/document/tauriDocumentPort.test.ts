@@ -469,6 +469,7 @@ describe("tauri document port session, window geometry, and close requests", () 
     setSize: vi.fn(),
     setPosition: vi.fn(),
     unlisten: vi.fn(),
+    monitors: [{ position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } }],
   }));
 
   vi.mock("@tauri-apps/plugin-store", () => ({
@@ -476,6 +477,7 @@ describe("tauri document port session, window geometry, and close requests", () 
   }));
 
   vi.mock("@tauri-apps/api/window", () => ({
+    availableMonitors: async () => windowMocks.monitors,
     getCurrentWindow: () => ({
       async onCloseRequested(handler: (event: { preventDefault(): void }) => Promise<void>) {
         windowMocks.closeHandler = handler;
@@ -514,6 +516,7 @@ describe("tauri document port session, window geometry, and close requests", () 
     windowMocks.setSize.mockClear();
     windowMocks.setPosition.mockClear();
     windowMocks.unlisten.mockClear();
+    windowMocks.monitors = [{ position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } }];
   });
 
   it("returns null when no session was persisted and round-trips a saved session", async () => {
@@ -618,5 +621,30 @@ describe("tauri document port session, window geometry, and close requests", () 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("skips the persisted position when it is off every connected display", async () => {
+    storeMocks.values.set("windowGeometry", { width: 900, height: 700, x: 5000, y: 4000 });
+    const stop = await restoreWindowGeometry();
+
+    expect(windowMocks.setSize).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 900, height: 700 }),
+    );
+    expect(windowMocks.setPosition).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("applies the persisted position when it lands on a connected display", async () => {
+    windowMocks.monitors = [
+      { position: { x: -1920, y: 0 }, size: { width: 1920, height: 1080 } },
+      { position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } },
+    ];
+    storeMocks.values.set("windowGeometry", { width: 900, height: 700, x: -100, y: 50 });
+    const stop = await restoreWindowGeometry();
+
+    expect(windowMocks.setPosition).toHaveBeenCalledWith(
+      expect.objectContaining({ x: -100, y: 50 }),
+    );
+    stop();
   });
 });

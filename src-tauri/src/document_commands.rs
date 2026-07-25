@@ -87,6 +87,12 @@ fn map_error(error: DocumentIoError) -> CommandError {
 pub fn open_document_impl(path: PathBuf) -> Result<OpenedDocumentDto, CommandError> {
     validate(&path)?;
     let d = document_io::read_document(&path).map_err(map_error)?;
+    // Return the canonical path: watch keys and disk-event paths are
+    // canonicalized (watch.rs `resolve`), so a tab opened through a symlinked
+    // directory (macOS /tmp -> /private/tmp) must carry the canonical path or
+    // disk events would never match it. Canonicalization cannot fail for a
+    // file that was just read, but fall back to the input path defensively.
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
     Ok(OpenedDocumentDto {
         path,
         text: d.text,

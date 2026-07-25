@@ -22,7 +22,9 @@ export default function RecoveryDialog({
 }: RecoveryDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [source, setSource] = useState<string | null>(null);
+  // The loaded source is keyed by draft id, so a slow readSource resolve for
+  // a previously expanded draft can never surface under another draft.
+  const [source, setSource] = useState<{ draftId: string; text: string } | null>(null);
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -37,8 +39,8 @@ export default function RecoveryDialog({
     setExpandedId(draftId);
     setSource(null);
     void readSource(draftId).then(
-      (text) => setSource(text),
-      () => setSource("（无法读取草稿内容）"),
+      (text) => setSource({ draftId, text }),
+      () => setSource({ draftId, text: "（无法读取草稿内容）" }),
     );
   };
 
@@ -95,7 +97,7 @@ export default function RecoveryDialog({
             <button type="button" onClick={() => onDiscard(info)}>丢弃</button>
             {expandedId === info.draftId && (
               <pre aria-label={`${info.title} 的草稿源码`}>
-                {source ?? "载入中…"}
+                {source?.draftId === info.draftId ? source.text : "载入中…"}
               </pre>
             )}
           </li>

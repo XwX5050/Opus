@@ -77,10 +77,13 @@ export function useAppController(
   const acquiredScopeIds = useRef(new Set<string>());
   // Stable consumer IDs (tab IDs, `workspace:<path>`) that hold a disk watch.
   const watchedIds = useRef(new Set<string>());
-  // Per-tab debounce timers for recovery drafts, and the tab IDs whose draft
-  // is known to be persisted (so it must be discarded once the tab is clean).
+  // Per-tab debounce timers for recovery drafts, the tab IDs whose draft is
+  // known to be persisted (so it must be discarded once the tab is clean),
+  // and each tab's last-scheduled draft signature (status + text) so an
+  // unrelated state change never resets a tab's debounce.
   const draftTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const persistedDraftIds = useRef(new Set<string>());
+  const draftSignatures = useRef(new Map<string, string>());
   // Session saves are suppressed until the persisted session has been loaded,
   // so a slow load can never be overwritten by the empty launch state.
   const sessionLoadedRef = useRef(false);
@@ -553,26 +556,39 @@ export function useAppController(
 
   // Recovery drafts: while a tab holds content that closing would lose, a
   // snapshot is persisted 2 seconds after the last change; once the tab is
-  // clean or closed, its draft is discarded.
+  // clean or closed, its draft is discarded. Each tab's debounce is keyed by
+  // a signature of its draft-relevant content, so typing in one tab never
+  // resets (and thereby starves) another dirty tab's timer.
   useEffect(() => {
-    const needing = new Set(
-      state.tabs.filter(needsRecoveryDraft).map((tab) => tab.id),
+    const needing = new Map(
+      state.tabs
+        .filter(needsRecoveryDraft)
+        .map((tab) => [tab.id, `${tab.status}\n${tab.text}`] as const),
     );
-    for (const [id, timer] of [...draftTimers.current]) {
+    for (const id of [...draftSignatures.current.keys()]) {
       if (!needing.has(id)) {
-        clearTimeout(timer);
-        draftTimers.current.delete(id);
+        draftSignatures.current.delete(id);
+        const timer = draftTimers.current.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          draftTimers.current.delete(id);
+        }
       }
     }
     for (const id of [...persistedDraftIds.current]) {
       if (!needing.has(id)) {
         persistedDraftIds.current.delete(id);
+        // The backend processes draft commands in issue order (the Tauri
+        // command queue is FIFO per client), so this discard can never
+        // overtake the last write issued for the same draft id.
         void port.discardDraft(draftIdForTab(id)).catch(() => {
           // Already gone (restored elsewhere or never flushed); harmless.
         });
       }
     }
-    for (const id of needing) {
+    for (const [id, signature] of needing) {
+      if (draftSignatures.current.get(id) === signature) continue;
+      draftSignatures.current.set(id, signature);
       const existing = draftTimers.current.get(id);
       if (existing) clearTimeout(existing);
       draftTimers.current.set(id, setTimeout(() => {
@@ -703,16 +719,17 @@ export function useAppController(
 
   const dismissSaveError = useCallback(() => setSaveError(null), []);
 
-  const retrySave = useCallback(() => {
+  // Returned so callers (and tests) can await the whole save chain.
+  const retrySave = useCallback((): Promise<boolean> | undefined => {
     const failure = saveError;
     setSaveError(null);
-    if (failure) void save(failure.id);
+    return failure ? save(failure.id) : undefined;
   }, [save, saveError]);
 
-  const saveErrorSaveAs = useCallback(() => {
+  const saveErrorSaveAs = useCallback((): Promise<boolean> | undefined => {
     const failure = saveError;
     setSaveError(null);
-    if (failure) void saveAs(failure.id);
+    return failure ? saveAs(failure.id) : undefined;
   }, [saveAs, saveError]);
 
   const loadDiskVersion = useCallback(async (id: string) => {

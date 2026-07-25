@@ -225,3 +225,22 @@ fn new_target_saves_successfully() {
     .unwrap();
     assert_eq!(std::fs::read(path).unwrap(), b"new");
 }
+
+#[cfg(unix)]
+#[test]
+fn open_document_returns_canonical_path_when_opened_through_symlinked_directory() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let real_dir = dir.path().join("real");
+    std::fs::create_dir(&real_dir).unwrap();
+    let target = real_dir.join("a.md");
+    std::fs::write(&target, b"hello").unwrap();
+    let link_dir = dir.path().join("link");
+    symlink(&real_dir, &link_dir).unwrap();
+
+    // watch.rs keys and disk-event paths are canonicalized, so the path a tab
+    // carries must be canonical too — otherwise events never match it.
+    let opened = open_document_impl(link_dir.join("a.md")).unwrap();
+
+    assert_eq!(opened.path, target.canonicalize().unwrap());
+}

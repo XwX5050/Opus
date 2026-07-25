@@ -1,7 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
@@ -106,7 +106,21 @@ export async function restoreWindowGeometry(): Promise<() => void> {
   const saved = parseGeometry(await store.get("windowGeometry"));
   if (saved) {
     await win.setSize(new PhysicalSize(saved.width, saved.height));
-    await win.setPosition(new PhysicalPosition(saved.x, saved.y));
+    // The saved position may belong to a display that is no longer
+    // connected; only restore it when it lands on a current display,
+    // otherwise let the OS place the window.
+    const monitors = await availableMonitors().catch(() => []);
+    const onScreen = monitors.some((monitor) => {
+      const { x, y } = monitor.position;
+      const { width, height } = monitor.size;
+      return (
+        saved.x >= x && saved.y >= y &&
+        saved.x < x + width && saved.y < y + height
+      );
+    });
+    if (onScreen) {
+      await win.setPosition(new PhysicalPosition(saved.x, saved.y));
+    }
   }
   let timer: ReturnType<typeof setTimeout> | null = null;
   const persist = () => {

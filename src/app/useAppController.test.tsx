@@ -907,6 +907,43 @@ describe("useAppController recovery drafts", () => {
     }
   });
 
+  it("does not postpone another tab's draft when typing in a different tab", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new MemoryDocumentPort(new Map([
+        ["/notes/a.md", draftableFile("/notes/a.md")],
+        ["/notes/b.md", draftableFile("/notes/b.md")],
+      ]));
+      const hook = renderHook(() => useAppController(port));
+      await act(() => hook.result.current.openPath("/notes/a.md"));
+      await act(() => hook.result.current.openPath("/notes/b.md"));
+      const [tabA, tabB] = hook.result.current.state.tabs;
+
+      act(() => hook.result.current.changeText(tabA.id, "a-1"));
+      act(() => hook.result.current.changeText(tabB.id, "b-1"));
+      await act(async () => { vi.advanceTimersByTime(1000); });
+
+      // Typing in A must not reset B's debounce: B's draft lands at its own
+      // 2s mark while A's lands 2s after A's last keystroke.
+      act(() => hook.result.current.changeText(tabA.id, "a-2"));
+      await act(async () => { vi.advanceTimersByTime(999); });
+      expect(port.drafts).toHaveLength(0);
+
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect(port.drafts).toHaveLength(1);
+      expect(port.drafts[0]).toMatchObject({ draftId: `draft-${tabB.id}`, text: "b-1" });
+
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(port.drafts).toHaveLength(2);
+      expect(port.drafts.map((draft) => draft.draftId).sort()).toEqual(
+        [`draft-${tabA.id}`, `draft-${tabB.id}`].sort(),
+      );
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes pending drafts when the window close is requested", async () => {
     vi.useFakeTimers();
     try {
@@ -1141,6 +1178,60 @@ describe("useAppController sessions and recent items", () => {
 
     await act(() => hook.result.current.openRecent({ path: "/notes", kind: "folder" }));
     expect(hook.result.current.workspace?.path).toBe("/notes");
+    hook.unmount();
+  });
+});
+
+describe("useAppController canonical paths", () => {
+  it("matches a canonical disk event to a tab opened through a symlinked path", async () => {
+    // The backend returns canonical paths from open_document, so a tab opened
+    // via a symlinked directory carries the canonical path and disk events
+    // (always canonical) match it.
+    const canonicalFile: OpenedFile = {
+      path: "/private/tmp/notes/a.md",
+      text: "saved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 1,
+      version: "v1",
+    };
+    class SymlinkAwarePort extends InspectableControllerPort {
+      handler: ((event: DiskEvent) => void) | null = null;
+      diskText = "external edit";
+      override async openPath() {
+        return { ...canonicalFile, text: this.diskText };
+      }
+      override async subscribeToDiskEvents(handler: (event: DiskEvent) => void) {
+        this.handler = handler;
+        return () => {};
+      }
+    }
+    const port = new SymlinkAwarePort(canonicalFile, Promise.resolve({
+      path: canonicalFile.path,
+      modifiedUnixMs: 2,
+      version: "v2",
+    }));
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openPath("/tmp/notes/a.md"));
+    expect(hook.result.current.state.tabs[0].path).toBe("/private/tmp/notes/a.md");
+    await waitFor(() => expect(port.handler).not.toBeNull());
+
+    act(() =>
+      port.handler!({
+        kind: "changed",
+        path: "/private/tmp/notes/a.md",
+        modifiedUnixMs: 9,
+        version: "v2",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "external edit",
+        status: "clean",
+      }),
+    );
     hook.unmount();
   });
 });
