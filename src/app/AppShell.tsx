@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
+import { modeForText } from "../editor/performanceMode";
 import RecoveryDialog from "../recovery/RecoveryDialog";
 import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
@@ -45,6 +46,33 @@ export default function AppShell({
   const pendingTabFocusRef = useRef<"close" | "reopen" | null>(null);
   const active = controller.state.tabs.find(
     (tab) => tab.id === controller.state.activeId,
+  );
+  // Per-tab light-mode UI state: "继续完整渲染" overrides and banner
+  // dismissals are tab-scoped, so they are pruned as soon as a tab closes —
+  // a closed-and-reopened document always returns to automatic mode.
+  const [forceFullTabs, setForceFullTabs] = useState<ReadonlySet<string>>(new Set());
+  const [dismissedPerfTabs, setDismissedPerfTabs] = useState<ReadonlySet<string>>(new Set());
+  const tabIdsKey = controller.state.tabs.map((tab) => tab.id).join("\n");
+  useEffect(() => {
+    const open = new Set(controller.state.tabs.map((tab) => tab.id));
+    const prune = (current: ReadonlySet<string>) => {
+      if ([...current].every((id) => open.has(id))) return current;
+      return new Set([...current].filter((id) => open.has(id)));
+    };
+    setForceFullTabs(prune);
+    setDismissedPerfTabs(prune);
+    // Keyed on the open tab ids; the reducer's tab list is the source of truth.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabIdsKey]);
+  const activeText = active?.text ?? null;
+  const automaticMode = useMemo(
+    () => (activeText === null ? ("full" as const) : modeForText(activeText)),
+    [activeText],
+  );
+  const forceFull = active !== undefined && forceFullTabs.has(active.id);
+  const lightMode = automaticMode === "light" && !forceFull;
+  const showPerfBanner = Boolean(
+    active && automaticMode === "light" && !forceFull && !dismissedPerfTabs.has(active.id),
   );
   const closing = controller.state.tabs.find(
     (tab) => tab.id === controller.closeDocumentId,
@@ -330,6 +358,30 @@ export default function AppShell({
           </aside>
         )}
         <div className="editor-area">
+        {showPerfBanner && active && (
+          <div role="status" className="perf-banner">
+            <span className="perf-banner-text">
+              大文档已切换到轻量模式：图片与公式渲染已暂停，文本内容不受影响。
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setForceFullTabs((current) => new Set(current).add(active.id))
+              }
+            >
+              继续完整渲染
+            </button>
+            <button
+              type="button"
+              aria-label="关闭轻量模式提示"
+              onClick={() =>
+                setDismissedPerfTabs((current) => new Set(current).add(active.id))
+              }
+            >
+              ×
+            </button>
+          </div>
+        )}
         {active ? (
           <MarkdownEditor
             key={active.id}
@@ -342,6 +394,7 @@ export default function AppShell({
             saveClipboardImage={(input) => port.saveClipboardImage(input)}
             resolveImageUrl={tauriImagePreviewUrl}
             imageDrop={imageDrop}
+            performanceMode={lightMode ? "light" : "full"}
           />
         ) : (
           <div role="region" aria-label="空白状态" className="empty-state">

@@ -36,31 +36,63 @@ $$
  * drives the shell with the in-memory port so the full UI can be previewed
  * and screenshotted from a plain browser, without the Tauri runtime. The
  * branch is dead code in production builds (import.meta.env.DEV is false).
+ *
+ * Extra perf-harness parameters (scripts/measure-editor.mjs):
+ *   &fixture=<name>  loads tests/perf/generated/<name> (served by the dev
+ *                    server) as the open document instead of DEMO_MARKDOWN
+ *   &workspace=1     also opens the /demo folder in the sidebar
  */
-const createDemoPort = (params: URLSearchParams): DocumentPort => {
+const createDemoPort = async (params: URLSearchParams): Promise<DocumentPort> => {
+  const fixture = params.get("fixture");
+  let text = DEMO_MARKDOWN;
+  let documentPath = "/demo/欢迎.md";
+  if (fixture) {
+    // Basename only: fixtures never leave tests/perf/generated/.
+    const name = fixture.split("/").pop() ?? fixture;
+    const response = await fetch(`/tests/perf/generated/${name}`);
+    if (!response.ok) {
+      throw new Error(
+        `性能测试文件不存在：${name}（先运行 npm run perf:fixtures）`,
+      );
+    }
+    text = await response.text();
+    documentPath = `/demo/${name}`;
+  }
+  const files = new Map([
+    [
+      documentPath,
+      {
+        path: documentPath,
+        text,
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: "demo-v1",
+      },
+    ],
+  ]);
+  const withWorkspace = params.has("workspace");
+  if (withWorkspace) {
+    // A small subdirectory so the sidebar has an expandable folder.
+    for (const extra of ["/demo/notes/a.md", "/demo/notes/b.md"]) {
+      files.set(extra, {
+        path: extra,
+        text: `# ${extra}\n`,
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: `demo-${extra}`,
+      });
+    }
+  }
   const session: PersistedSession = {
-    recent: [{ path: "/demo/欢迎.md", kind: "file" }],
-    openPaths: ["/demo/欢迎.md"],
-    activePath: "/demo/欢迎.md",
-    workspacePath: null,
+    recent: [{ path: documentPath, kind: "file" }],
+    openPaths: [documentPath],
+    activePath: documentPath,
+    workspacePath: withWorkspace ? "/demo" : null,
     theme: normalizeThemePreference(params.get("theme") ?? undefined),
   };
-  return new MemoryDocumentPort(
-    new Map([
-      [
-        "/demo/欢迎.md",
-        {
-          path: "/demo/欢迎.md",
-          text: DEMO_MARKDOWN,
-          hasUtf8Bom: false,
-          newline: "lf",
-          modifiedUnixMs: 1,
-          version: "demo-v1",
-        },
-      ],
-    ]),
-    { session },
-  );
+  return new MemoryDocumentPort(files, { session });
 };
 
 export default function App() {
@@ -71,13 +103,33 @@ export default function App() {
       new URLSearchParams(window.location.search).has("demo"),
     [],
   );
+  // The demo port may need to fetch a perf fixture first, so it arrives
+  // asynchronously; the production port is created synchronously.
+  const [demoPort, setDemoPort] = useState<DocumentPort | null>(null);
+  useEffect(() => {
+    if (!demo) return;
+    let disposed = false;
+    createDemoPort(new URLSearchParams(window.location.search))
+      .then((port) => {
+        if (!disposed) setDemoPort(port);
+      })
+      .catch((error: unknown) => {
+        if (!disposed) {
+          setPortError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [demo]);
   const port = useMemo(
     () =>
       demo
-        ? createDemoPort(new URLSearchParams(window.location.search))
+        ? null
         : createTauriDocumentPort((error) => setPortError(error.message)),
     [demo],
   );
+  const activePort = demo ? demoPort : port;
   useEffect(() => {
     if (demo) return;
     let stop: (() => void) | null = null;
@@ -93,9 +145,12 @@ export default function App() {
       stop?.();
     };
   }, [demo]);
+  if (!activePort) {
+    return portError ? <p role="alert">{portError}</p> : null;
+  }
   return (
     <AppShell
-      port={port}
+      port={activePort}
       subscribeToEvents={demo ? null : subscribeToOpenPaths}
       subscribeToImageDrops={demo ? null : subscribeToImageDrops}
       externalError={portError}

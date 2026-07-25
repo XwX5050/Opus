@@ -219,8 +219,31 @@ select {
 .editor-area {
   flex: 1;
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+}
+
+.editor-area > .markdown-editor,
+.editor-area > .empty-state {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Large-document light-mode notice: inline, dismissible, token-driven. */
+.perf-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size-small);
+}
+
+.perf-banner-text {
+  flex: 1;
 }
 
 /* The central reading column: width comes from the persisted preference. */

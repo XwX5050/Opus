@@ -205,4 +205,44 @@ describe("MarkdownEditor", () => {
     });
     expect(editorView().state.doc.toString()).toBe("hello");
   });
+
+  describe("light performance mode", () => {
+    // Cursor (moved to the end) must not touch the math/image ranges:
+    // widgets reveal their Markdown source while the selection overlaps them.
+    const rich = "$x$ and ![img](/p/pic.png)\n\n**bold** tail";
+
+    it("keeps live preview styling but disables math and image widgets without touching text", () => {
+      const onChange = vi.fn();
+      renderEditor({ value: rich, sourceMode: false, performanceMode: "light", onChange });
+      moveToEnd();
+      expect(document.querySelector(".cm-live-preview-strong")).not.toBeNull();
+      expect(document.querySelector(".md-math")).toBeNull();
+      expect(document.querySelector(".md-image-widget")).toBeNull();
+      expect(editorView().state.doc.toString()).toBe(rich);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("switches between light and full in the same view without changing the document", () => {
+      const onChange = vi.fn();
+      const rendered = renderEditor({ value: rich, sourceMode: false, performanceMode: "light", onChange });
+      moveToEnd();
+      const view = editorView();
+      const root = rendered.container.querySelector(".cm-editor");
+      expect(document.querySelector(".md-math")).toBeNull();
+
+      rendered.rerender(<MarkdownEditor {...rendered.props} performanceMode="full" />);
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(document.querySelector(".md-math")).not.toBeNull();
+      expect(document.querySelector(".md-image-widget")).not.toBeNull();
+      expect(view.state.doc.toString()).toBe(rich);
+
+      rendered.rerender(<MarkdownEditor {...rendered.props} performanceMode="light" />);
+      expect(editorView()).toBe(view);
+      expect(document.querySelector(".md-math")).toBeNull();
+      expect(document.querySelector(".md-image-widget")).toBeNull();
+      expect(view.state.doc.toString()).toBe(rich);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
 });

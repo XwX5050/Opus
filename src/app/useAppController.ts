@@ -93,10 +93,14 @@ export function useAppController(
   // Per-tab debounce timers for recovery drafts, the tab IDs whose draft is
   // known to be persisted (so it must be discarded once the tab is clean),
   // and each tab's last-scheduled draft signature (status + text) so an
-  // unrelated state change never resets a tab's debounce.
+  // unrelated state change never resets a tab's debounce. Signatures hold
+  // the status and text by reference: strings are immutable, so identity
+  // comparison detects changes without copying multi-megabyte documents.
   const draftTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const persistedDraftIds = useRef(new Set<string>());
-  const draftSignatures = useRef(new Map<string, string>());
+  const draftSignatures = useRef(
+    new Map<string, { status: DocumentSnapshot["status"]; text: string }>(),
+  );
   // Session saves are suppressed until the persisted session has been loaded,
   // so a slow load can never be overwritten by the empty launch state.
   const sessionLoadedRef = useRef(false);
@@ -582,13 +586,14 @@ export function useAppController(
   // Recovery drafts: while a tab holds content that closing would lose, a
   // snapshot is persisted 2 seconds after the last change; once the tab is
   // clean or closed, its draft is discarded. Each tab's debounce is keyed by
-  // a signature of its draft-relevant content, so typing in one tab never
-  // resets (and thereby starves) another dirty tab's timer.
+  // its draft-relevant content (status + text, compared by identity), so
+  // typing in one tab never resets (and thereby starves) another dirty
+  // tab's timer.
   useEffect(() => {
     const needing = new Map(
       state.tabs
         .filter(needsRecoveryDraft)
-        .map((tab) => [tab.id, `${tab.status}\n${tab.text}`] as const),
+        .map((tab) => [tab.id, { status: tab.status, text: tab.text }] as const),
     );
     for (const id of [...draftSignatures.current.keys()]) {
       if (!needing.has(id)) {
@@ -612,7 +617,14 @@ export function useAppController(
       }
     }
     for (const [id, signature] of needing) {
-      if (draftSignatures.current.get(id) === signature) continue;
+      const previous = draftSignatures.current.get(id);
+      if (
+        previous &&
+        previous.status === signature.status &&
+        previous.text === signature.text
+      ) {
+        continue;
+      }
       draftSignatures.current.set(id, signature);
       const existing = draftTimers.current.get(id);
       if (existing) clearTimeout(existing);

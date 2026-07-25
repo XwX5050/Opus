@@ -12,6 +12,7 @@ import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
 import { mathWidgetsExtension } from "./mathWidgets";
+import type { PerformanceMode } from "./performanceMode";
 
 const externalValueSync = Annotation.define<boolean>();
 
@@ -32,6 +33,13 @@ export interface MarkdownEditorProps {
   saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
   resolveImageUrl(path: string): string;
   imageDrop?: EditorImageDrop | null;
+  /**
+   * Large documents open in "light" mode: Markdown parsing, selection,
+   * search and visible-range text styling stay active, while offscreen
+   * image creation and nonessential block widgets (math, images) are
+   * paused. Light mode never changes the document text.
+   */
+  performanceMode?: PerformanceMode;
 }
 
 export default function MarkdownEditor({
@@ -44,25 +52,37 @@ export default function MarkdownEditor({
   saveClipboardImage,
   resolveImageUrl,
   imageDrop = null,
+  performanceMode = "full",
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewCompartmentRef = useRef(new Compartment());
-  const previousSourceModeRef = useRef(sourceMode);
+  const previousPreviewRef = useRef({ sourceMode, performanceMode });
   const documentPathRef = useRef(documentPath);
   documentPathRef.current = documentPath;
   const callbacksRef = useRef({ onChange, onSave, onReopenClosed });
   callbacksRef.current = { onChange, onSave, onReopenClosed };
   const imageSupportRef = useRef({ saveClipboardImage, resolveImageUrl });
   imageSupportRef.current = { saveClipboardImage, resolveImageUrl };
+  // Identity of the last value this editor emitted or adopted. Comparing
+  // strings by reference lets the controlled-value sync below skip without
+  // copying the document — a doc.toString() per keystroke is fine for notes
+  // but costs tens of milliseconds on pressure-sized documents.
+  const lastSyncedValueRef = useRef(value);
 
-  const previewExtensions = () => [
+  const previewExtensions = (mode: PerformanceMode) => [
     livePreviewExtension(),
-    mathWidgetsExtension(),
-    imageWidgetsExtension({
-      getDocumentPath: () => documentPathRef.current,
-      resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
-    }),
+    // Light mode pauses offscreen image creation and nonessential block
+    // widgets; visible-range text styling (live preview) stays on.
+    ...(mode === "light"
+      ? []
+      : [
+          mathWidgetsExtension(),
+          imageWidgetsExtension({
+            getDocumentPath: () => documentPathRef.current,
+            resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
+          }),
+        ]),
   ];
 
   useEffect(() => {
@@ -78,7 +98,7 @@ export default function MarkdownEditor({
               onReopenClosed: () => callbacksRef.current.onReopenClosed(),
             },
             previewCompartmentRef.current.of(
-              sourceMode ? [] : previewExtensions(),
+              sourceMode ? [] : previewExtensions(performanceMode),
             ),
           ),
           imagePasteExtension({
@@ -94,13 +114,22 @@ export default function MarkdownEditor({
               (transaction) => transaction.annotation(externalValueSync),
             );
             if (update.docChanged && !isExternal) {
-              callbacksRef.current.onChange(update.state.doc.toString());
+              const text = update.state.doc.toString();
+              lastSyncedValueRef.current = text;
+              callbacksRef.current.onChange(text);
             }
           }),
         ],
       }),
     });
     viewRef.current = view;
+    if (import.meta.env.DEV) {
+      // Perf harness hook (scripts/measure-editor.mjs): the first frame
+      // after the editor mounts approximates "open to editable".
+      requestAnimationFrame(() => {
+        performance.mark("markdown-edit:editor-editable");
+      });
+    }
     return () => {
       viewRef.current = null;
       view.destroy();
@@ -111,7 +140,8 @@ export default function MarkdownEditor({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.state.doc.toString() === value) return;
+    if (!view || value === lastSyncedValueRef.current) return;
+    lastSyncedValueRef.current = value;
     const head = Math.min(view.state.selection.main.head, value.length);
     const anchor = Math.min(view.state.selection.main.anchor, value.length);
     view.dispatch({
@@ -126,16 +156,23 @@ export default function MarkdownEditor({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || previousSourceModeRef.current === sourceMode) return;
-    previousSourceModeRef.current = sourceMode;
+    const previous = previousPreviewRef.current;
+    if (
+      !view ||
+      (previous.sourceMode === sourceMode &&
+        previous.performanceMode === performanceMode)
+    ) {
+      return;
+    }
+    previousPreviewRef.current = { sourceMode, performanceMode };
     view.dispatch({
       effects: previewCompartmentRef.current.reconfigure(
-        sourceMode ? [] : previewExtensions(),
+        sourceMode ? [] : previewExtensions(performanceMode),
       ),
     });
     // Preview extensions read live refs; rebuilding them on toggle is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceMode]);
+  }, [sourceMode, performanceMode]);
 
   // A drop delivered before this editor mounted is stale: only drops with a
   // newer sequence are inserted.

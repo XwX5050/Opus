@@ -791,4 +791,74 @@ describe("AppShell conflict and save-failure dialogs", () => {
     expect(screen.getByRole("tab", { name: /a\.md.*未保存/ })).toBeVisible();
     expect(editor()).toHaveTextContent("unsaved");
   });
+
+  describe("large document light mode", () => {
+    // Past the line threshold, so the tab opens in light mode. The rich
+    // content sits on line 2: inside the initial viewport (jsdom has no
+    // layout, so far-down lines never render) and untouched by the cursor,
+    // which starts at 0 on line 1.
+    const largeText = `intro\n$x$ and **bold**\n${"text\n".repeat(49_999)}tail`;
+    const openLargeDocument = async (user: ReturnType<typeof userEvent.setup>) => {
+      render(
+        <AppShell port={new InspectablePort([file("/notes/big.md", largeText)])} />,
+      );
+      await user.click(screen.getByRole("button", { name: "打开文件" }));
+      await screen.findByRole("tab", { name: /big\.md/ });
+    };
+
+    it("shows a banner and 继续完整渲染 restores full rendering for the tab", async () => {
+      const user = userEvent.setup();
+      await openLargeDocument(user);
+      const banner = await screen.findByRole("status");
+      expect(banner).toHaveTextContent("轻量模式");
+      expect(document.querySelector(".md-math")).toBeNull();
+      expect(document.querySelector(".cm-live-preview-strong")).not.toBeNull();
+
+      await user.click(within(banner).getByRole("button", { name: "继续完整渲染" }));
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(document.querySelector(".md-math")).not.toBeNull();
+      expect(editor()).toHaveTextContent("text");
+    });
+
+    it("dismisses the banner without leaving light mode", async () => {
+      const user = userEvent.setup();
+      await openLargeDocument(user);
+      const banner = await screen.findByRole("status");
+
+      await user.click(within(banner).getByRole("button", { name: "关闭轻量模式提示" }));
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(document.querySelector(".md-math")).toBeNull();
+    });
+
+    it("returns to automatic light mode when the tab is closed and reopened", async () => {
+      const user = userEvent.setup();
+      await openLargeDocument(user);
+      await user.click(
+        within(await screen.findByRole("status")).getByRole("button", { name: "继续完整渲染" }),
+      );
+      expect(document.querySelector(".md-math")).not.toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "关闭 big.md" }));
+      screen.getByRole("main").focus();
+      await user.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+
+      await screen.findByRole("tab", { name: /big\.md/ });
+      expect(await screen.findByRole("status")).toHaveTextContent("轻量模式");
+      expect(document.querySelector(".md-math")).toBeNull();
+    });
+
+    it("keeps regular documents in full mode without a banner", async () => {
+      const user = userEvent.setup();
+      render(
+        <AppShell port={new InspectablePort([file("/notes/small.md", "plain intro\n\n$x$ and **bold**")])} />,
+      );
+      await user.click(screen.getByRole("button", { name: "打开文件" }));
+      await screen.findByRole("tab", { name: /small\.md/ });
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(document.querySelector(".md-math")).not.toBeNull();
+    });
+  });
 });
