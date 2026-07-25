@@ -5,6 +5,10 @@ import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } f
 import { Store } from "@tauri-apps/plugin-store";
 import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
+import {
+  normalizeEditorPreferences,
+  normalizeThemePreference,
+} from "../theme/preferences";
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecentItem, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
 
 type OpenDto = { path: string; text: string; has_utf8_bom: boolean; newline: OpenedFile["newline"]; modified_unix_ms: number; version: string };
@@ -70,6 +74,14 @@ const parseSession = (value: unknown): PersistedSession | null => {
     activePath: typeof record.activePath === "string" ? record.activePath : null,
     workspacePath:
       typeof record.workspacePath === "string" ? record.workspacePath : null,
+    // Theme/editor preferences are optional (sessions predate them); invalid
+    // stored values are normalized to defaults by the theme module.
+    ...(record.theme !== undefined
+      ? { theme: normalizeThemePreference(record.theme) }
+      : {}),
+    ...(record.editorPreferences !== undefined
+      ? { editorPreferences: normalizeEditorPreferences(record.editorPreferences) }
+      : {}),
   };
 };
 

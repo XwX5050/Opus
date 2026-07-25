@@ -55,6 +55,10 @@ const cloneSession = (session: PersistedSession): PersistedSession => ({
   openPaths: [...session.openPaths],
   activePath: session.activePath,
   workspacePath: session.workspacePath,
+  ...(session.theme !== undefined ? { theme: session.theme } : {}),
+  ...(session.editorPreferences !== undefined
+    ? { editorPreferences: { ...session.editorPreferences } }
+    : {}),
 });
 const cloneImageSave = (save: MemoryClipboardImageSave): MemoryClipboardImageSave => ({
   bytes: new Uint8Array(save.bytes),

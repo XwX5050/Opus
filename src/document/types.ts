@@ -1,3 +1,8 @@
+import type {
+  EditorPreferences,
+  ThemePreference,
+} from "../theme/preferences";
+
 export type Newline = "lf" | "cr_lf";
 export type PathPlatform = "linux" | "macos" | "windows";
 
@@ -101,13 +106,16 @@ export interface RecentItem {
 }
 
 /**
- * Session metadata persisted separately from recovery drafts: only paths and
- * ordering live here, never document content (dirty content lives in drafts).
- * Theme/editor preferences are deliberately excluded; Task 11 owns that seam.
+ * Session metadata persisted separately from recovery drafts: only paths,
+ * ordering and UI preferences live here, never document content (dirty
+ * content lives in drafts). Theme/editor preferences (Task 11) are optional
+ * so sessions persisted by older versions still load.
  */
 export interface PersistedSession {
   readonly recent: ReadonlyArray<RecentItem>;
   readonly openPaths: ReadonlyArray<string>;
   readonly activePath: string | null;
   readonly workspacePath: string | null;
+  readonly theme?: ThemePreference;
+  readonly editorPreferences?: EditorPreferences;
 }

@@ -21,6 +21,15 @@ import {
   draftIdForTab,
   needsRecoveryDraft,
 } from "../recovery/drafts";
+import {
+  clampEditorPreferences,
+  normalizeEditorPreferences,
+  normalizeThemePreference,
+  DEFAULT_EDITOR_PREFERENCES,
+  DEFAULT_THEME_PREFERENCE,
+  type EditorPreferences,
+  type ThemePreference,
+} from "../theme/preferences";
 import type { OpenPathSubscriptions } from "../document/tauriDocumentPort";
 
 export type EventSubscriber = (
@@ -70,6 +79,10 @@ export function useAppController(
   const [saveError, setSaveError] = useState<SaveFailure | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceRoot | null>(null);
   const [recent, setRecent] = useState<ReadonlyArray<RecentItem>>([]);
+  const [theme, setThemeState] =
+    useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
+  const [editorPreferences, setEditorPreferencesState] =
+    useState<EditorPreferences>(DEFAULT_EDITOR_PREFERENCES);
   const [recoveryDrafts, setRecoveryDrafts] =
     useState<ReadonlyArray<RecoveryDraftInfo> | null>(null);
   const workspacePathRef = useRef<string | null>(null);
@@ -202,6 +215,18 @@ export function useAppController(
       ),
     ].slice(0, 10));
   }, []);
+
+  // Live UI edits clamp to the nearest valid value; stored data is repaired
+  // to defaults at load time instead (see theme/preferences).
+  const setTheme = useCallback(
+    (value: ThemePreference) => setThemeState(normalizeThemePreference(value)),
+    [],
+  );
+  const setEditorPreferences = useCallback(
+    (value: EditorPreferences) =>
+      setEditorPreferencesState(clampEditorPreferences(value)),
+    [],
+  );
 
   const addOpenedFiles = useCallback((
     files: ReadonlyArray<OpenedFile>,
@@ -658,7 +683,13 @@ export function useAppController(
       }
       if (!isCurrent(generation)) return;
       sessionLoadedRef.current = true;
-      if (session) setRecent(session.recent);
+      if (session) {
+        setRecent(session.recent);
+        setThemeState(normalizeThemePreference(session.theme));
+        setEditorPreferencesState(
+          normalizeEditorPreferences(session.editorPreferences),
+        );
+      }
 
       let drafts: ReadonlyArray<RecoveryDraftInfo> = [];
       try {
@@ -698,8 +729,9 @@ export function useAppController(
     })();
   }, [addOpenedFiles, dispatch, isCurrent, openWorkspaceRoot, port]);
 
-  // Persist the session (recent items, tab order, active tab, workspace)
-  // whenever any of them change. Draft content is persisted separately.
+  // Persist the session (recent items, tab order, active tab, workspace,
+  // theme and editor preferences) whenever any of them change. Draft content
+  // is persisted separately.
   const sessionTabKey = state.tabs.map((tab) => tab.path ?? "").join("\n");
   const sessionActivePath =
     state.tabs.find((tab) => tab.id === state.activeId)?.path ?? null;
@@ -715,10 +747,20 @@ export function useAppController(
       activePath:
         tabs.find((tab) => tab.id === stateRef.current.activeId)?.path ?? null,
       workspacePath: workspacePathRef.current,
+      theme,
+      editorPreferences,
     }).catch(() => {
       // Session persistence is best-effort.
     });
-  }, [port, recent, sessionTabKey, sessionActivePath, sessionWorkspacePath]);
+  }, [
+    port,
+    recent,
+    sessionTabKey,
+    sessionActivePath,
+    sessionWorkspacePath,
+    theme,
+    editorPreferences,
+  ]);
 
   const dismissSaveError = useCallback(() => setSaveError(null), []);
 
@@ -822,6 +864,10 @@ export function useAppController(
     saveError,
     workspace,
     recent,
+    theme,
+    editorPreferences,
+    setTheme,
+    setEditorPreferences,
     recoveryDrafts,
     newDocument,
     openFiles,

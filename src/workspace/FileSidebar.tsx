@@ -255,9 +255,9 @@ export default function FileSidebar({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
-      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-        <strong style={{ marginRight: "auto" }}>{root.title}</strong>
+    <div className="sidebar-panel">
+      <div className="sidebar-header">
+        <strong className="sidebar-title">{root.title}</strong>
         <button
           type="button"
           onClick={() => {
@@ -274,6 +274,7 @@ export default function FileSidebar({
       <input
         type="text"
         aria-label="筛选文件"
+        className="sidebar-filter"
         value={state.filter}
         onChange={(event) =>
           dispatch({ type: "filterChanged", filter: event.target.value })
@@ -283,8 +284,8 @@ export default function FileSidebar({
       {[...state.failed]
         .filter((path) => path === root.path || state.expanded.has(path))
         .map((path) => (
-          <div key={path} style={{ display: "flex", gap: 4, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>
+          <div key={path} className="sidebar-failure">
+            <span className="sidebar-failure-text">
               加载失败：{path === root.path ? root.title : relativeOf(path)}
             </span>
             <button
@@ -301,8 +302,8 @@ export default function FileSidebar({
       <ul
         role="tree"
         aria-label="工作区文件"
+        className="file-tree"
         onKeyDown={onTreeKeyDown}
-        style={{ listStyle: "none", margin: 0, padding: 0, overflowY: "auto" }}
       >
         {rows.map((row) => {
           const { entry, depth } = row;
@@ -317,6 +318,7 @@ export default function FileSidebar({
               aria-expanded={entry.isDirectory ? row.isExpanded : undefined}
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
+              className="file-tree-row"
               ref={(element) => {
                 if (element) rowRefs.current.set(entry.path, element);
                 else rowRefs.current.delete(entry.path);
@@ -324,13 +326,7 @@ export default function FileSidebar({
               onClick={() => {
                 if (!renaming) activate(entry);
               }}
-              style={{
-                display: "flex",
-                gap: 4,
-                alignItems: "center",
-                paddingLeft: depth * 12,
-                cursor: "default",
-              }}
+              style={{ paddingLeft: depth * 12 }}
             >
               {entry.isDirectory && (
                 <span aria-hidden="true">{row.isExpanded ? "▾" : "▸"}</span>
@@ -342,7 +338,7 @@ export default function FileSidebar({
                   onCancel={() => setEditing(null)}
                 />
               ) : (
-                <span style={{ flex: 1 }}>{entry.name}</span>
+                <span className="file-tree-name">{entry.name}</span>
               )}
               <button
                 type="button"

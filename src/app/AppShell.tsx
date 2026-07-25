@@ -4,7 +4,9 @@ import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentP
 import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
 import RecoveryDialog from "../recovery/RecoveryDialog";
+import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
+import SettingsDialog from "./SettingsDialog";
 import { type EventSubscriber, useAppController } from "./useAppController";
 
 export type ImageDropSubscriber = (
@@ -28,8 +30,10 @@ export default function AppShell({
   onDismissExternalError,
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
+  useTheme(controller.theme, controller.editorPreferences);
   const [sourceMode, setSourceMode] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [settingsRequested, setSettingsRequested] = useState(false);
   const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
   const imageDropSequenceRef = useRef(0);
@@ -46,7 +50,8 @@ export default function AppShell({
     (tab) => tab.id === controller.closeDocumentId,
   );
   // Only one modal at a time, in priority order: the close confirmation, the
-  // save-failure dialog, the launch recovery flow, then a per-tab conflict.
+  // save-failure dialog, the launch recovery flow, a per-tab conflict, then
+  // settings (the only user-triggered one, so it yields to everything else).
   const conflictTab =
     !closing && !controller.saveError && active?.status === "conflict"
       ? active
@@ -55,7 +60,11 @@ export default function AppShell({
     !closing && !controller.saveError && !conflictTab &&
     Boolean(controller.recoveryDrafts?.length);
   const saveErrorOpen = !closing && Boolean(controller.saveError);
-  const anyDialogOpen = Boolean(closing || saveErrorOpen || recoveryOpen || conflictTab);
+  const settingsOpen =
+    settingsRequested && !closing && !saveErrorOpen && !recoveryOpen && !conflictTab;
+  const anyDialogOpen = Boolean(
+    closing || saveErrorOpen || recoveryOpen || conflictTab || settingsOpen,
+  );
 
   // Opening a workspace always reveals the drawer; it stays manually
   // collapsible afterwards.
@@ -132,7 +141,7 @@ export default function AppShell({
       retryButtonRef.current?.focus();
       return;
     }
-    if (recoveryOpen || conflictTab) {
+    if (recoveryOpen || conflictTab || settingsOpen) {
       // These dialogs focus their own primary control on mount; the shell
       // only remembers where to return afterwards.
       if (!previousFocusRef.current) {
@@ -147,7 +156,7 @@ export default function AppShell({
     );
     if (previous?.isConnected) previous.focus();
     else (fallback ?? shellRef.current)?.focus();
-  }, [closing, controller.closeSaving, saveErrorOpen, recoveryOpen, conflictTab]);
+  }, [closing, controller.closeSaving, saveErrorOpen, recoveryOpen, conflictTab, settingsOpen]);
 
   const onDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape" && !controller.closeSaving) {
@@ -221,17 +230,17 @@ export default function AppShell({
     <main
       ref={shellRef}
       tabIndex={-1}
+      className="app-shell"
       onKeyDown={onShellKeyDown}
-      style={{ display: "grid", gridTemplateRows: "auto auto 1fr", minHeight: "100vh" }}
     >
       <div
         data-testid="app-background"
         inert={anyDialogOpen ? true : undefined}
         aria-hidden={anyDialogOpen ? true : undefined}
-        style={{ display: "contents" }}
+        className="app-background"
       >
-      <header aria-label="应用标题栏" style={{ display: "flex", gap: 8, padding: 8 }}>
-        <strong style={{ marginRight: "auto" }}>Markdown Edit</strong>
+      <header aria-label="应用标题栏" className="app-header">
+        <strong className="app-title">Markdown Edit</strong>
         {controller.state.tabs.length > 0 && (
           <>
             <button type="button" onClick={controller.newDocument}>新建</button>
@@ -251,16 +260,28 @@ export default function AppShell({
         {controller.workspace && sidebarCollapsed && (
           <button type="button" onClick={() => setSidebarCollapsed(false)}>展开侧栏</button>
         )}
+        <button
+          type="button"
+          onClick={(event) => {
+            // The dialog focuses its own first control before the shell's
+            // effect could capture this, so remember the invoker here.
+            previousFocusRef.current = event.currentTarget;
+            setSettingsRequested(true);
+          }}
+        >
+          设置
+        </button>
       </header>
 
       {controller.state.tabs.length > 0 && (
-        <div role="tablist" aria-label="打开的文档" style={{ display: "flex", gap: 4, padding: "0 8px" }}>
+        <div role="tablist" aria-label="打开的文档" className="tab-strip">
           {controller.state.tabs.map((tab, index) => (
-            <div key={tab.id} style={{ display: "flex" }}>
+            <div key={tab.id} className="tab-item">
               <button
                 type="button"
                 role="tab"
                 id={`document-tab-${tab.id}`}
+                className="tab"
                 aria-selected={tab.id === controller.state.activeId}
                 aria-controls={`document-panel-${tab.id}`}
                 tabIndex={tab.id === controller.state.activeId ? 0 : -1}
@@ -270,13 +291,14 @@ export default function AppShell({
                 {tab.title}
                 {tab.status !== "clean" && (
                   <>
-                    <span aria-hidden="true"> ●</span>
-                    <span style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}> 未保存</span>
+                    <span aria-hidden="true" className="tab-dirty"> ●</span>
+                    <span className="visually-hidden"> 未保存</span>
                   </>
                 )}
               </button>
               <button
                 type="button"
+                className="tab-close"
                 aria-label={`关闭 ${tab.title}`}
                 disabled={Boolean(tab.pendingSave)}
                 onClick={() => closeTab(tab.id)}
@@ -292,14 +314,11 @@ export default function AppShell({
         role={active ? "tabpanel" : undefined}
         id={active ? `document-panel-${active.id}` : undefined}
         aria-labelledby={active ? `document-tab-${active.id}` : undefined}
-        style={{ minHeight: 0, padding: 8, display: "flex", gap: 8 }}
+        className="app-body"
       >
         {controller.workspace && !sidebarCollapsed && (
-          <aside
-            aria-label="文件侧栏"
-            style={{ width: 260, minWidth: 220, maxWidth: 320, display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}
-          >
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <aside aria-label="文件侧栏" className="sidebar">
+            <div className="sidebar-actions">
               <button type="button" onClick={() => setSidebarCollapsed(true)}>收起侧栏</button>
             </div>
             <FileSidebar
@@ -310,7 +329,7 @@ export default function AppShell({
             />
           </aside>
         )}
-        <div style={{ flex: 1, minWidth: 0, display: "grid" }}>
+        <div className="editor-area">
         {active ? (
           <MarkdownEditor
             key={active.id}
@@ -325,17 +344,17 @@ export default function AppShell({
             imageDrop={imageDrop}
           />
         ) : (
-          <div aria-label="空白状态" style={{ display: "grid", placeItems: "center", gap: 12 }}>
+          <div role="region" aria-label="空白状态" className="empty-state">
             <p>打开 Markdown 文件或创建新文档。</p>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="empty-actions">
               <button type="button" onClick={controller.newDocument}>新建</button>
               <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
               <button type="button" onClick={() => void controller.openWorkspace()}>打开文件夹</button>
             </div>
             {controller.state.tabs.length === 0 && controller.recent.length > 0 && (
-              <section aria-label="最近打开" style={{ display: "grid", gap: 4 }}>
-                <h2 style={{ fontSize: "inherit", margin: 0 }}>最近打开</h2>
-                <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}>
+              <section aria-label="最近打开" className="recent-section">
+                <h2 className="recent-title">最近打开</h2>
+                <ul className="recent-list">
                   {controller.recent.map((item) => (
                     <li key={`${item.kind}:${item.path}`}>
                       <button
@@ -358,7 +377,7 @@ export default function AppShell({
       </div>
 
       {(controller.error || externalError) && (
-        <div role="alert">
+        <div role="alert" className="app-alert">
           <span>{controller.error || externalError}</span>
           {!controller.error && externalError && onDismissExternalError && (
             <button type="button" aria-label="关闭错误提示" onClick={onDismissExternalError}>×</button>
@@ -367,6 +386,7 @@ export default function AppShell({
       )}
 
       {closing && (
+        <div className="dialog-overlay">
         <div
           ref={dialogRef}
           role="dialog"
@@ -378,6 +398,7 @@ export default function AppShell({
         >
           <h2 id="close-dialog-title">保存更改</h2>
           <p>是否保存对 {closing.title} 的更改？</p>
+          <div className="dialog-actions">
           <button
             ref={saveButtonRef}
             type="button"
@@ -388,10 +409,13 @@ export default function AppShell({
           </button>
           <button type="button" disabled={controller.closeSaving} onClick={() => void controller.confirmClose("discard")}>放弃</button>
           <button type="button" disabled={controller.closeSaving} onClick={() => void controller.confirmClose("cancel")}>取消</button>
+          </div>
+        </div>
         </div>
       )}
 
       {saveErrorOpen && controller.saveError && (
+        <div className="dialog-overlay">
         <div
           role="dialog"
           tabIndex={-1}
@@ -401,22 +425,28 @@ export default function AppShell({
         >
           <h2 id="save-error-dialog-title">保存失败</h2>
           <p>{controller.saveError.message}</p>
+          <div className="dialog-actions">
           <button ref={retryButtonRef} type="button" onClick={controller.retrySave}>重试</button>
           <button type="button" onClick={controller.saveErrorSaveAs}>另存为…</button>
           <button type="button" onClick={controller.dismissSaveError}>取消</button>
+          </div>
+        </div>
         </div>
       )}
 
       {recoveryOpen && controller.recoveryDrafts && (
+        <div className="dialog-overlay">
         <RecoveryDialog
           drafts={controller.recoveryDrafts}
           onRestore={(info) => void controller.restoreDraft(info)}
           onDiscard={(info) => void controller.discardRecoveryDraft(info)}
           readSource={async (draftId) => (await port.readDraft(draftId)).text}
         />
+        </div>
       )}
 
       {conflictTab && (
+        <div className="dialog-overlay">
         <ConflictDialog
           title={conflictTab.title}
           path={conflictTab.path}
@@ -424,6 +454,19 @@ export default function AppShell({
           onKeepLocal={() => controller.keepLocalVersion(conflictTab.id)}
           onSaveAs={() => void controller.saveAs(conflictTab.id)}
         />
+        </div>
+      )}
+
+      {settingsOpen && (
+        <div className="dialog-overlay">
+        <SettingsDialog
+          theme={controller.theme}
+          editorPreferences={controller.editorPreferences}
+          onThemeChange={controller.setTheme}
+          onEditorPreferencesChange={controller.setEditorPreferences}
+          onClose={() => setSettingsRequested(false)}
+        />
+        </div>
       )}
     </main>
   );
