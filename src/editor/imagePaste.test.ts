@@ -191,4 +191,31 @@ describe("imagePasteExtension", () => {
     expect(view.state.doc.toString()).toBe("");
     expect(saveClipboardImage).not.toHaveBeenCalled();
   });
+
+  it("swallows drops on a read-only view without inserting", async () => {
+    const saveClipboardImage = vi.fn(async (_input: ClipboardImageInput) => null);
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "locked",
+        extensions: [
+          EditorState.readOnly.of(true),
+          markdown({ extensions: [GFM] }),
+          imagePasteExtension({ saveClipboardImage, getDocumentPath: () => "/notes/a.md" }),
+        ],
+      }),
+    });
+    views.push(view);
+    const file = new File([new Uint8Array([1])], "pic.png", { type: "image/png" });
+
+    const event = dropEvent(file, { "text/uri-list": "file:///Pictures/pic.png" });
+    view.contentDOM.dispatchEvent(event);
+
+    // The drop is consumed (no browser navigation) but never inserted.
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("locked");
+    expect(saveClipboardImage).not.toHaveBeenCalled();
+  });
 });

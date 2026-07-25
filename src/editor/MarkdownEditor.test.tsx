@@ -292,6 +292,31 @@ describe("MarkdownEditor", () => {
     expect(editorView().state.doc.toString()).toBe("hello");
   });
 
+  it("ignores a native image drop delivered in reading mode and accepts drops after switching back", () => {
+    const onChange = vi.fn();
+    const rendered = renderEditor({ value: "hello", viewMode: "reading", onChange });
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        imageDrop={{ sequence: 1, paths: ["/p/pic.png"], x: 0, y: 0 }}
+      />,
+    );
+    expect(editorView().state.doc.toString()).toBe("hello");
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Drops land again once the same view is editable.
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        viewMode="editing"
+        imageDrop={{ sequence: 2, paths: ["/q/x.png"], x: 0, y: 0 }}
+      />,
+    );
+    expect(editorView().state.doc.toString()).toBe("![image](/q/x.png)hello");
+    expect(onChange).toHaveBeenCalledWith("![image](/q/x.png)hello");
+  });
+
   describe("light performance mode", () => {
     // Cursor (moved to the end) must not touch the math/image ranges:
     // widgets reveal their Markdown source while the selection overlaps them.

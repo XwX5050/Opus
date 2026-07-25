@@ -131,7 +131,11 @@ export const imagePasteExtension = (options: ImagePasteOptions): Extension =>
       if (!file) return;
       const path = droppedFilePath(file, transfer);
       if (!path) return;
+      // Swallow the drop even when read-only: letting it through would make
+      // the browser navigate to the file, and inserting would bypass the
+      // read-only facet (programmatic dispatches are not filtered).
       event.preventDefault();
+      if (view.state.readOnly) return;
       const at = view.posAtCoords({ x: event.clientX, y: event.clientY });
       insertDroppedImages(view, [path], at);
     },

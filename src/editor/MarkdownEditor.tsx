@@ -213,7 +213,11 @@ export default function MarkdownEditor({
   useEffect(() => {
     const view = viewRef.current;
     if (!view || !imageDrop || imageDrop.sequence === consumedImageDropRef.current) return;
+    // Consume the sequence even when read-only (reading mode): the read-only
+    // facet does not filter programmatic dispatches, and skipping without
+    // consuming would let the stale drop land when editing resumes.
     consumedImageDropRef.current = imageDrop.sequence;
+    if (view.state.readOnly) return;
     insertDroppedImages(
       view,
       imageDrop.paths,

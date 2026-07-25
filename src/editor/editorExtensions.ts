@@ -82,8 +82,9 @@ export const editorExtensions = (
   livePreview,
   search({ top: true }),
   keymap.of([
-    // The shifted binding comes first: CodeMirror also matches "Mod-e"
-    // against a Mod-Shift-E event, so the more specific binding must win.
+    // Both view-mode toggles live ahead of the other bindings. CodeMirror
+    // resolves shifted letters exactly (through the base-key fallback on
+    // event.keyCode), so the two never shadow each other regardless of order.
     {
       key: "Mod-Shift-e",
       preventDefault: true,
