@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::Manager;
-use tauri_plugin_dialog::DialogExt;
 
 pub type SharedAssetScopes = Mutex<AssetScopeRegistry>;
 pub type SharedWatchService = Mutex<WatchService>;
@@ -292,18 +291,6 @@ pub fn open_workspace_impl(root: PathBuf) -> Result<WorkspaceRootInfo, CommandEr
 #[tauri::command]
 pub fn open_workspace(root: PathBuf) -> Result<WorkspaceRootInfo, CommandError> {
     open_workspace_impl(root)
-}
-
-#[tauri::command]
-pub fn choose_workspace(app: tauri::AppHandle) -> Result<Option<WorkspaceRootInfo>, CommandError> {
-    let Some(folder) = app.dialog().file().blocking_pick_folder() else {
-        return Ok(None);
-    };
-    let path = folder.into_path().map_err(|error| CommandError {
-        code: "io".into(),
-        message: error.to_string(),
-    })?;
-    open_workspace_impl(path).map(Some)
 }
 
 pub fn list_directory_impl(

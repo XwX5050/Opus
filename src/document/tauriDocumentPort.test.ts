@@ -307,16 +307,27 @@ describe("tauri document port workspace commands", () => {
     expect(entry).toEqual({ name: "renamed.md", path: "/ws/renamed.md", isDirectory: false });
   });
 
-  it("returns null when the workspace picker is cancelled and maps a chosen root", async () => {
-    invoke.mockResolvedValueOnce(null).mockResolvedValueOnce({ path: "/ws", title: "ws" });
+  it("chooseWorkspace picks a directory through the dialog plugin and validates via open_workspace", async () => {
+    open.mockResolvedValue("/ws");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "open_workspace") return { path: "/ws", title: "ws" };
+      throw new Error(`unexpected ${command}`);
+    });
     const port = createTauriDocumentPort();
 
-    await expect(port.chooseWorkspace()).resolves.toBeNull();
-    await expect(port.chooseWorkspace()).resolves.toEqual({ path: "/ws", title: "ws" });
-    expect(invoke.mock.calls).toEqual([
-      ["choose_workspace"],
-      ["choose_workspace"],
-    ]);
+    const root = await port.chooseWorkspace();
+
+    expect(open).toHaveBeenCalledWith({ directory: true, multiple: false });
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { root: "/ws" });
+    expect(root).toEqual({ path: "/ws", title: "ws" });
+  });
+
+  it("chooseWorkspace returns null on cancel without invoking the backend", async () => {
+    open.mockResolvedValue(null);
+
+    await expect(createTauriDocumentPort().chooseWorkspace()).resolves.toBeNull();
+
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 

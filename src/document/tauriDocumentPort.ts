@@ -252,8 +252,14 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async chooseWorkspace(): Promise<WorkspaceRoot | null> {
       try {
-        const dto = await invoke<WorkspaceRootDto | null>("choose_workspace");
-        return dto === null ? null : workspaceRoot(dto);
+        // The native panel must come from the JS dialog plugin (presented on
+        // the main thread); a blocking_pick_folder in a sync Rust command
+        // freezes the app on macOS.
+        const selected = await open({ directory: true, multiple: false });
+        const path = Array.isArray(selected) ? selected[0] : selected;
+        if (!path) return null;
+        const dto = await invoke<WorkspaceRootDto>("open_workspace", { root: path });
+        return workspaceRoot(dto);
       } catch (error) { throw failure(error); }
     },
     async openWorkspacePath(path: string): Promise<WorkspaceRoot> {

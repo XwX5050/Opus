@@ -25,7 +25,6 @@ pub fn run() {
             document_commands::acquire_document_scope,
             document_commands::acquire_workspace_scope,
             document_commands::release_asset_scope,
-            document_commands::choose_workspace,
             document_commands::open_workspace,
             document_commands::list_directory,
             document_commands::create_markdown_file,
