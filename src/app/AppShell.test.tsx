@@ -461,6 +461,25 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "新建" })).toHaveFocus();
   });
 
+  it("falls back to the editor when a tab reopens while the tabs section is collapsed", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([file("/a.md", "a"), file("/b.md", "b")]);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "关闭 b.md" }));
+
+    // With the section collapsed the reopened tab has no rendered button to
+    // receive focus; the restore must land somewhere sensible instead.
+    await user.click(screen.getByRole("button", { name: "打开的标签" }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+
+    screen.getByRole("main").focus();
+    await user.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(editor()).toHaveFocus();
+  });
+
   it("disposes an injected event bridge safely after unmount", async () => {
     const ready = vi.fn(async () => {});
     const dispose = vi.fn(async () => {});
@@ -658,6 +677,57 @@ describe("AppShell workspace drawer", () => {
     await waitFor(() =>
       expect(port.session?.sidebar?.collapsed).toBe(true),
     );
+  });
+
+  it("keeps the restored whole-sidebar collapse when the session reopens a workspace", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/alpha.md", file("/notes/alpha.md")]]),
+      {
+        workspace: { path: "/notes", title: "notes" },
+        session: {
+          recent: [],
+          openPaths: [],
+          activePath: null,
+          workspacePath: "/notes",
+          sidebar: {
+            collapsed: true,
+            tabsSectionCollapsed: false,
+            filesSectionCollapsed: false,
+          },
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+
+    // The workspace is restored, but the persisted collapse wins: the
+    // auto-reveal only applies to explicit user opens.
+    await screen.findByRole("button", { name: "展开侧栏" });
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+
+    // An explicit 打开文件夹 for the already-open workspace reveals it again.
+    await user.click(screen.getByRole("button", { name: "展开侧栏" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    expect(
+      await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
+    ).toBeInTheDocument();
+  });
+
+  it("points section headers at their collapsible content with aria-controls", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    await user.click(
+      await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
+    );
+
+    for (const name of ["打开的标签", "文件夹"]) {
+      const header = within(sidebar).getByRole("button", { name });
+      const controlledId = header.getAttribute("aria-controls");
+      expect(controlledId).toBeTruthy();
+      expect(document.getElementById(controlledId!)).not.toBeNull();
+    }
   });
 });
 

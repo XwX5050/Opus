@@ -57,6 +57,26 @@ describe("accessibility: roles and names", () => {
     expect(panel).toHaveAttribute("aria-labelledby", selected!.id);
   });
 
+  it("keeps the tablist outside the tabpanel and drops a dangling aria-labelledby", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md")]]),
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).queryByRole("tablist")).not.toBeInTheDocument();
+    const tab = screen.getByRole("tab", { name: /a\.md/ });
+    expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+
+    // Collapsing the section removes the tab element; the panel must not
+    // keep a label reference to a node that no longer exists.
+    await user.click(screen.getByRole("button", { name: "打开的标签" }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("tabpanel")).not.toHaveAttribute("aria-labelledby");
+  });
+
   it("exposes the workspace tree with a name and levelled items", async () => {
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(

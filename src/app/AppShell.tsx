@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
+import type { RecentItem } from "../document/types";
 import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
 import { useAutomaticPerformanceMode } from "./usePerformanceMode";
@@ -38,6 +39,10 @@ export default function AppShell({
   const setSidebar = controller.setSidebarPreferences;
   const sidebarAvailable =
     controller.state.tabs.length > 0 || controller.workspace !== null;
+  // The tab element only exists when the sidebar and its tabs section are
+  // both expanded; the tabpanel drops its label reference otherwise.
+  const activeTabVisible =
+    sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
   const [settingsRequested, setSettingsRequested] = useState(false);
   const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
@@ -97,10 +102,19 @@ export default function AppShell({
     closing || saveErrorOpen || recoveryOpen || conflictTab || settingsOpen,
   );
 
-  // Opening a workspace always reveals the drawer; it stays manually
-  // collapsible afterwards.
+  // Set by explicit user open actions (picker buttons, recent-folder items);
+  // only those reveal the drawer — session restores keep the persisted
+  // collapse state.
+  const revealSidebarOnOpenRef = useRef(false);
+
+  // Opening a workspace through an explicit user action always reveals the
+  // drawer; it stays manually collapsible afterwards.
   useEffect(() => {
-    if (workspacePath) setSidebar((current) => ({ ...current, collapsed: false }));
+    if (!workspacePath || !revealSidebarOnOpenRef.current) return;
+    revealSidebarOnOpenRef.current = false;
+    setSidebar((current) =>
+      current.collapsed ? { ...current, collapsed: false } : current,
+    );
   }, [workspacePath, setSidebar]);
 
   useEffect(() => {
@@ -127,6 +141,16 @@ export default function AppShell({
     controller.reopenClosed();
   };
 
+  const openWorkspaceFromUser = () => {
+    revealSidebarOnOpenRef.current = true;
+    void controller.openWorkspace();
+  };
+
+  const openRecentFromUser = (item: RecentItem) => {
+    if (item.kind === "folder") revealSidebarOnOpenRef.current = true;
+    void controller.openRecent(item);
+  };
+
   const closeTab = (id: string) => {
     const document = controller.state.tabs.find((tab) => tab.id === id);
     if (document?.status === "clean" && !document.pendingSave) {
@@ -146,9 +170,15 @@ export default function AppShell({
   useEffect(() => {
     if (!pendingTabFocusRef.current) return;
     pendingTabFocusRef.current = null;
-    const target = controller.state.activeId
-      ? document.getElementById(`document-tab-${controller.state.activeId}`)
-      : document.querySelector<HTMLElement>('[aria-label="空白状态"] button');
+    // The tab button may not be rendered (sidebar or its tabs section
+    // collapsed); fall back to the editor, then the shell, like the
+    // dialog-restore path below.
+    const target =
+      (controller.state.activeId
+        ? document.getElementById(`document-tab-${controller.state.activeId}`)
+        : document.querySelector<HTMLElement>('[aria-label="空白状态"] button')) ??
+      document.querySelector<HTMLElement>('[role="textbox"]') ??
+      shellRef.current;
     target?.focus();
   }, [
     controller.state.activeId,
@@ -260,7 +290,7 @@ export default function AppShell({
           <>
             <button type="button" onClick={controller.newDocument}>新建</button>
             <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
-            <button type="button" onClick={() => void controller.openWorkspace()}>打开文件夹</button>
+            <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
             <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
             <button
               type="button"
@@ -293,12 +323,7 @@ export default function AppShell({
         </button>
       </header>
 
-      <section
-        role={active ? "tabpanel" : undefined}
-        id={active ? `document-panel-${active.id}` : undefined}
-        aria-labelledby={active ? `document-tab-${active.id}` : undefined}
-        className="app-body"
-      >
+      <section className="app-body">
         {sidebarAvailable && !sidebar.collapsed && (
           <aside aria-label="侧栏" className="sidebar">
             <div className="sidebar-actions">
@@ -310,11 +335,12 @@ export default function AppShell({
               </button>
             </div>
             {controller.state.tabs.length > 0 && (
-              <section aria-label="打开的标签" className="sidebar-section">
+              <section className="sidebar-section">
                 <button
                   type="button"
                   className="sidebar-section-header"
                   aria-expanded={!sidebar.tabsSectionCollapsed}
+                  aria-controls="sidebar-tabs-content"
                   onClick={() =>
                     setSidebar((current) => ({
                       ...current,
@@ -324,22 +350,25 @@ export default function AppShell({
                 >
                   打开的标签
                 </button>
-                {!sidebar.tabsSectionCollapsed && (
-                  <TabList
-                    tabs={controller.state.tabs}
-                    activeId={controller.state.activeId}
-                    onActivate={controller.activate}
-                    onClose={closeTab}
-                  />
-                )}
+                <div id="sidebar-tabs-content">
+                  {!sidebar.tabsSectionCollapsed && (
+                    <TabList
+                      tabs={controller.state.tabs}
+                      activeId={controller.state.activeId}
+                      onActivate={controller.activate}
+                      onClose={closeTab}
+                    />
+                  )}
+                </div>
               </section>
             )}
             {controller.workspace && (
-              <section aria-label="文件夹" className="sidebar-section">
+              <section className="sidebar-section">
                 <button
                   type="button"
                   className="sidebar-section-header"
                   aria-expanded={!sidebar.filesSectionCollapsed}
+                  aria-controls="sidebar-files-content"
                   onClick={() =>
                     setSidebar((current) => ({
                       ...current,
@@ -349,19 +378,28 @@ export default function AppShell({
                 >
                   文件夹
                 </button>
-                {!sidebar.filesSectionCollapsed && (
-                  <FileSidebar
-                    root={controller.workspace}
-                    port={port}
-                    onOpenFile={(path) => void controller.openPath(path)}
-                    onCloseWorkspace={controller.closeWorkspace}
-                  />
-                )}
+                <div id="sidebar-files-content">
+                  {!sidebar.filesSectionCollapsed && (
+                    <FileSidebar
+                      root={controller.workspace}
+                      port={port}
+                      onOpenFile={(path) => void controller.openPath(path)}
+                      onCloseWorkspace={controller.closeWorkspace}
+                    />
+                  )}
+                </div>
               </section>
             )}
           </aside>
         )}
-        <div className="editor-area">
+        <div
+          role={active ? "tabpanel" : undefined}
+          id={active ? `document-panel-${active.id}` : undefined}
+          aria-labelledby={
+            active && activeTabVisible ? `document-tab-${active.id}` : undefined
+          }
+          className="editor-area"
+        >
         {showPerfBanner && active && (
           <div role="status" className="perf-banner">
             <span className="perf-banner-text">
@@ -406,7 +444,7 @@ export default function AppShell({
             <div className="empty-actions">
               <button type="button" onClick={controller.newDocument}>新建</button>
               <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
-              <button type="button" onClick={() => void controller.openWorkspace()}>打开文件夹</button>
+              <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
             </div>
             {controller.state.tabs.length === 0 && controller.recent.length > 0 && (
               <section aria-label="最近打开" className="recent-section">
@@ -417,7 +455,7 @@ export default function AppShell({
                       <button
                         type="button"
                         aria-label={`${item.kind === "file" ? "文件" : "文件夹"} ${item.path}`}
-                        onClick={() => void controller.openRecent(item)}
+                        onClick={() => openRecentFromUser(item)}
                       >
                         <span aria-hidden="true">{item.kind === "file" ? "📄 " : "📁 "}</span>
                         {item.path}

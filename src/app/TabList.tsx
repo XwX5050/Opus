@@ -15,6 +15,7 @@ export interface TabListProps {
  */
 export default function TabList({ tabs, activeId, onActivate, onClose }: TabListProps) {
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (tabs.length === 0) return;
     let targetIndex: number | null = null;
     if (event.key === "ArrowUp") targetIndex = (index - 1 + tabs.length) % tabs.length;
     if (event.key === "ArrowDown") targetIndex = (index + 1) % tabs.length;
