@@ -5,6 +5,7 @@ import type {
   OpenedFile,
   PathPlatform,
   PendingWriteRequest,
+  RecoveryDraft,
   SaveTarget,
 } from "./types";
 
@@ -38,6 +39,21 @@ export type DocumentAction =
       version: string;
     }
   | { type: "externalMissing"; id: string }
+  | { type: "externalChanged"; id: string; file: OpenedFile }
+  | {
+      type: "externalMoved";
+      from: string;
+      to: string;
+      pathPlatform?: PathPlatform;
+    }
+  | {
+      type: "documentRestored";
+      id: string;
+      draft: RecoveryDraft;
+      pathPlatform?: PathPlatform;
+    }
+  | { type: "diskVersionLoaded"; id: string; file: OpenedFile }
+  | { type: "conflictKeptLocal"; id: string }
   | {
       type: "closeConfirmed";
       id: string;
@@ -354,6 +370,113 @@ export const documentReducer = (
       return replaceTab(state, action.id, (document) => ({
         ...document,
         status: "missing",
+      }));
+
+    case "externalChanged":
+      return replaceTab(state, action.id, (document) => {
+        // A clean tab with no write in flight follows the disk; anything else
+        // keeps the local buffer and surfaces a conflict. The decision is made
+        // here, atomically, so edits racing the reload are never overwritten.
+        if (document.status === "clean" && !document.pendingSave) {
+          return snapshotFromFile(document.id, action.file);
+        }
+        return {
+          ...document,
+          modifiedUnixMs: action.file.modifiedUnixMs,
+          version: action.file.version,
+          status: "conflict",
+        };
+      });
+
+    case "externalMoved": {
+      const platform = action.pathPlatform ?? "macos";
+      const fromKey = normalizePathKey(action.from, platform);
+      const toKey = normalizePathKey(action.to, platform);
+      if (fromKey === toKey) return state;
+      const tab = state.tabs.find(
+        (candidate) =>
+          candidate.path !== null &&
+          normalizePathKey(candidate.path, platform) === fromKey,
+      );
+      // Only clean tabs follow a move. A dirty/conflicted/missing tab keeps
+      // its original path and text, so the user's buffer stays saveable at
+      // the location it was opened from instead of silently retargeting a
+      // file another process now owns.
+      if (!tab || tab.status !== "clean" || tab.pendingSave) return state;
+      const collision = state.tabs.some(
+        (candidate) =>
+          candidate.id !== tab.id &&
+          candidate.path !== null &&
+          normalizePathKey(candidate.path, platform) === toKey,
+      );
+      if (collision) return state;
+      return replaceTab(state, tab.id, (document) => ({
+        ...document,
+        path: action.to,
+        title: titleFromPath(action.to),
+      }));
+    }
+
+    case "documentRestored": {
+      const sameId = state.tabs.find((tab) => tab.id === action.id);
+      if (sameId) return { ...state, activeId: sameId.id };
+
+      const platform = action.pathPlatform ?? "macos";
+      const draft = action.draft;
+      const existing =
+        draft.originalPath === null
+          ? undefined
+          : state.tabs.find(
+              (tab) =>
+                tab.path !== null &&
+                normalizePathKey(tab.path, platform) ===
+                  normalizePathKey(draft.originalPath!, platform),
+            );
+      if (existing) {
+        // Session restore may already have reopened the file from disk; merge
+        // the draft's unsaved text into that tab instead of duplicating it.
+        const tabs = state.tabs.map((tab): DocumentSnapshot =>
+          tab.id === existing.id
+            ? {
+                ...tab,
+                text: draft.text,
+                hasUtf8Bom: draft.hasUtf8Bom,
+                newline: draft.newline,
+                status: draft.text === tab.savedText ? "clean" : "dirty",
+                pendingSave: undefined,
+              }
+            : tab,
+        );
+        return { ...state, tabs, activeId: existing.id };
+      }
+
+      // The draft only stores a hash of the last saved text, so the restored
+      // tab treats the saved text as unknown ("") and stays dirty until the
+      // user saves or discards it.
+      const restored: DocumentSnapshot = {
+        id: action.id,
+        path: draft.originalPath,
+        title: draft.title,
+        text: draft.text,
+        savedText: "",
+        hasUtf8Bom: draft.hasUtf8Bom,
+        newline: draft.newline,
+        modifiedUnixMs: null,
+        version: draft.savedVersion,
+        status: draft.text === "" ? "clean" : "dirty",
+      };
+      return { ...state, tabs: [...state.tabs, restored], activeId: action.id };
+    }
+
+    case "diskVersionLoaded":
+      return replaceTab(state, action.id, (document) =>
+        snapshotFromFile(document.id, action.file),
+      );
+
+    case "conflictKeptLocal":
+      return replaceTab(state, action.id, (document) => ({
+        ...document,
+        status: document.text === document.savedText ? "clean" : "dirty",
       }));
 
     case "closeConfirmed": {

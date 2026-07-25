@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
+import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
+import RecoveryDialog from "../recovery/RecoveryDialog";
 import FileSidebar from "../workspace/FileSidebar";
 import { type EventSubscriber, useAppController } from "./useAppController";
 
@@ -32,6 +34,7 @@ export default function AppShell({
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
   const imageDropSequenceRef = useRef(0);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -42,6 +45,17 @@ export default function AppShell({
   const closing = controller.state.tabs.find(
     (tab) => tab.id === controller.closeDocumentId,
   );
+  // Only one modal at a time, in priority order: the close confirmation, the
+  // save-failure dialog, the launch recovery flow, then a per-tab conflict.
+  const conflictTab =
+    !closing && !controller.saveError && active?.status === "conflict"
+      ? active
+      : null;
+  const recoveryOpen =
+    !closing && !controller.saveError && !conflictTab &&
+    Boolean(controller.recoveryDrafts?.length);
+  const saveErrorOpen = !closing && Boolean(controller.saveError);
+  const anyDialogOpen = Boolean(closing || saveErrorOpen || recoveryOpen || conflictTab);
 
   // Opening a workspace always reveals the drawer; it stays manually
   // collapsible afterwards.
@@ -82,7 +96,7 @@ export default function AppShell({
   };
 
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (closing) return;
+    if (anyDialogOpen) return;
     if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "t") return;
     if ((event.target as HTMLElement).closest(".cm-editor")) return;
     event.preventDefault();
@@ -111,6 +125,21 @@ export default function AppShell({
       else saveButtonRef.current?.focus();
       return;
     }
+    if (saveErrorOpen) {
+      if (!previousFocusRef.current) {
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+      }
+      retryButtonRef.current?.focus();
+      return;
+    }
+    if (recoveryOpen || conflictTab) {
+      // These dialogs focus their own primary control on mount; the shell
+      // only remembers where to return afterwards.
+      if (!previousFocusRef.current) {
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+      }
+      return;
+    }
     const previous = previousFocusRef.current;
     previousFocusRef.current = null;
     const fallback = document.querySelector<HTMLElement>(
@@ -118,7 +147,7 @@ export default function AppShell({
     );
     if (previous?.isConnected) previous.focus();
     else (fallback ?? shellRef.current)?.focus();
-  }, [closing, controller.closeSaving]);
+  }, [closing, controller.closeSaving, saveErrorOpen, recoveryOpen, conflictTab]);
 
   const onDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape" && !controller.closeSaving) {
@@ -142,6 +171,34 @@ export default function AppShell({
       event.preventDefault();
       first.focus();
     }
+  };
+
+  const trapDialogFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    const first = buttons[0];
+    const last = buttons.at(-1);
+    if (!first || !last) {
+      event.preventDefault();
+      event.currentTarget.focus();
+      return;
+    }
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const onSaveErrorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      controller.dismissSaveError();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    trapDialogFocus(event);
   };
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -169,8 +226,8 @@ export default function AppShell({
     >
       <div
         data-testid="app-background"
-        inert={closing ? true : undefined}
-        aria-hidden={closing ? true : undefined}
+        inert={anyDialogOpen ? true : undefined}
+        aria-hidden={anyDialogOpen ? true : undefined}
         style={{ display: "contents" }}
       >
       <header aria-label="应用标题栏" style={{ display: "flex", gap: 8, padding: 8 }}>
@@ -275,6 +332,25 @@ export default function AppShell({
               <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
               <button type="button" onClick={() => void controller.openWorkspace()}>打开文件夹</button>
             </div>
+            {controller.state.tabs.length === 0 && controller.recent.length > 0 && (
+              <section aria-label="最近打开" style={{ display: "grid", gap: 4 }}>
+                <h2 style={{ fontSize: "inherit", margin: 0 }}>最近打开</h2>
+                <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}>
+                  {controller.recent.map((item) => (
+                    <li key={`${item.kind}:${item.path}`}>
+                      <button
+                        type="button"
+                        aria-label={`${item.kind === "file" ? "文件" : "文件夹"} ${item.path}`}
+                        onClick={() => void controller.openRecent(item)}
+                      >
+                        <span aria-hidden="true">{item.kind === "file" ? "📄 " : "📁 "}</span>
+                        {item.path}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </div>
         )}
         </div>
@@ -313,6 +389,41 @@ export default function AppShell({
           <button type="button" disabled={controller.closeSaving} onClick={() => void controller.confirmClose("discard")}>放弃</button>
           <button type="button" disabled={controller.closeSaving} onClick={() => void controller.confirmClose("cancel")}>取消</button>
         </div>
+      )}
+
+      {saveErrorOpen && controller.saveError && (
+        <div
+          role="dialog"
+          tabIndex={-1}
+          aria-modal="true"
+          aria-labelledby="save-error-dialog-title"
+          onKeyDown={onSaveErrorKeyDown}
+        >
+          <h2 id="save-error-dialog-title">保存失败</h2>
+          <p>{controller.saveError.message}</p>
+          <button ref={retryButtonRef} type="button" onClick={controller.retrySave}>重试</button>
+          <button type="button" onClick={controller.saveErrorSaveAs}>另存为…</button>
+          <button type="button" onClick={controller.dismissSaveError}>取消</button>
+        </div>
+      )}
+
+      {recoveryOpen && controller.recoveryDrafts && (
+        <RecoveryDialog
+          drafts={controller.recoveryDrafts}
+          onRestore={(info) => void controller.restoreDraft(info)}
+          onDiscard={(info) => void controller.discardRecoveryDraft(info)}
+          readSource={async (draftId) => (await port.readDraft(draftId)).text}
+        />
+      )}
+
+      {conflictTab && (
+        <ConflictDialog
+          title={conflictTab.title}
+          path={conflictTab.path}
+          onLoadDisk={() => void controller.loadDiskVersion(conflictTab.id)}
+          onKeepLocal={() => controller.keepLocalVersion(conflictTab.id)}
+          onSaveAs={() => void controller.saveAs(conflictTab.id)}
+        />
       )}
     </main>
   );

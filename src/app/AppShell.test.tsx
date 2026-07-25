@@ -74,6 +74,9 @@ class InspectablePort implements DocumentPort {
   async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
   async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
   async discardDraft() {}
+  async loadSession() { return null; }
+  async saveSession() {}
+  async onCloseRequested() { return () => {}; }
 }
 
 const editor = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
@@ -288,6 +291,10 @@ describe("AppShell", () => {
     await user.click(screen.getByRole("button", { name: "另存为…" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/保存.*路径.*冲突/);
+    // The conflicted tab blocks behind its resolution dialog; keeping the
+    // local version re-dirties the tab and returns to the shell.
+    const conflictDialog = screen.getByRole("dialog", { name: "文件已在磁盘上更改" });
+    await user.click(within(conflictDialog).getByRole("button", { name: "保留当前版本" }));
     expect(screen.getByRole("tab", { name: /original\.md.*未保存/ })).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "关闭 original.md" }));
@@ -326,6 +333,9 @@ describe("AppShell", () => {
 
     expect(port.writes).toHaveLength(0);
     expect(await screen.findByRole("alert")).toHaveTextContent(/冲突/);
+    // Resolve the conflict dialog so both retained tabs are reachable again.
+    const conflictDialog = screen.getByRole("dialog", { name: "文件已在磁盘上更改" });
+    await user.click(within(conflictDialog).getByRole("button", { name: "保留当前版本" }));
     expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
     expect(screen.getByRole("tab", { name: /a\.md/ })).toBeVisible();
     expect(screen.getByRole("tab", { name: /b\.md/ })).toBeVisible();
@@ -559,5 +569,226 @@ describe("AppShell workspace drawer", () => {
 
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开侧栏" })).not.toBeInTheDocument();
+  });
+});
+
+describe("AppShell recent items and recovery", () => {
+  const recentPort = () =>
+    new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "alpha")]]),
+      {
+        workspace: { path: "/notes", title: "notes" },
+        session: {
+          recent: [
+            { path: "/notes/a.md", kind: "file" },
+            { path: "/notes", kind: "folder" },
+            { path: "/notes/gone.md", kind: "file" },
+          ],
+          openPaths: [],
+          activePath: null,
+          workspacePath: null,
+        },
+      },
+    );
+
+  it("renders persisted recent items in the empty state and opens them through the port", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={recentPort()} />);
+
+    const recent = await screen.findByRole("region", { name: "最近打开" });
+    expect(within(recent).getByRole("button", { name: "文件 /notes/a.md" })).toBeVisible();
+    expect(within(recent).getByRole("button", { name: "文件夹 /notes" })).toBeVisible();
+
+    await user.click(within(recent).getByRole("button", { name: "文件夹 /notes" }));
+    expect(await screen.findByRole("complementary", { name: "文件侧栏" })).toBeVisible();
+
+    await user.click(
+      within(await screen.findByRole("region", { name: "最近打开" })).getByRole("button", {
+        name: "文件 /notes/a.md",
+      }),
+    );
+    expect(await screen.findByRole("tab", { name: /a\.md/ })).toBeVisible();
+    expect(editor()).toHaveTextContent("alpha");
+    expect(screen.queryByRole("region", { name: "最近打开" })).not.toBeInTheDocument();
+  });
+
+  it("removes a recent entry only after a confirmed not_found, with a non-blocking message", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={recentPort()} />);
+    const recent = await screen.findByRole("region", { name: "最近打开" });
+
+    await user.click(within(recent).getByRole("button", { name: "文件 /notes/gone.md" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("/notes/gone.md");
+    expect(
+      screen.queryByRole("button", { name: "文件 /notes/gone.md" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "文件 /notes/a.md" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "文件夹 /notes" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("restores a leftover draft through the recovery dialog as a dirty tab", async () => {
+    const user = userEvent.setup();
+    const leftover: RecoveryDraft = {
+      draftId: "draft-document-9",
+      originalPath: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved recovery",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: "v1",
+    };
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "alpha")]]),
+      { drafts: [leftover] },
+    );
+    render(<AppShell port={port} />);
+
+    const dialog = await screen.findByRole("dialog", { name: "恢复未保存的更改" });
+    expect(screen.getByTestId("app-background")).toHaveAttribute("inert");
+
+    await user.click(within(dialog).getByRole("button", { name: "查看源码" }));
+    expect(await within(dialog).findByText("unsaved recovery")).toBeVisible();
+    expect(port.drafts).toHaveLength(1);
+
+    await user.click(within(dialog).getByRole("button", { name: "丢弃" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(port.drafts).toHaveLength(0);
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("restores the draft text into a dirty tab and discards the stored draft", async () => {
+    const user = userEvent.setup();
+    const leftover: RecoveryDraft = {
+      draftId: "draft-document-9",
+      originalPath: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved recovery",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: "version:/notes/a.md",
+    };
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "alpha")]]),
+      { drafts: [leftover] },
+    );
+    render(<AppShell port={port} />);
+
+    const dialog = await screen.findByRole("dialog", { name: "恢复未保存的更改" });
+    await user.click(within(dialog).getByRole("button", { name: "恢复" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /a\.md.*未保存/ })).toBeVisible();
+    expect(editor()).toHaveTextContent("unsaved recovery");
+    expect(port.drafts).toHaveLength(0);
+  });
+});
+
+describe("AppShell conflict and save-failure dialogs", () => {
+  it("surfaces a conflict dialog on external change and keeps local text on 保留当前版本", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md", "saved")]]));
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("local edits"));
+
+    act(() => port.updateFile("/notes/a.md", "disk edit", "v2", 9));
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: "/notes/a.md", modifiedUnixMs: 9, version: "v2" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "文件已在磁盘上更改" });
+    expect(screen.getByTestId("app-background")).toHaveAttribute("inert");
+    expect(within(dialog).getByRole("button", { name: "保留当前版本" })).toHaveFocus();
+
+    await user.click(within(dialog).getByRole("button", { name: "保留当前版本" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(editor()).toHaveTextContent("local edits");
+    expect(screen.getByRole("tab", { name: /a\.md.*未保存/ })).toBeVisible();
+  });
+
+  it("reloads the disk version through the conflict dialog", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md", "saved")]]));
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("local edits"));
+    act(() => port.updateFile("/notes/a.md", "disk edit", "v2", 9));
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: "/notes/a.md", modifiedUnixMs: 9, version: "v2" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "文件已在磁盘上更改" });
+    await user.click(within(dialog).getByRole("button", { name: "载入磁盘版本" }));
+
+    await waitFor(() => expect(editor()).toHaveTextContent("disk edit"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /a\.md/ })).not.toHaveTextContent("●");
+  });
+
+  it("offers retry and save-as after a failed save while keeping the dirty tab", async () => {
+    const user = userEvent.setup();
+    const first = deferred<SavedFile>();
+    const port = new InspectablePort([file("/notes/a.md")]);
+    port.writeResult = first.promise;
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("do not lose me"));
+    editor().focus();
+    await user.keyboard("{Control>}s{/Control}");
+    expect(port.writes).toHaveLength(1);
+
+    act(() => first.reject(new DocumentPortError("io", "disk full")));
+    const dialog = await screen.findByRole("dialog", { name: "保存失败" });
+    expect(dialog).toHaveTextContent("disk full");
+    expect(within(dialog).getByRole("button", { name: "重试" })).toHaveFocus();
+    expect(screen.getByTestId("app-background")).toHaveAttribute("inert");
+    expect(screen.getByRole("tab", { hidden: true, name: /a\.md.*未保存/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { hidden: true, name: "Markdown 编辑器" }),
+    ).toHaveTextContent("do not lose me");
+
+    const second = deferred<SavedFile>();
+    port.writeResult = second.promise;
+    await user.click(within(dialog).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(port.writes).toHaveLength(2));
+    expect(port.writes[1].text).toBe("do not lose me");
+
+    act(() => second.reject(new DocumentPortError("io", "disk full again")));
+    const retried = await screen.findByRole("dialog", { name: "保存失败" });
+    expect(retried).toHaveTextContent("disk full again");
+
+    // Save-as cancelled in the picker returns to the still-dirty tab.
+    await user.click(within(retried).getByRole("button", { name: "另存为…" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "保存失败" })).not.toBeInTheDocument(),
+    );
+    expect(port.chosenTitles).toEqual(["a.md"]);
+    expect(screen.getByRole("tab", { name: /a\.md.*未保存/ })).toBeVisible();
+    expect(editor()).toHaveTextContent("do not lose me");
+  });
+
+  it("dismisses the save-failure dialog without touching the dirty tab", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<SavedFile>();
+    const port = new InspectablePort([file("/notes/a.md")]);
+    port.writeResult = pending.promise;
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    act(() => replaceEditorText("unsaved"));
+    editor().focus();
+    await user.keyboard("{Control>}s{/Control}");
+    act(() => pending.reject(new DocumentPortError("permission_denied", "read only")));
+    await screen.findByRole("dialog", { name: "保存失败" });
+
+    await user.click(screen.getByRole("button", { name: "取消" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /a\.md.*未保存/ })).toBeVisible();
+    expect(editor()).toHaveTextContent("unsaved");
   });
 });

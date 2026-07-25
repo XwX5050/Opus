@@ -15,6 +15,7 @@ pub fn run() {
     let run_queue = Arc::clone(&open_queue);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(document_commands::SharedAssetScopes::default())
         .invoke_handler(tauri::generate_handler![
             document_commands::open_document,

@@ -1,8 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
-import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
+import { MemoryDocumentPort } from "../document/memoryDocumentPort";
+import type { DiskEvent, OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import { useAppController } from "./useAppController";
 
 const file: OpenedFile = {
@@ -45,11 +46,14 @@ class InspectableControllerPort implements DocumentPort {
   async watchDocument() {}
   async watchWorkspace() {}
   async unwatch() {}
-  async subscribeToDiskEvents() { return () => {}; }
+  async subscribeToDiskEvents(_handler: (event: DiskEvent) => void) { return () => {}; }
   async listDrafts() { return []; }
   async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
   async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
   async discardDraft() {}
+  async loadSession() { return null; }
+  async saveSession() {}
+  async onCloseRequested() { return () => {}; }
 }
 
 type ScopeCall =
@@ -92,11 +96,14 @@ class ScopeAwareControllerPort implements DocumentPort {
   async watchDocument() {}
   async watchWorkspace() {}
   async unwatch() {}
-  async subscribeToDiskEvents() { return () => {}; }
+  async subscribeToDiskEvents(_handler: (event: DiskEvent) => void) { return () => {}; }
   async listDrafts() { return []; }
   async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
   async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
   async discardDraft() {}
+  async loadSession() { return null; }
+  async saveSession() {}
+  async onCloseRequested() { return () => {}; }
 }
 
 const scopedFile = (path: string): OpenedFile => ({
@@ -226,6 +233,9 @@ describe("useAppController", () => {
       async readDraft() { throw new DocumentPortError("not_found", "no drafts"); },
       async writeDraft() { throw new DocumentPortError("io", "not supported"); },
       async discardDraft() {},
+      async loadSession() { return null; },
+      async saveSession() {},
+      async onCloseRequested() { return () => {}; },
     };
     const hook = renderHook(() => useAppController(port));
     const openingAction = hook.result.current.openFiles();
@@ -465,5 +475,672 @@ describe("useAppController workspace scopes", () => {
         { kind: "release", consumerId: "workspace:/notes" },
       ]),
     );
+  });
+});
+
+describe("useAppController disk watching", () => {
+  const memoryFile = (path: string, text = "saved"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  it("watches a genuinely new tab and unwatches it on close", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+      ]),
+    );
+
+    act(() => hook.result.current.close(tab.id));
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "unwatch", consumerId: tab.id },
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("watches the workspace under its scope consumer id", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      workspace: { path: "/notes", title: "notes" },
+    });
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openWorkspace());
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "workspace", consumerId: "workspace:/notes", root: "/notes" },
+      ]),
+    );
+
+    act(() => hook.result.current.closeWorkspace());
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "workspace", consumerId: "workspace:/notes", root: "/notes" },
+        { kind: "unwatch", consumerId: "workspace:/notes" },
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("reloads a clean tab when the file changes on disk", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+
+    act(() => port.updateFile("/notes/a.md", "external edit", "v2", 42));
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: "/notes/a.md", modifiedUnixMs: 42, version: "v2" }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "external edit",
+        savedText: "external edit",
+        version: "v2",
+        status: "clean",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("marks a dirty tab conflicted without overwriting local text", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "local edits"));
+
+    act(() => port.updateFile("/notes/a.md", "external edit", "v2", 42));
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: "/notes/a.md", modifiedUnixMs: 42, version: "v2" }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "local edits",
+        savedText: "saved",
+        version: "v2",
+        status: "conflict",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("ignores a changed event whose version matches the tab's last saved version", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+
+    act(() => port.updateFile("/notes/a.md", "echo content", "version:/notes/a.md", 7));
+    act(() =>
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/a.md",
+        modifiedUnixMs: 7,
+        version: "version:/notes/a.md",
+      }),
+    );
+    await act(async () => {});
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "saved",
+      status: "clean",
+    });
+    hook.unmount();
+  });
+
+  it("keeps the buffer and marks the tab missing when the file vanishes", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "local edits"));
+
+    act(() => port.removeFile("/notes/a.md"));
+    act(() => port.emitDiskEvent({ kind: "missing", path: "/notes/a.md" }));
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "local edits",
+        status: "missing",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("follows a moved clean tab and re-watches the new path", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+
+    act(() =>
+      port.emitDiskEvent({ kind: "moved", from: "/notes/a.md", to: "/notes/renamed.md" }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        path: "/notes/renamed.md",
+        title: "renamed.md",
+        status: "clean",
+      }),
+    );
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "unwatch", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("keeps a dirty tab's path and watch when the file is moved", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+    act(() => hook.result.current.changeText(tab.id, "local edits"));
+
+    act(() =>
+      port.emitDiskEvent({ kind: "moved", from: "/notes/a.md", to: "/notes/renamed.md" }),
+    );
+    await act(async () => {});
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/a.md",
+      text: "local edits",
+      status: "dirty",
+    });
+    expect(port.watchCalls).toHaveLength(1);
+    hook.unmount();
+  });
+
+  it("ignores changed events while a save is in flight", async () => {
+    let resolveWrite!: (value: SavedFile) => void;
+    const write = new Promise<SavedFile>((resolve) => { resolveWrite = resolve; });
+    class DiskAwarePort extends InspectableControllerPort {
+      handler: ((event: DiskEvent) => void) | null = null;
+      override async subscribeToDiskEvents(handler: (event: DiskEvent) => void) {
+        this.handler = handler;
+        return () => {};
+      }
+    }
+    const port = new DiskAwarePort(file, write);
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openFiles());
+    const id = hook.result.current.state.activeId!;
+    act(() => hook.result.current.changeText(id, "local edits"));
+    let saving!: Promise<boolean>;
+    act(() => { saving = hook.result.current.save(id); });
+    await waitFor(() => expect(hook.result.current.state.tabs[0].pendingSave).toBeDefined());
+    await waitFor(() => expect(port.handler).not.toBeNull());
+
+    // A changed event with a foreign version arriving mid-save must not
+    // conflict the tab: the write's expectedVersion is the real guard here.
+    act(() =>
+      port.handler!({ kind: "changed", path: file.path, modifiedUnixMs: 9, version: "foreign" }),
+    );
+    expect(hook.result.current.state.tabs[0].status).toBe("dirty");
+
+    resolveWrite({ path: file.path, modifiedUnixMs: 2, version: "v2" });
+    await act(() => saving);
+    expect(hook.result.current.state.tabs[0].status).toBe("clean");
+    hook.unmount();
+  });
+});
+
+describe("useAppController conflict resolution", () => {
+  const conflictedController = async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", {
+        path: "/notes/a.md",
+        text: "saved",
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: "v1",
+      }]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "local edits"));
+    act(() => port.updateFile("/notes/a.md", "disk version", "v2", 9));
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: "/notes/a.md", modifiedUnixMs: 9, version: "v2" }),
+    );
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0].status).toBe("conflict"),
+    );
+    return { port, hook, id };
+  };
+
+  it("loadDiskVersion replaces the buffer with the disk content", async () => {
+    const { hook, id } = await conflictedController();
+
+    await act(() => hook.result.current.loadDiskVersion(id));
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "disk version",
+      savedText: "disk version",
+      version: "v2",
+      status: "clean",
+    });
+    hook.unmount();
+  });
+
+  it("keepLocalVersion keeps the buffer and re-dirties the tab", async () => {
+    const { hook, id } = await conflictedController();
+
+    act(() => hook.result.current.keepLocalVersion(id));
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "local edits",
+      version: "v2",
+      status: "dirty",
+    });
+    hook.unmount();
+  });
+});
+
+describe("useAppController save failures", () => {
+  it("keeps the tab dirty and exposes the failure for retry or save-as", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", {
+        path: "/notes/a.md",
+        text: "saved",
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: "v1",
+      }]]),
+      { savePath: "/notes/copy.md" },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "local edits"));
+
+    // An external writer invalidates the expected version before our save.
+    act(() => port.updateFile("/notes/a.md", "external", "v2", 9));
+    await act(() => hook.result.current.save(id));
+
+    expect(hook.result.current.saveError).toEqual({
+      id,
+      message: expect.stringContaining("/notes/a.md"),
+    });
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "local edits",
+      status: "dirty",
+    });
+
+    // Retry hits the same conflict and resurfaces the failure state.
+    await act(() => hook.result.current.retrySave());
+    expect(hook.result.current.saveError?.id).toBe(id);
+    expect(hook.result.current.state.tabs[0].status).toBe("dirty");
+
+    // Save-as to a fresh target succeeds and clears the failure state.
+    await act(() => hook.result.current.saveErrorSaveAs());
+    expect(hook.result.current.saveError).toBeNull();
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/copy.md",
+      text: "local edits",
+      status: "clean",
+    });
+    hook.unmount();
+  });
+
+  it("returns to the still-dirty tab when save-as is cancelled after a failure", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", {
+        path: "/notes/a.md",
+        text: "saved",
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: "v1",
+      }]]),
+      { savePath: null },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "local edits"));
+    act(() => port.updateFile("/notes/a.md", "external", "v2", 9));
+    await act(() => hook.result.current.save(id));
+    expect(hook.result.current.saveError?.id).toBe(id);
+
+    await act(() => hook.result.current.saveErrorSaveAs());
+
+    expect(hook.result.current.saveError).toBeNull();
+    expect(port.writes).toHaveLength(0);
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/a.md",
+      text: "local edits",
+      status: "dirty",
+    });
+    hook.unmount();
+  });
+});
+
+describe("useAppController recovery drafts", () => {
+  const draftableFile = (path: string): OpenedFile => ({
+    path,
+    text: "saved",
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  it("persists a debounced draft while dirty and discards it after a successful save", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new MemoryDocumentPort(new Map([["/notes/a.md", draftableFile("/notes/a.md")]]));
+      const hook = renderHook(() => useAppController(port));
+      await act(() => hook.result.current.openPath("/notes/a.md"));
+      const id = hook.result.current.state.tabs[0].id;
+
+      act(() => hook.result.current.changeText(id, "unsaved work"));
+      expect(port.drafts).toHaveLength(0);
+
+      await act(async () => { vi.advanceTimersByTime(2000); });
+      expect(port.drafts).toHaveLength(1);
+      expect(port.drafts[0]).toMatchObject({
+        draftId: `draft-${id}`,
+        originalPath: "/notes/a.md",
+        title: "a.md",
+        text: "unsaved work",
+        savedVersion: "version:/notes/a.md",
+      });
+      expect(port.drafts[0].savedTextHash).toMatch(/^[0-9a-f]{8}$/);
+
+      act(() => hook.result.current.changeText(id, "unsaved work v2"));
+      await act(async () => { vi.advanceTimersByTime(1999); });
+      expect((await port.readDraft(`draft-${id}`)).text).toBe("unsaved work");
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect((await port.readDraft(`draft-${id}`)).text).toBe("unsaved work v2");
+
+      await act(() => hook.result.current.save(id));
+      expect(hook.result.current.state.tabs[0].status).toBe("clean");
+      expect(port.drafts).toHaveLength(0);
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards the draft when a dirty tab is closed with discard", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new MemoryDocumentPort(new Map([["/notes/a.md", draftableFile("/notes/a.md")]]));
+      const hook = renderHook(() => useAppController(port));
+      await act(() => hook.result.current.openPath("/notes/a.md"));
+      const id = hook.result.current.state.tabs[0].id;
+      act(() => hook.result.current.changeText(id, "unsaved work"));
+      await act(async () => { vi.advanceTimersByTime(2000); });
+      expect(port.drafts).toHaveLength(1);
+
+      act(() => hook.result.current.close(id));
+      await act(() => hook.result.current.confirmClose("discard"));
+
+      expect(hook.result.current.state.tabs).toHaveLength(0);
+      expect(port.drafts).toHaveLength(0);
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes pending drafts when the window close is requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new MemoryDocumentPort(new Map([["/notes/a.md", draftableFile("/notes/a.md")]]));
+      const hook = renderHook(() => useAppController(port));
+      await act(() => hook.result.current.openPath("/notes/a.md"));
+      const id = hook.result.current.state.tabs[0].id;
+      act(() => hook.result.current.changeText(id, "unsaved work"));
+
+      await act(() => port.emitCloseRequested());
+
+      expect(port.drafts).toHaveLength(1);
+      expect(port.drafts[0]).toMatchObject({ draftId: `draft-${id}`, text: "unsaved work" });
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces leftover drafts on launch and restores one as a dirty tab", async () => {
+    const leftover: RecoveryDraft = {
+      draftId: "draft-document-9",
+      originalPath: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: "v1",
+    };
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", draftableFile("/notes/a.md")]]),
+      { drafts: [leftover] },
+    );
+    const hook = renderHook(() => useAppController(port));
+
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    await act(() => hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]));
+
+    const tab = hook.result.current.state.tabs[0];
+    expect(tab).toMatchObject({
+      path: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved",
+      version: "v1",
+      status: "dirty",
+    });
+    expect(hook.result.current.recoveryDrafts).toEqual([]);
+    expect(port.drafts).toHaveLength(0);
+    await waitFor(() =>
+      expect(port.scopeCalls).toContainEqual({
+        kind: "document",
+        consumerId: tab.id,
+        path: "/notes/a.md",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("discards a leftover draft without opening a tab", async () => {
+    const leftover: RecoveryDraft = {
+      draftId: "draft-document-9",
+      originalPath: null,
+      title: "Untitled",
+      text: "unsaved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: null,
+    };
+    const port = new MemoryDocumentPort(new Map(), { drafts: [leftover] });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    await act(() => hook.result.current.discardRecoveryDraft(hook.result.current.recoveryDrafts![0]));
+
+    expect(hook.result.current.recoveryDrafts).toEqual([]);
+    expect(hook.result.current.state.tabs).toHaveLength(0);
+    expect(port.drafts).toHaveLength(0);
+    hook.unmount();
+  });
+});
+
+describe("useAppController sessions and recent items", () => {
+  const sessionFile = (path: string): OpenedFile => ({
+    path,
+    text: `text:${path}`,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  it("restores session tabs, the active tab, and the workspace on launch", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/a.md", sessionFile("/notes/a.md")],
+        ["/notes/b.md", sessionFile("/notes/b.md")],
+      ]),
+      {
+        workspace: { path: "/notes", title: "notes" },
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md", "/notes/b.md"],
+          activePath: "/notes/a.md",
+          workspacePath: "/notes",
+        },
+      },
+    );
+    const hook = renderHook(() => useAppController(port));
+
+    await waitFor(() => expect(hook.result.current.state.tabs).toHaveLength(2));
+
+    expect(hook.result.current.state.tabs.map((tab) => tab.path)).toEqual([
+      "/notes/a.md",
+      "/notes/b.md",
+    ]);
+    const active = hook.result.current.state.tabs.find(
+      (tab) => tab.id === hook.result.current.state.activeId,
+    );
+    expect(active?.path).toBe("/notes/a.md");
+    await waitFor(() => expect(hook.result.current.workspace?.path).toBe("/notes"));
+    hook.unmount();
+  });
+
+  it("skips unrestorable session files with a non-blocking message", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/gone.md", "/notes/a.md"],
+          activePath: null,
+          workspacePath: null,
+        },
+      },
+    );
+    const hook = renderHook(() => useAppController(port));
+
+    await waitFor(() => expect(hook.result.current.state.tabs).toHaveLength(1));
+
+    expect(hook.result.current.state.tabs[0].path).toBe("/notes/a.md");
+    expect(hook.result.current.error).toContain("/notes/gone.md");
+    hook.unmount();
+  });
+
+  it("persists tab order, the active tab, and recent items as they change", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/a.md", sessionFile("/notes/a.md")],
+        ["/notes/b.md", sessionFile("/notes/b.md")],
+      ]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    await act(() => hook.result.current.openPath("/notes/b.md"));
+
+    await waitFor(() =>
+      expect(port.session?.openPaths).toEqual(["/notes/a.md", "/notes/b.md"]),
+    );
+    expect(port.session?.activePath).toBe("/notes/b.md");
+    expect(port.session?.recent.map((item) => item.path)).toEqual([
+      "/notes/b.md",
+      "/notes/a.md",
+    ]);
+
+    const tabA = hook.result.current.state.tabs[0];
+    act(() => hook.result.current.activate(tabA.id));
+    await waitFor(() => expect(port.session?.activePath).toBe("/notes/a.md"));
+    hook.unmount();
+  });
+
+  it("dedupes recent entries by normalized path and caps the list at 10", async () => {
+    const seeded = Array.from({ length: 10 }, (_, index) => ({
+      path: `/notes/old-${index}.md`,
+      kind: "file" as const,
+    }));
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),
+      {
+        session: { recent: seeded, openPaths: [], activePath: null, workspacePath: null },
+      },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recent).toHaveLength(10));
+
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    await act(() => hook.result.current.openPath("/NOTES/a.md"));
+
+    const recent = hook.result.current.recent;
+    expect(recent).toHaveLength(10);
+    // The stored file's canonical path is what gets recorded.
+    expect(recent[0]).toEqual({ path: "/notes/a.md", kind: "file" });
+    expect(
+      recent.filter((item) => item.path.toLowerCase() === "/notes/a.md"),
+    ).toHaveLength(1);
+    hook.unmount();
+  });
+
+  it("opens recent entries and removes them only after a confirmed not_found", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),
+      {
+        workspace: { path: "/notes", title: "notes" },
+        session: {
+          recent: [
+            { path: "/notes/a.md", kind: "file" },
+            { path: "/notes", kind: "folder" },
+            { path: "/notes/gone.md", kind: "file" },
+          ],
+          openPaths: [],
+          activePath: null,
+          workspacePath: null,
+        },
+      },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recent).toHaveLength(3));
+
+    await act(() => hook.result.current.openRecent({ path: "/notes/a.md", kind: "file" }));
+    expect(hook.result.current.state.tabs.map((tab) => tab.path)).toEqual(["/notes/a.md"]);
+    expect(hook.result.current.error).toBeNull();
+    expect(hook.result.current.recent).toHaveLength(3);
+
+    await act(() => hook.result.current.openRecent({ path: "/notes/gone.md", kind: "file" }));
+    expect(hook.result.current.error).toContain("/notes/gone.md");
+    expect(hook.result.current.recent.map((item) => item.path)).toEqual([
+      "/notes/a.md",
+      "/notes",
+    ]);
+
+    await act(() => hook.result.current.openRecent({ path: "/notes", kind: "folder" }));
+    expect(hook.result.current.workspace?.path).toBe("/notes");
+    hook.unmount();
   });
 });

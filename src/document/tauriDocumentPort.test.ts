@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open, save: mocks.save
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: mocks.emit }));
 
 import { DocumentPortError } from "./DocumentPort";
-import { createTauriDocumentPort, subscribeToImageDrops, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
+import { createTauriDocumentPort, restoreWindowGeometry, subscribeToImageDrops, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
 
 describe("tauri document port", () => {
   beforeEach(() => vi.resetAllMocks());
@@ -453,5 +453,170 @@ describe("tauri document port disk watching and recovery drafts", () => {
     await port.discardDraft("document-1");
     expect(invoke).toHaveBeenCalledWith("discard_recovery_draft", { draft_id: "document-1" });
     await expect(port.discardDraft("x")).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("tauri document port session, window geometry, and close requests", () => {
+  const storeMocks = vi.hoisted(() => ({
+    values: new Map<string, unknown>(),
+    load: vi.fn(),
+  }));
+  const windowMocks = vi.hoisted(() => ({
+    closeHandler: null as null | ((event: { preventDefault(): void }) => Promise<void>),
+    destroyed: 0,
+    resized: null as null | (() => void),
+    moved: null as null | (() => void),
+    setSize: vi.fn(),
+    setPosition: vi.fn(),
+    unlisten: vi.fn(),
+  }));
+
+  vi.mock("@tauri-apps/plugin-store", () => ({
+    Store: { load: storeMocks.load },
+  }));
+
+  vi.mock("@tauri-apps/api/window", () => ({
+    getCurrentWindow: () => ({
+      async onCloseRequested(handler: (event: { preventDefault(): void }) => Promise<void>) {
+        windowMocks.closeHandler = handler;
+        return windowMocks.unlisten;
+      },
+      async onResized(handler: () => void) { windowMocks.resized = handler; return windowMocks.unlisten; },
+      async onMoved(handler: () => void) { windowMocks.moved = handler; return windowMocks.unlisten; },
+      async innerSize() { return { width: 1280, height: 800 }; },
+      async outerPosition() { return { x: 10, y: 20 }; },
+      setSize: windowMocks.setSize,
+      setPosition: windowMocks.setPosition,
+      async destroy() { windowMocks.destroyed += 1; },
+    }),
+    PhysicalSize: class PhysicalSize {
+      constructor(readonly width: number, readonly height: number) {}
+    },
+    PhysicalPosition: class PhysicalPosition {
+      constructor(readonly x: number, readonly y: number) {}
+    },
+  }));
+
+  beforeEach(() => {
+    storeMocks.values.clear();
+    // Other describes in this file call vi.resetAllMocks(), so the store
+    // implementation must be re-applied before every test here.
+    storeMocks.load.mockReset();
+    storeMocks.load.mockImplementation(async () => ({
+      async get(key: string) { return storeMocks.values.get(key) ?? null; },
+      async set(key: string, value: unknown) { storeMocks.values.set(key, value); },
+      async save() {},
+    }));
+    windowMocks.closeHandler = null;
+    windowMocks.destroyed = 0;
+    windowMocks.resized = null;
+    windowMocks.moved = null;
+    windowMocks.setSize.mockClear();
+    windowMocks.setPosition.mockClear();
+    windowMocks.unlisten.mockClear();
+  });
+
+  it("returns null when no session was persisted and round-trips a saved session", async () => {
+    const port = createTauriDocumentPort();
+    await expect(port.loadSession()).resolves.toBeNull();
+
+    const session = {
+      recent: [{ path: "/notes/a.md", kind: "file" as const }],
+      openPaths: ["/notes/a.md"],
+      activePath: "/notes/a.md",
+      workspacePath: "/notes",
+    };
+    await port.saveSession(session);
+    expect(storeMocks.values.get("session")).toEqual(session);
+    await expect(port.loadSession()).resolves.toEqual(session);
+  });
+
+  it("drops malformed entries when loading a session", async () => {
+    storeMocks.values.set("session", {
+      recent: [
+        { path: "/notes/a.md", kind: "file" },
+        { path: 42, kind: "file" },
+        { path: "/notes", kind: "folder" },
+        "garbage",
+      ],
+      openPaths: ["/notes/a.md", 7],
+      activePath: 9,
+      workspacePath: "/notes",
+    });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      recent: [
+        { path: "/notes/a.md", kind: "file" },
+        { path: "/notes", kind: "folder" },
+      ],
+      openPaths: ["/notes/a.md"],
+      activePath: null,
+      workspacePath: "/notes",
+    });
+  });
+
+  it("returns null for a non-object persisted session", async () => {
+    storeMocks.values.set("session", "corrupt");
+    await expect(createTauriDocumentPort().loadSession()).resolves.toBeNull();
+  });
+
+  it("flushes on close request before destroying the window", async () => {
+    const port = createTauriDocumentPort();
+    const stop = await port.onCloseRequested(async () => {
+      storeMocks.values.set("flushed", true);
+    });
+    expect(windowMocks.closeHandler).not.toBeNull();
+
+    let prevented = false;
+    await windowMocks.closeHandler!({ preventDefault: () => { prevented = true; } });
+
+    expect(prevented).toBe(true);
+    expect(storeMocks.values.get("flushed")).toBe(true);
+    expect(windowMocks.destroyed).toBe(1);
+    stop();
+    expect(windowMocks.unlisten).toHaveBeenCalled();
+  });
+
+  it("destroys the window even when the close-requested flush fails", async () => {
+    const port = createTauriDocumentPort();
+    await port.onCloseRequested(async () => {
+      throw new Error("flush failed");
+    });
+    await windowMocks.closeHandler!({ preventDefault: () => {} });
+    expect(windowMocks.destroyed).toBe(1);
+  });
+
+  it("restores saved window geometry and persists changes debounced", async () => {
+    vi.useFakeTimers();
+    try {
+      storeMocks.values.set("windowGeometry", { width: 900, height: 700, x: 5, y: 6 });
+      const stop = await restoreWindowGeometry();
+
+      expect(windowMocks.setSize).toHaveBeenCalledWith(
+        expect.objectContaining({ width: 900, height: 700 }),
+      );
+      expect(windowMocks.setPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ x: 5, y: 6 }),
+      );
+      expect(windowMocks.resized).not.toBeNull();
+      expect(windowMocks.moved).not.toBeNull();
+
+      windowMocks.resized!();
+      windowMocks.moved!();
+      storeMocks.values.delete("windowGeometry");
+      await vi.advanceTimersByTimeAsync(499);
+      expect(storeMocks.values.has("windowGeometry")).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(storeMocks.values.get("windowGeometry")).toEqual({
+        width: 1280,
+        height: 800,
+        x: 10,
+        y: 20,
+      });
+
+      stop();
+      expect(windowMocks.unlisten).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

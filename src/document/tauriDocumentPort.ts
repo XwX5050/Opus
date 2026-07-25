@@ -1,9 +1,11 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { Store } from "@tauri-apps/plugin-store";
 import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
-import type { DiskEvent, OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
+import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecentItem, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
 
 type OpenDto = { path: string; text: string; has_utf8_bom: boolean; newline: OpenedFile["newline"]; modified_unix_ms: number; version: string };
 type SaveDto = { path: string; modified_unix_ms: number; version: string };
@@ -41,6 +43,99 @@ const draft = (dto: DraftDto): RecoveryDraft => ({ draftId: dto.draft_id, origin
 // The asset-protocol URL builder lives here so that the rest of the app never
 // imports @tauri-apps/api/core directly.
 export const tauriImagePreviewUrl = (path: string): string => convertFileSrc(path);
+
+const SESSION_STORE_FILE = "session.json";
+const sessionStore = () => Store.load(SESSION_STORE_FILE);
+
+const asStringArray = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+
+/** Validates a persisted session; malformed entries are dropped, not fatal. */
+const parseSession = (value: unknown): PersistedSession | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const recent: RecentItem[] = (Array.isArray(record.recent) ? record.recent : [])
+    .filter((entry): entry is { path: string; kind: "file" | "folder" } =>
+      typeof entry === "object" && entry !== null &&
+      typeof (entry as { path?: unknown }).path === "string" &&
+      ((entry as { kind?: unknown }).kind === "file" ||
+        (entry as { kind?: unknown }).kind === "folder"))
+    .map((entry) => ({ path: entry.path, kind: entry.kind }))
+    .slice(0, 10);
+  return {
+    recent,
+    openPaths: asStringArray(record.openPaths),
+    activePath: typeof record.activePath === "string" ? record.activePath : null,
+    workspacePath:
+      typeof record.workspacePath === "string" ? record.workspacePath : null,
+  };
+};
+
+interface WindowGeometry {
+  readonly width: number;
+  readonly height: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+const parseGeometry = (value: unknown): WindowGeometry | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const { width, height, x, y } = record;
+  if (
+    typeof width !== "number" || typeof height !== "number" ||
+    typeof x !== "number" || typeof y !== "number" ||
+    width <= 0 || height <= 0
+  ) {
+    return null;
+  }
+  return { width, height, x, y };
+};
+
+/**
+ * Applies the persisted window size/position, then persists future geometry
+ * changes (debounced) into the session store. Resolves to a stop function.
+ * Physical pixels are stored and restored as-is, so the round trip is stable
+ * on a given display setup.
+ */
+export async function restoreWindowGeometry(): Promise<() => void> {
+  const win = getCurrentWindow();
+  const store = await sessionStore();
+  const saved = parseGeometry(await store.get("windowGeometry"));
+  if (saved) {
+    await win.setSize(new PhysicalSize(saved.width, saved.height));
+    await win.setPosition(new PhysicalPosition(saved.x, saved.y));
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const persist = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      void (async () => {
+        const size = await win.innerSize();
+        const position = await win.outerPosition();
+        await store.set("windowGeometry", {
+          width: size.width,
+          height: size.height,
+          x: position.x,
+          y: position.y,
+        });
+        await store.save();
+      })().catch(() => {
+        // Geometry persistence is best-effort.
+      });
+    }, 500);
+  };
+  const unlistenResize = await win.onResized(persist);
+  const unlistenMove = await win.onMoved(persist);
+  return () => {
+    unlistenResize();
+    unlistenMove();
+    if (timer) clearTimeout(timer);
+  };
+}
+
 
 const parentDirectoryOf = (path: string): string | null => {
   const normalized = path.replaceAll("\\", "/");
@@ -172,6 +267,34 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async discardDraft(draftId: string): Promise<void> {
       try { await invoke("discard_recovery_draft", { draft_id: draftId }); } catch (error) { throw failure(error); }
+    },
+    async loadSession(): Promise<PersistedSession | null> {
+      try {
+        const store = await sessionStore();
+        return parseSession(await store.get("session"));
+      } catch (error) { throw failure(error); }
+    },
+    async saveSession(session: PersistedSession): Promise<void> {
+      try {
+        const store = await sessionStore();
+        await store.set("session", session);
+        await store.save();
+      } catch (error) { throw failure(error); }
+    },
+    onCloseRequested(handler: () => void | Promise<void>): Promise<() => void> {
+      const win = getCurrentWindow();
+      return win.onCloseRequested(async (event) => {
+        // Hold the window until the flush settles; even a failed flush must
+        // never trap the user in the app, hence destroy in finally.
+        event.preventDefault();
+        try {
+          await handler();
+        } catch {
+          // Best-effort flush; closing proceeds regardless.
+        } finally {
+          await win.destroy();
+        }
+      });
     },
   };
 }

@@ -12,6 +12,7 @@ import type {
   OpenedFile,
   PathPlatform,
   PendingWriteRequest,
+  PersistedSession,
   RecoveryDraft,
   RecoveryDraftInfo,
   SaveTarget,
@@ -26,6 +27,8 @@ export interface MemoryDocumentPortOptions {
   readonly directories?: ReadonlyArray<string>;
   /** Pre-seeded recovery drafts, as if left behind by a crashed session. */
   readonly drafts?: ReadonlyArray<RecoveryDraft>;
+  /** Pre-seeded session, as if persisted by a previous run. */
+  readonly session?: PersistedSession | null;
 }
 
 export type MemoryScopeCall =
@@ -47,6 +50,12 @@ export interface MemoryClipboardImageSave {
 const cloneOpenedFile = (file: OpenedFile): OpenedFile => ({ ...file });
 const cloneRequest = (request: PendingWriteRequest): PendingWriteRequest =>
   Object.freeze({ ...request });
+const cloneSession = (session: PersistedSession): PersistedSession => ({
+  recent: session.recent.map((item) => ({ ...item })),
+  openPaths: [...session.openPaths],
+  activePath: session.activePath,
+  workspacePath: session.workspacePath,
+});
 const cloneImageSave = (save: MemoryClipboardImageSave): MemoryClipboardImageSave => ({
   bytes: new Uint8Array(save.bytes),
   mimeType: save.mimeType,
@@ -65,6 +74,8 @@ export class MemoryDocumentPort implements DocumentPort {
   readonly #watchCalls: MemoryWatchCall[] = [];
   readonly #drafts = new Map<string, { record: RecoveryDraft; updatedUnixMs: number }>();
   readonly #diskHandlers = new Set<(event: DiskEvent) => void>();
+  readonly #closeHandlers = new Set<() => void | Promise<void>>();
+  #session: PersistedSession | null;
   #nextRevision = 1;
   #nextDraftStamp = 1;
 
@@ -108,6 +119,7 @@ export class MemoryDocumentPort implements DocumentPort {
         updatedUnixMs: this.#nextDraftStamp++,
       });
     }
+    this.#session = options.session ? cloneSession(options.session) : null;
   }
 
   #key(path: string): string {
@@ -440,6 +452,23 @@ export class MemoryDocumentPort implements DocumentPort {
     for (const handler of [...this.#diskHandlers]) handler({ ...event });
   }
 
+  /** Test hook: rewrites a stored file as an external process would. */
+  updateFile(path: string, text: string, version: string, modifiedUnixMs = 0): void {
+    const key = this.#key(path);
+    const existing = this.#files.get(key);
+    if (!existing) {
+      throw new DocumentPortError("not_found", `Document not found: ${path}`);
+    }
+    this.#files.set(key, { ...existing, text, version, modifiedUnixMs });
+  }
+
+  /** Test hook: deletes a stored file as an external process would. */
+  removeFile(path: string): void {
+    if (!this.#files.delete(this.#key(path))) {
+      throw new DocumentPortError("not_found", `Document not found: ${path}`);
+    }
+  }
+
   get drafts(): ReadonlyArray<RecoveryDraft> {
     return [...this.#drafts.values()].map((entry) => ({ ...entry.record }));
   }
@@ -485,5 +514,31 @@ export class MemoryDocumentPort implements DocumentPort {
       savedVersion: entry.record.savedVersion,
       updatedUnixMs: entry.updatedUnixMs,
     };
+  }
+
+  get session(): PersistedSession | null {
+    return this.#session ? cloneSession(this.#session) : null;
+  }
+
+  async loadSession(): Promise<PersistedSession | null> {
+    return this.session;
+  }
+
+  async saveSession(session: PersistedSession): Promise<void> {
+    this.#session = cloneSession(session);
+  }
+
+  async onCloseRequested(
+    handler: () => void | Promise<void>,
+  ): Promise<() => void> {
+    this.#closeHandlers.add(handler);
+    return () => {
+      this.#closeHandlers.delete(handler);
+    };
+  }
+
+  /** Test hook: runs every registered close-requested handler in order. */
+  async emitCloseRequested(): Promise<void> {
+    for (const handler of [...this.#closeHandlers]) await handler();
   }
 }

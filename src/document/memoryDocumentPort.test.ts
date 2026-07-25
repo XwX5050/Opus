@@ -114,3 +114,72 @@ describe("MemoryDocumentPort disk watching and recovery drafts", () => {
     await expect(port.readDraft("ghost")).rejects.toMatchObject({ code: "not_found" });
   });
 });
+
+describe("MemoryDocumentPort session and close requests", () => {
+  it("returns null before any session is saved and clones what it stores", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    await expect(port.loadSession()).resolves.toBeNull();
+
+    const session = {
+      recent: [{ path: "/notes/a.md", kind: "file" as const }],
+      openPaths: ["/notes/a.md"],
+      activePath: "/notes/a.md",
+      workspacePath: null,
+    };
+    await port.saveSession(session);
+
+    const loaded = await port.loadSession();
+    expect(loaded).toEqual(session);
+    expect(loaded).not.toBe(session);
+    expect(loaded?.recent).not.toBe(session.recent);
+  });
+
+  it("serves a pre-seeded session as a restart leftover", async () => {
+    const session = {
+      recent: [
+        { path: "/notes/a.md", kind: "file" as const },
+        { path: "/notes", kind: "folder" as const },
+      ],
+      openPaths: ["/notes/a.md"],
+      activePath: "/notes/a.md",
+      workspacePath: "/notes",
+    };
+    const port = new MemoryDocumentPort(new Map(), { session });
+    await expect(port.loadSession()).resolves.toEqual(session);
+    expect(port.session).toEqual(session);
+  });
+
+  it("exposes the stored session through the session getter as a clone", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const session = {
+      recent: [],
+      openPaths: ["/notes/a.md"],
+      activePath: null,
+      workspacePath: null,
+    };
+    await port.saveSession(session);
+
+    const stored = port.session;
+    expect(stored).toEqual(session);
+    expect(stored?.openPaths).not.toBe(session.openPaths);
+  });
+
+  it("runs close-requested handlers in order until unsubscribed", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const calls: string[] = [];
+    const stopFirst = await port.onCloseRequested(() => {
+      calls.push("first");
+    });
+    await port.onCloseRequested(async () => {
+      await Promise.resolve();
+      calls.push("second");
+    });
+
+    await port.emitCloseRequested();
+    expect(calls).toEqual(["first", "second"]);
+
+    stopFirst();
+    await port.emitCloseRequested();
+    expect(calls).toEqual(["first", "second", "second"]);
+  });
+});

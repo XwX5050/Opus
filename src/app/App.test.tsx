@@ -34,6 +34,9 @@ vi.mock("../document/tauriDocumentPort", () => ({
       async readDraft() { throw new DocumentPortError("not_found", "no drafts"); },
       async writeDraft() { throw new DocumentPortError("io", "not supported"); },
       async discardDraft() {},
+      async loadSession() { return null; },
+      async saveSession() {},
+      async onCloseRequested() { return () => {}; },
     };
   },
   subscribeToOpenPaths: async () => ({
@@ -42,6 +45,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
   }),
   subscribeToImageDrops: async () => () => {},
   tauriImagePreviewUrl: (path: string) => path,
+  restoreWindowGeometry: async () => () => {},
 }));
 
 describe("App", () => {

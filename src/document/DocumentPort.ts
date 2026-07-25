@@ -2,6 +2,7 @@ import type {
   DiskEvent,
   OpenedFile,
   PendingWriteRequest,
+  PersistedSession,
   RecoveryDraft,
   RecoveryDraftInfo,
   SaveTarget,
@@ -82,4 +83,16 @@ export interface DocumentPort {
   readDraft(draftId: string): Promise<RecoveryDraft>;
   writeDraft(draft: RecoveryDraft): Promise<RecoveryDraftInfo>;
   discardDraft(draftId: string): Promise<void>;
+  /**
+   * Loads the persisted session (recent paths, tab order, active tab,
+   * workspace). Returns null when no session was ever saved.
+   */
+  loadSession(): Promise<PersistedSession | null>;
+  saveSession(session: PersistedSession): Promise<void>;
+  /**
+   * Registers a handler run when the window is asked to close. The handler
+   * may be async (e.g. flushing recovery drafts); the window closes after it
+   * settles. Resolves to an unsubscribe function.
+   */
+  onCloseRequested(handler: () => void | Promise<void>): Promise<() => void>;
 }

@@ -94,3 +94,20 @@ export interface RecoveryDraftInfo {
   readonly savedVersion: string | null;
   readonly updatedUnixMs: number;
 }
+
+export interface RecentItem {
+  readonly path: string;
+  readonly kind: "file" | "folder";
+}
+
+/**
+ * Session metadata persisted separately from recovery drafts: only paths and
+ * ordering live here, never document content (dirty content lives in drafts).
+ * Theme/editor preferences are deliberately excluded; Task 11 owns that seam.
+ */
+export interface PersistedSession {
+  readonly recent: ReadonlyArray<RecentItem>;
+  readonly openPaths: ReadonlyArray<string>;
+  readonly activePath: string | null;
+  readonly workspacePath: string | null;
+}

@@ -1096,3 +1096,273 @@ describe("MemoryDocumentPort", () => {
     expect((await port.chooseAndOpenFiles())[0].text).toBe("a");
   });
 });
+
+describe("documentReducer disk events", () => {
+  const freshFile = (overrides: Partial<OpenedFile> = {}): OpenedFile =>
+    openedFile({ text: "disk text", modifiedUnixMs: 200, version: "v2", ...overrides });
+
+  it("reloads a clean tab on externalChanged and keeps it clean", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "externalChanged", id: "doc-1", file: freshFile() },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      text: "disk text",
+      savedText: "disk text",
+      modifiedUnixMs: 200,
+      version: "v2",
+      status: "clean",
+    });
+  });
+
+  it("marks a dirty tab conflicted on externalChanged without overwriting local text", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      { type: "externalChanged", id: "doc-1", file: freshFile() },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      text: "local edits",
+      savedText: "saved",
+      version: "v2",
+      modifiedUnixMs: 200,
+      status: "conflict",
+    });
+  });
+
+  it("marks a tab conflicted when externalChanged arrives during a pending save", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      { type: "saveRequested", id: "doc-1" },
+      { type: "externalChanged", id: "doc-1", file: freshFile() },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      text: "local edits",
+      version: "v2",
+      status: "conflict",
+    });
+    expect(state.tabs[0].pendingSave).toBeDefined();
+  });
+
+  it("ignores externalChanged for unknown tabs", () => {
+    const before = reduce([{ type: "fileOpened", id: "doc-1", file: openedFile() }]);
+    const after = documentReducer(before, {
+      type: "externalChanged",
+      id: "ghost",
+      file: freshFile(),
+    });
+
+    expect(after).toBe(before);
+  });
+
+  it("keeps the buffer and marks missing on externalMissing", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      { type: "externalMissing", id: "doc-1" },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({ text: "local edits", status: "missing" });
+  });
+
+  it("moves a clean tab's path and title on externalMoved", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      {
+        type: "externalMoved",
+        from: "/Users/Alice/Notes/readme.md",
+        to: "/Users/Alice/Notes/renamed.md",
+      },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      path: "/Users/Alice/Notes/renamed.md",
+      title: "renamed.md",
+      text: "saved",
+      status: "clean",
+    });
+  });
+
+  it("matches the move source through the platform path key", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      {
+        type: "externalMoved",
+        from: "/users/alice/notes/./README.md",
+        to: "/Users/Alice/Notes/renamed.md",
+      },
+    ]);
+
+    expect(state.tabs[0].path).toBe("/Users/Alice/Notes/renamed.md");
+  });
+
+  it("keeps a dirty tab's path and text on externalMoved so edits stay saveable", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      {
+        type: "externalMoved",
+        from: "/Users/Alice/Notes/readme.md",
+        to: "/Users/Alice/Notes/renamed.md",
+      },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      path: "/Users/Alice/Notes/readme.md",
+      text: "local edits",
+      status: "dirty",
+    });
+  });
+
+  it("does not move a clean tab onto a path another tab already owns", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      {
+        type: "fileOpened",
+        id: "doc-2",
+        file: openedFile({ path: "/Users/Alice/Notes/other.md" }),
+      },
+      {
+        type: "externalMoved",
+        from: "/Users/Alice/Notes/readme.md",
+        to: "/users/alice/notes/OTHER.md",
+      },
+    ]);
+
+    expect(state.tabs[0].path).toBe("/Users/Alice/Notes/readme.md");
+    expect(state.tabs[1].path).toBe("/Users/Alice/Notes/other.md");
+  });
+
+  it("restores a recovery draft as a dirty tab keyed by its original path", () => {
+    const state = reduce([
+      {
+        type: "documentRestored",
+        id: "doc-1",
+        draft: {
+          draftId: "draft-document-7",
+          originalPath: "/notes/a.md",
+          title: "a.md",
+          text: "unsaved work",
+          hasUtf8Bom: true,
+          newline: "cr_lf",
+          savedTextHash: "hash",
+          savedVersion: "v9",
+        },
+      },
+    ]);
+
+    expect(state.tabs[0]).toEqual({
+      id: "doc-1",
+      path: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved work",
+      savedText: "",
+      hasUtf8Bom: true,
+      newline: "cr_lf",
+      modifiedUnixMs: null,
+      version: "v9",
+      status: "dirty",
+    });
+    expect(state.activeId).toBe("doc-1");
+  });
+
+  it("merges a restored draft into an already-open tab for the same path", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      {
+        type: "documentRestored",
+        id: "doc-2",
+        draft: {
+          draftId: "draft-document-7",
+          originalPath: "/users/alice/notes/README.md",
+          title: "readme.md",
+          text: "unsaved work",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: "hash",
+          savedVersion: "v1",
+        },
+      },
+    ]);
+
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]).toMatchObject({
+      id: "doc-1",
+      text: "unsaved work",
+      savedText: "saved",
+      version: "v1",
+      status: "dirty",
+    });
+    expect(state.activeId).toBe("doc-1");
+  });
+
+  it("focuses an existing tab instead of restoring onto the same tab id", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "newDocument", id: "doc-2" },
+      {
+        type: "documentRestored",
+        id: "doc-1",
+        draft: {
+          draftId: "draft-document-1",
+          originalPath: null,
+          title: "Untitled",
+          text: "ignored",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: "hash",
+          savedVersion: null,
+        },
+      },
+    ]);
+
+    expect(state.tabs).toHaveLength(2);
+    expect(state.tabs[0].text).toBe("saved");
+    expect(state.activeId).toBe("doc-1");
+  });
+
+  it("replaces a conflicted tab with the loaded disk version on diskVersionLoaded", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      { type: "externalChanged", id: "doc-1", file: freshFile() },
+      { type: "diskVersionLoaded", id: "doc-1", file: freshFile({ version: "v3" }) },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      text: "disk text",
+      savedText: "disk text",
+      version: "v3",
+      status: "clean",
+    });
+  });
+
+  it("keeps local text and re-dirties the tab on conflictKeptLocal", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      { type: "externalChanged", id: "doc-1", file: freshFile() },
+      { type: "conflictKeptLocal", id: "doc-1" },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      text: "local edits",
+      version: "v2",
+      status: "dirty",
+    });
+  });
+
+  it("resolves to clean on conflictKeptLocal when the buffer matches the saved text", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "externalConflict", id: "doc-1", modifiedUnixMs: 200, version: "v2" },
+      { type: "conflictKeptLocal", id: "doc-1" },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({ text: "saved", status: "clean" });
+  });
+});
