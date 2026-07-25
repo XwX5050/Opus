@@ -598,6 +598,9 @@ export function useAppController(
         persistedDraftIds.current.add(id);
         void port.writeDraft(draftFromSnapshot(tab)).catch(() => {
           persistedDraftIds.current.delete(id);
+          // Drop the signature too, so the next state change re-arms the
+          // debounce instead of starving this tab after a transient failure.
+          draftSignatures.current.delete(id);
         });
       }, 2000));
     }

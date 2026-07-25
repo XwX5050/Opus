@@ -944,6 +944,41 @@ describe("useAppController recovery drafts", () => {
     }
   });
 
+  it("reschedules a draft write after a transient writeDraft failure", async () => {
+    vi.useFakeTimers();
+    try {
+      class FlakyDraftPort extends MemoryDocumentPort {
+        failures = 1;
+        override async writeDraft(draft: RecoveryDraft): Promise<RecoveryDraftInfo> {
+          if (this.failures > 0) {
+            this.failures -= 1;
+            throw new DocumentPortError("io", "transient draft failure");
+          }
+          return super.writeDraft(draft);
+        }
+      }
+      const port = new FlakyDraftPort(new Map([["/notes/a.md", draftableFile("/notes/a.md")]]));
+      const hook = renderHook(() => useAppController(port));
+      await act(() => hook.result.current.openPath("/notes/a.md"));
+      const id = hook.result.current.state.tabs[0].id;
+      act(() => hook.result.current.changeText(id, "unsaved work"));
+
+      await act(async () => { vi.advanceTimersByTime(2000); });
+      expect(port.drafts).toHaveLength(0);
+
+      // Any later state change must re-arm the debounce even when the tab's
+      // text is unchanged; without it the failed write would never retry.
+      act(() => hook.result.current.changeText(id, "unsaved work"));
+      await act(async () => { vi.advanceTimersByTime(2000); });
+
+      expect(port.drafts).toHaveLength(1);
+      expect(port.drafts[0]).toMatchObject({ draftId: `draft-${id}`, text: "unsaved work" });
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes pending drafts when the window close is requested", async () => {
     vi.useFakeTimers();
     try {
