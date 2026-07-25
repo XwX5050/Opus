@@ -57,7 +57,10 @@ build SHA, chip, and macOS version with the results.
 3. **Folder drag**: drag a folder onto the window. The sidebar opens with the
    folder as root; clicking files in the tree opens them.
 4. **In-app panels**: 打开文件… and 打开文件夹… buttons in the empty state
-   open the system pickers and open the selection.
+   open the system pickers and open the selection. For 打开文件夹… the
+   native folder picker must appear and respond normally — selecting and
+   cancelling both work and the app does not freeze (native panels come
+   from the JS dialog plugin, presented on the main thread).
 
 ### Editing
 
