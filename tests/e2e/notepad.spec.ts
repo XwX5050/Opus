@@ -132,39 +132,60 @@ test("cancelling a dirty close keeps the tab and the edits", async ({
   await expect(content).toContainText("未保存的修改");
 });
 
-test("toggles between live preview and source mode", async ({ page }) => {
+test("switches between editing, reading, and source modes", async ({
+  page,
+}) => {
   await seed(page, {
-    files: [{ path: "/docs/fmt.md", text: "前导语句\n\n**加粗文本** 普通\n" }],
+    files: [
+      {
+        path: "/docs/fmt.md",
+        text: "前导语句\n\n**加粗文本** 普通\n\n$E = mc^2$\n",
+      },
+    ],
     session: sessionWith("/docs/fmt.md"),
   });
 
   const content = editorContent(page);
   await content.waitFor();
-  // Live preview hides the emphasis markers while the cursor is elsewhere.
-  await expect(page.locator(".markdown-editor")).toHaveAttribute(
-    "data-source-mode",
-    "false",
-  );
+  const host = page.locator(".markdown-editor");
+  const switcher = page.getByRole("group", { name: "视图模式" });
+
+  // Editing (default): live preview hides markers while the cursor is away.
+  await expect(host).toHaveAttribute("data-view-mode", "editing");
   await expect(page.locator(".cm-live-preview-strong")).toBeVisible();
   await expect(content).not.toContainText("**");
 
-  const previewToggle = page.getByRole("button", { name: "实时预览" });
-  await previewToggle.click();
-  await expect(page.locator(".markdown-editor")).toHaveAttribute(
-    "data-source-mode",
-    "true",
-  );
-  await expect(content).toContainText("**加粗文本**");
-
-  // The toggle keeps its aria-label; the pressed state tracks the mode.
-  await expect(previewToggle).toHaveAttribute("aria-pressed", "false");
-  await previewToggle.click();
-  await expect(page.locator(".markdown-editor")).toHaveAttribute(
-    "data-source-mode",
-    "false",
-  );
+  // Reading: fully rendered, markers never revealed, typing is rejected.
+  await switcher.getByRole("button", { name: "阅读" }).click();
+  await expect(host).toHaveAttribute("data-view-mode", "reading");
+  await expect(content).toHaveAttribute("contenteditable", "false");
+  await expect(page.locator(".cm-live-preview-strong")).toBeVisible();
+  await expect(page.locator(".katex").first()).toBeVisible();
   await expect(content).not.toContainText("**");
+  await content.click();
+  await page.keyboard.type("x");
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+  await expect(content).not.toContainText("x");
+
+  // Source: raw text, editable again.
+  await switcher.getByRole("button", { name: "源码" }).click();
+  await expect(host).toHaveAttribute("data-view-mode", "source");
+  await expect(content).toContainText("**加粗文本**");
+  await content.click();
+  await page.keyboard.type("!");
+  await expect(content).toContainText("!");
+
+  // Back to editing: undo history survived the mode switches.
+  await switcher.getByRole("button", { name: "编辑" }).click();
+  await expect(host).toHaveAttribute("data-view-mode", "editing");
+  // Park the cursor in the first line, away from the strong node — a cursor
+  // inside it would reveal the markers by design.
+  await content.locator(".cm-line").first().click();
+  await expect(content).not.toContainText("**");
+  await page.keyboard.press("Meta+z");
+  await expect(content).not.toContainText("!");
 });
+
 
 test("renders valid LaTeX and flags invalid LaTeX without blocking edits", async ({
   page,

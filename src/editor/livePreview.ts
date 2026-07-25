@@ -179,10 +179,19 @@ const normalizeRanges = (
   return merged;
 };
 
+export interface LivePreviewOptions {
+  /**
+   * When false, the selection never reveals source markers — used by reading
+   * mode, which stays fully rendered wherever the cursor sits. Default true.
+   */
+  readonly revealSelection?: boolean;
+}
+
 export const planLivePreview = (
   state: EditorState,
   ranges?: readonly LivePreviewRange[],
   diagnostics?: LivePreviewDiagnostics,
+  options?: LivePreviewOptions,
 ): PlannedDecoration[] => {
   const structures: Structure[] = [];
   const markerCandidates: { owner: Structure; node: MarkerNode }[] = [];
@@ -218,7 +227,9 @@ export const planLivePreview = (
     });
   }
 
-  const directlySelected = structures.filter(({ node }) => selectionIntersects(state, node));
+  const directlySelected = (options?.revealSelection ?? true)
+    ? structures.filter(({ node }) => selectionIntersects(state, node))
+    : [];
   const revealed = (structure: Structure) =>
     directlySelected.some(({ node }) => rangesContainEachOther(structure.node, node));
 
@@ -403,10 +414,11 @@ const planningRanges = (view: EditorView): LivePreviewRange[] => [
 const decorationSetsFor = (
   state: EditorState,
   ranges?: readonly LivePreviewRange[],
+  options?: LivePreviewOptions,
 ): { decorations: DecorationSet; atomicRanges: DecorationSet } => {
   const decorations: ReturnType<Decoration["range"]>[] = [];
   const atomicRanges: ReturnType<Decoration["range"]>[] = [];
-  for (const item of planLivePreview(state, ranges)) {
+  for (const item of planLivePreview(state, ranges, undefined, options)) {
     let decoration: ReturnType<Decoration["range"]>;
     if (item.kind === "mark") {
       decorations.push(
@@ -457,13 +469,13 @@ class LivePreviewPlugin {
   atomicRanges: DecorationSet;
   private composing: boolean;
 
-  constructor(view: EditorView) {
+  constructor(view: EditorView, private readonly options?: LivePreviewOptions) {
     this.composing = view.compositionStarted;
     if (this.composing) {
       this.decorations = Decoration.none;
       this.atomicRanges = Decoration.none;
     } else {
-      const sets = decorationSetsFor(view.state, planningRanges(view));
+      const sets = decorationSetsFor(view.state, planningRanges(view), this.options);
       this.decorations = sets.decorations;
       this.atomicRanges = sets.atomicRanges;
     }
@@ -486,7 +498,7 @@ class LivePreviewPlugin {
       syntaxChanged ||
       explicitlyRefreshed
     ) {
-      const sets = decorationSetsFor(update.state, planningRanges(update.view));
+      const sets = decorationSetsFor(update.state, planningRanges(update.view), this.options);
       this.decorations = sets.decorations;
       this.atomicRanges = sets.atomicRanges;
     }
@@ -501,31 +513,39 @@ class LivePreviewPlugin {
 
   endComposition(view: EditorView) {
     this.composing = false;
-    const sets = decorationSetsFor(view.state, planningRanges(view));
+    const sets = decorationSetsFor(view.state, planningRanges(view), this.options);
     this.decorations = sets.decorations;
     this.atomicRanges = sets.atomicRanges;
     view.dispatch({ effects: refreshLivePreview.of(null) });
   }
 }
 
-const livePreviewPlugin = ViewPlugin.fromClass(LivePreviewPlugin, {
-  decorations: (plugin) => plugin.decorations,
-  provide: (plugin) =>
-    EditorView.atomicRanges.of(
-      (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none,
-    ),
-  eventHandlers: {
-    compositionstart(_event, view) {
-      this.startComposition(view);
+const livePreviewPlugin = (options?: LivePreviewOptions) =>
+  ViewPlugin.fromClass(
+    class extends LivePreviewPlugin {
+      constructor(view: EditorView) {
+        super(view, options);
+      }
     },
-    compositionupdate(_event, view) {
-      this.startComposition(view);
+    {
+      decorations: (plugin) => plugin.decorations,
+      provide: (plugin) =>
+        EditorView.atomicRanges.of(
+          (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none,
+        ),
+      eventHandlers: {
+        compositionstart(_event, view) {
+          this.startComposition(view);
+        },
+        compositionupdate(_event, view) {
+          this.startComposition(view);
+        },
+        compositionend(_event, view) {
+          this.endComposition(view);
+        },
+      },
     },
-    compositionend(_event, view) {
-      this.endComposition(view);
-    },
-  },
-});
+  );
 
 const livePreviewTheme = EditorView.baseTheme({
   ".cm-live-preview-heading-1": { fontSize: "1.6em", fontWeight: "700" },
@@ -564,7 +584,7 @@ const livePreviewTheme = EditorView.baseTheme({
   },
 });
 
-export const livePreviewExtension = (): Extension => [
-  livePreviewPlugin,
+export const livePreviewExtension = (options?: LivePreviewOptions): Extension => [
+  livePreviewPlugin(options),
   livePreviewTheme,
 ];

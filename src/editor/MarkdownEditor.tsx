@@ -14,6 +14,7 @@ import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
 import { mathWidgetsExtension } from "./mathWidgets";
 import type { PerformanceMode } from "./performanceMode";
+import type { EditorViewMode } from "./viewMode";
 
 const externalValueSync = Annotation.define<boolean>();
 
@@ -29,7 +30,9 @@ export interface MarkdownEditorProps {
   onChange(value: string): void;
   onSave(): void;
   onReopenClosed(): void;
-  sourceMode: boolean;
+  onToggleReading(): void;
+  onToggleSource(): void;
+  viewMode: EditorViewMode;
   documentPath: string | null;
   saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
   resolveImageUrl(path: string): string;
@@ -48,7 +51,9 @@ export default function MarkdownEditor({
   onChange,
   onSave,
   onReopenClosed,
-  sourceMode,
+  onToggleReading,
+  onToggleSource,
+  viewMode,
   documentPath,
   saveClipboardImage,
   resolveImageUrl,
@@ -58,11 +63,23 @@ export default function MarkdownEditor({
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewCompartmentRef = useRef(new Compartment());
-  const previousPreviewRef = useRef({ sourceMode, performanceMode });
+  const previousPreviewRef = useRef({ viewMode, performanceMode });
   const documentPathRef = useRef(documentPath);
   documentPathRef.current = documentPath;
-  const callbacksRef = useRef({ onChange, onSave, onReopenClosed });
-  callbacksRef.current = { onChange, onSave, onReopenClosed };
+  const callbacksRef = useRef({
+    onChange,
+    onSave,
+    onReopenClosed,
+    onToggleReading,
+    onToggleSource,
+  });
+  callbacksRef.current = {
+    onChange,
+    onSave,
+    onReopenClosed,
+    onToggleReading,
+    onToggleSource,
+  };
   const imageSupportRef = useRef({ saveClipboardImage, resolveImageUrl });
   imageSupportRef.current = { saveClipboardImage, resolveImageUrl };
   // Identity of the last value this editor emitted or adopted. Comparing
@@ -71,20 +88,29 @@ export default function MarkdownEditor({
   // but costs tens of milliseconds on pressure-sized documents.
   const lastSyncedValueRef = useRef(value);
 
-  const previewExtensions = (mode: PerformanceMode) => [
-    livePreviewExtension(),
-    // Light mode pauses offscreen image creation and nonessential block
-    // widgets; visible-range text styling (live preview) stays on.
-    ...(mode === "light"
-      ? []
-      : [
-          mathWidgetsExtension(),
-          imageWidgetsExtension({
-            getDocumentPath: () => documentPathRef.current,
-            resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
-          }),
-        ]),
-  ];
+  const previewExtensionsFor = (mode: EditorViewMode, perf: PerformanceMode) => {
+    if (mode === "source") return [];
+    const readOnly =
+      mode === "reading"
+        ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+        : [];
+    return [
+      ...readOnly,
+      // Reading mode never reveals source markers, wherever the cursor sits.
+      livePreviewExtension({ revealSelection: mode !== "reading" }),
+      // Light mode pauses offscreen image creation and nonessential block
+      // widgets; visible-range text styling (live preview) stays on.
+      ...(perf === "light"
+        ? []
+        : [
+            mathWidgetsExtension(),
+            imageWidgetsExtension({
+              getDocumentPath: () => documentPathRef.current,
+              resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
+            }),
+          ]),
+    ];
+  };
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -97,9 +123,11 @@ export default function MarkdownEditor({
             {
               onSave: () => callbacksRef.current.onSave(),
               onReopenClosed: () => callbacksRef.current.onReopenClosed(),
+              onToggleReading: () => callbacksRef.current.onToggleReading(),
+              onToggleSource: () => callbacksRef.current.onToggleSource(),
             },
             previewCompartmentRef.current.of(
-              sourceMode ? [] : previewExtensions(performanceMode),
+              previewExtensionsFor(viewMode, performanceMode),
             ),
           ),
           imagePasteExtension({
@@ -163,20 +191,20 @@ export default function MarkdownEditor({
     const previous = previousPreviewRef.current;
     if (
       !view ||
-      (previous.sourceMode === sourceMode &&
+      (previous.viewMode === viewMode &&
         previous.performanceMode === performanceMode)
     ) {
       return;
     }
-    previousPreviewRef.current = { sourceMode, performanceMode };
+    previousPreviewRef.current = { viewMode, performanceMode };
     view.dispatch({
       effects: previewCompartmentRef.current.reconfigure(
-        sourceMode ? [] : previewExtensions(performanceMode),
+        previewExtensionsFor(viewMode, performanceMode),
       ),
     });
     // Preview extensions read live refs; rebuilding them on toggle is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceMode, performanceMode]);
+  }, [viewMode, performanceMode]);
 
   // A drop delivered before this editor mounted is stale: only drops with a
   // newer sequence are inserted.
@@ -198,7 +226,7 @@ export default function MarkdownEditor({
       ref={hostRef}
       className="markdown-editor"
       data-document-path={documentPath ?? ""}
-      data-source-mode={sourceMode ? "true" : "false"}
+      data-view-mode={viewMode}
     />
   );
 }

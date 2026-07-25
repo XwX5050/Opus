@@ -34,7 +34,6 @@ export default function AppShell({
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
   useTheme(controller.theme, controller.editorPreferences);
-  const [sourceMode, setSourceMode] = useState(false);
   const sidebar = controller.sidebarPreferences;
   const setSidebar = controller.setSidebarPreferences;
   const sidebarAvailable =
@@ -56,6 +55,7 @@ export default function AppShell({
   const active = controller.state.tabs.find(
     (tab) => tab.id === controller.state.activeId,
   );
+  const viewMode = controller.viewModeOf(active?.id);
   // Per-tab light-mode UI state: "继续完整渲染" overrides and banner
   // dismissals are tab-scoped, so they are pruned as soon as a tab closes —
   // a closed-and-reopened document always returns to automatic mode.
@@ -161,10 +161,24 @@ export default function AppShell({
 
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (anyDialogOpen) return;
-    if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "t") return;
+    if (!(event.metaKey || event.ctrlKey)) return;
     if ((event.target as HTMLElement).closest(".cm-editor")) return;
-    event.preventDefault();
-    reopenClosed();
+    const key = event.key.toLowerCase();
+    if (event.shiftKey && key === "t") {
+      event.preventDefault();
+      reopenClosed();
+      return;
+    }
+    if (!active) return;
+    if (event.shiftKey && key === "e") {
+      event.preventDefault();
+      controller.toggleSource(active.id);
+      return;
+    }
+    if (!event.shiftKey && key === "e") {
+      event.preventDefault();
+      controller.toggleReading(active.id);
+    }
   };
 
   useEffect(() => {
@@ -292,14 +306,20 @@ export default function AppShell({
             <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
             <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
             <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
-            <button
-              type="button"
-              aria-label="实时预览"
-              aria-pressed={!sourceMode}
-              onClick={() => setSourceMode((current) => !current)}
-            >
-              {sourceMode ? "源码模式" : "实时预览"}
-            </button>
+            {active && (
+              <div role="group" aria-label="视图模式" className="view-mode-switch">
+                {(["reading", "editing", "source"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={viewMode === mode}
+                    onClick={() => controller.setViewMode(active.id, mode)}
+                  >
+                    {{ reading: "阅读", editing: "编辑", source: "源码" }[mode]}
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         )}
         {sidebarAvailable && sidebar.collapsed && (
@@ -431,7 +451,9 @@ export default function AppShell({
             onChange={(text) => controller.changeText(active.id, text)}
             onSave={() => void controller.save(active.id)}
             onReopenClosed={reopenClosed}
-            sourceMode={sourceMode}
+            onToggleReading={() => controller.toggleReading(active.id)}
+            onToggleSource={() => controller.toggleSource(active.id)}
+            viewMode={viewMode}
             documentPath={active.path}
             saveClipboardImage={(input) => port.saveClipboardImage(input)}
             resolveImageUrl={tauriImagePreviewUrl}

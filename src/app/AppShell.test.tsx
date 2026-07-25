@@ -119,7 +119,7 @@ describe("AppShell", () => {
     expect(subscribeToImageDrops).toHaveBeenCalledOnce();
   });
 
-  it("defaults to live preview and toggles source mode without rebuilding the editor", async () => {
+  it("defaults to editing and switches view modes through the segmented control in the same editor", async () => {
     const user = userEvent.setup();
     render(
       <AppShell
@@ -134,17 +134,21 @@ describe("AppShell", () => {
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     const root = view.dom;
     const selection = view.state.selection;
-    const toggle = screen.getByRole("button", { name: "实时预览" });
+    const switcher = screen.getByRole("group", { name: "视图模式" });
+    const readingButton = within(switcher).getByRole("button", { name: "阅读" });
+    const editingButton = within(switcher).getByRole("button", { name: "编辑" });
+    const sourceButton = within(switcher).getByRole("button", { name: "源码" });
 
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(editingButton).toHaveAttribute("aria-pressed", "true");
+    expect(readingButton).toHaveAttribute("aria-pressed", "false");
+    expect(sourceButton).toHaveAttribute("aria-pressed", "false");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
     expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
     expect(editor()).not.toHaveTextContent("**");
 
-    await user.click(toggle);
-    const sourceToggle = screen.getByRole("button", { name: "实时预览" });
-    expect(sourceToggle).toHaveAttribute("aria-pressed", "false");
-    expect(sourceToggle).toHaveTextContent("源码模式");
+    await user.click(sourceButton);
+    expect(sourceButton).toHaveAttribute("aria-pressed", "true");
+    expect(editingButton).toHaveAttribute("aria-pressed", "false");
     expect(EditorView.findFromDOM(editor())).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(root.querySelector(".cm-live-preview-strong")).toBeNull();
@@ -152,15 +156,99 @@ describe("AppShell", () => {
     expect(editor()).toHaveTextContent("**world**");
     expect(editor()).toHaveTextContent("---");
 
-    await user.click(sourceToggle);
-    expect(screen.getByRole("button", { name: "实时预览" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await user.click(editingButton);
+    expect(editingButton).toHaveAttribute("aria-pressed", "true");
     expect(EditorView.findFromDOM(editor())).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
     expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
+  });
+
+  it("reading mode renders fully without revealing markers and rejects edits", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        port={new InspectablePort([file("/notes/read.md", "**world** rest")])}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+
+    await user.click(
+      within(screen.getByRole("group", { name: "视图模式" })).getByRole("button", { name: "阅读" }),
+    );
+    // Even with the cursor inside the strong node, markers stay hidden.
+    view.dispatch({ selection: { anchor: 4 } });
+    expect(editor()).toHaveAttribute("contenteditable", "false");
+    expect(editor()).not.toHaveTextContent("**");
+    expect(document.querySelector(".cm-live-preview-strong")).not.toBeNull();
+
+    editor().focus();
+    await user.keyboard("x");
+    expect(view.state.doc.toString()).toBe("**world** rest");
+  });
+
+  it("toggles reading and source modes from the shell when focus is outside the editor", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        port={new InspectablePort([file("/notes/keys.md", "**world** rest")])}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const switcher = screen.getByRole("group", { name: "视图模式" });
+
+    screen.getByRole("main").focus();
+    await user.keyboard("{Control>}e{/Control}");
+    expect(
+      within(switcher).getByRole("button", { name: "阅读" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(editor()).toHaveAttribute("contenteditable", "false");
+
+    await user.keyboard("{Control>}{Shift>}e{/Shift}{/Control}");
+    expect(
+      within(switcher).getByRole("button", { name: "源码" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(editor()).toHaveTextContent("**world**");
+
+    // Source toggles back to the last non-source mode (reading here).
+    await user.keyboard("{Control>}{Shift>}e{/Shift}{/Control}");
+    expect(
+      within(switcher).getByRole("button", { name: "阅读" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("remembers the view mode per tab", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        port={
+          new InspectablePort([
+            file("/notes/a.md", "**alpha**"),
+            file("/notes/b.md", "**bravo**"),
+          ])
+        }
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const switcher = screen.getByRole("group", { name: "视图模式" });
+    const pressedMode = () =>
+      within(switcher)
+        .getAllByRole("button")
+        .find((button) => button.getAttribute("aria-pressed") === "true")
+        ?.textContent;
+
+    // b.md is active; put it in reading mode.
+    expect(screen.getByRole("tab", { name: /b\.md/ })).toHaveAttribute("aria-selected", "true");
+    await user.click(within(switcher).getByRole("button", { name: "阅读" }));
+    expect(pressedMode()).toBe("阅读");
+
+    // a.md keeps its own default; switching back restores b.md's mode.
+    await user.click(screen.getByRole("tab", { name: /a\.md/ }));
+    expect(pressedMode()).toBe("编辑");
+    await user.click(screen.getByRole("tab", { name: /b\.md/ }));
+    expect(pressedMode()).toBe("阅读");
   });
 
   it("opens two files as tabs and focuses an equivalent path instead of duplicating it", async () => {

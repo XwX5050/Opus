@@ -11,7 +11,9 @@ const renderEditor = (overrides: Partial<React.ComponentProps<typeof MarkdownEdi
     onChange: vi.fn(),
     onSave: vi.fn(),
     onReopenClosed: vi.fn(),
-    sourceMode: true,
+    onToggleReading: vi.fn(),
+    onToggleSource: vi.fn(),
+    viewMode: "source" as const,
     documentPath: "/notes/a.md",
     saveClipboardImage: vi.fn(async () => null),
     resolveImageUrl: (path: string) => `asset://localhost${path}`,
@@ -75,7 +77,7 @@ describe("document search", () => {
 
   it("searches raw Markdown source, including markers hidden by live preview", async () => {
     const user = userEvent.setup();
-    renderEditor({ value: "see **bold** here", sourceMode: false });
+    renderEditor({ value: "see **bold** here", viewMode: "editing" });
     const view = editorView();
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     expect(content().textContent).not.toContain("**");

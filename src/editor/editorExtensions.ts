@@ -27,6 +27,8 @@ import { mathMarkdownExtension } from "./mathExtension";
 export interface EditorCommands {
   onSave(): void;
   onReopenClosed(): void;
+  onToggleReading(): void;
+  onToggleSource(): void;
 }
 
 // Syntax colors resolve through the design-token cascade (see
@@ -80,6 +82,24 @@ export const editorExtensions = (
   livePreview,
   search({ top: true }),
   keymap.of([
+    // The shifted binding comes first: CodeMirror also matches "Mod-e"
+    // against a Mod-Shift-E event, so the more specific binding must win.
+    {
+      key: "Mod-Shift-e",
+      preventDefault: true,
+      run: () => {
+        commands.onToggleSource();
+        return true;
+      },
+    },
+    {
+      key: "Mod-e",
+      preventDefault: true,
+      run: () => {
+        commands.onToggleReading();
+        return true;
+      },
+    },
     {
       key: "Mod-s",
       preventDefault: true,

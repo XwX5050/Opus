@@ -8,7 +8,7 @@ describe("editorExtensions", () => {
     const state = EditorState.create({
       doc: "~~done~~ and $x^2$",
       extensions: [
-        editorExtensions({ onSave: vi.fn(), onReopenClosed: vi.fn() }),
+        editorExtensions({ onSave: vi.fn(), onReopenClosed: vi.fn(), onToggleReading: vi.fn(), onToggleSource: vi.fn() }),
       ],
     });
 

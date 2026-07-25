@@ -103,6 +103,14 @@ describe("planLivePreview", () => {
       .toHaveLength(2);
   });
 
+  it("hides markers even under the cursor when revealSelection is false", () => {
+    const state = createState("**world** rest", [{ anchor: 4 }]);
+    const plan = planLivePreview(state, undefined, undefined, {
+      revealSelection: false,
+    });
+    expect(hiddenSource(state, plan).filter((text) => text === "**")).toHaveLength(2);
+  });
+
   it("reveals both adjacent structures when the cursor sits on their shared boundary", () => {
     const doc = "*one*~~two~~";
     const boundary = doc.indexOf("~~");

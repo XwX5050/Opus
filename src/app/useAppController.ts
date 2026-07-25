@@ -34,6 +34,7 @@ import {
   type ThemePreference,
 } from "../theme/preferences";
 import type { OpenPathSubscriptions } from "../document/tauriDocumentPort";
+import type { EditorViewMode } from "../editor/viewMode";
 
 export type EventSubscriber = (
   port: DocumentPort,
@@ -88,6 +89,14 @@ export function useAppController(
     useState<EditorPreferences>(DEFAULT_EDITOR_PREFERENCES);
   const [sidebarPreferences, setSidebarPreferences] =
     useState<SidebarPreferences>(DEFAULT_SIDEBAR_PREFERENCES);
+  // Per-tab view-mode memory: only non-default modes are stored, so a tab
+  // without an entry (including every new tab) is in "editing". Entries are
+  // pruned as soon as their tab closes — a closed-and-reopened document
+  // always returns to "editing".
+  const [viewModes, setViewModes] =
+    useState<ReadonlyMap<string, EditorViewMode>>(new Map());
+  // The mode toggleSource returns to (per tab); pruned alongside viewModes.
+  const lastNonSourceViewModes = useRef(new Map<string, "reading" | "editing">());
   const [recoveryDrafts, setRecoveryDrafts] =
     useState<ReadonlyArray<RecoveryDraftInfo> | null>(null);
   const workspacePathRef = useRef<string | null>(null);
@@ -236,6 +245,69 @@ export function useAppController(
       setEditorPreferencesState(clampEditorPreferences(value)),
     [],
   );
+
+  const viewModeOf = useCallback(
+    (id: string | null | undefined): EditorViewMode =>
+      (id ? viewModes.get(id) : undefined) ?? "editing",
+    [viewModes],
+  );
+
+  const setViewMode = useCallback((id: string, mode: EditorViewMode) => {
+    if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
+    setViewModes((current) => {
+      if ((current.get(id) ?? "editing") === mode) return current;
+      const next = new Map(current);
+      if (mode === "editing") next.delete(id);
+      else next.set(id, mode);
+      return next;
+    });
+  }, []);
+
+  const toggleReading = useCallback((id: string) => {
+    setViewModes((current) => {
+      const target = (current.get(id) ?? "editing") === "reading" ? "editing" : "reading";
+      lastNonSourceViewModes.current.set(id, target);
+      const next = new Map(current);
+      if (target === "editing") next.delete(id);
+      else next.set(id, target);
+      return next;
+    });
+  }, []);
+
+  const toggleSource = useCallback((id: string) => {
+    setViewModes((current) => {
+      const mode = current.get(id) ?? "editing";
+      const target =
+        mode === "source"
+          ? lastNonSourceViewModes.current.get(id) ?? "editing"
+          : "source";
+      if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
+      if (mode === target) return current;
+      const next = new Map(current);
+      if (target === "editing") next.delete(id);
+      else next.set(id, target);
+      return next;
+    });
+  }, []);
+
+  // Prune view-mode memory for tabs that no longer exist.
+  const viewModeTabIdsKey = state.tabs.map((tab) => tab.id).join("\n");
+  useEffect(() => {
+    const open = new Set(state.tabs.map((tab) => tab.id));
+    for (const id of [...lastNonSourceViewModes.current.keys()]) {
+      if (!open.has(id)) lastNonSourceViewModes.current.delete(id);
+    }
+    setViewModes((current) => {
+      if ([...current.keys()].every((id) => open.has(id))) return current;
+      const next = new Map(current);
+      for (const id of [...next.keys()]) {
+        if (!open.has(id)) next.delete(id);
+      }
+      return next;
+    });
+    // Keyed on the open tab ids; the reducer's tab list is the source of truth.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewModeTabIdsKey]);
 
   const addOpenedFiles = useCallback((
     files: ReadonlyArray<OpenedFile>,
@@ -913,6 +985,11 @@ export function useAppController(
     setEditorPreferences,
     sidebarPreferences,
     setSidebarPreferences,
+    viewModes,
+    viewModeOf,
+    setViewMode,
+    toggleReading,
+    toggleSource,
     recoveryDrafts,
     newDocument,
     openFiles,

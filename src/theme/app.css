@@ -139,6 +139,12 @@ select {
   color: var(--accent);
 }
 
+.view-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 /* ---------- Sidebar sections + vertical tab list ---------- */
 
 .sidebar-section {
@@ -314,6 +320,11 @@ select {
 
 .cm-editor .cm-cursor {
   border-left-color: var(--text-primary);
+}
+
+/* Reading mode is read-only and fully rendered; the cursor never shows. */
+.markdown-editor[data-view-mode="reading"] .cm-cursor {
+  display: none;
 }
 
 /* Live preview decorations */
