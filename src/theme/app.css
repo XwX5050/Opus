@@ -139,14 +139,35 @@ select {
   color: var(--accent);
 }
 
-/* ---------- Tab strip ---------- */
+/* ---------- Sidebar sections + vertical tab list ---------- */
 
-.tab-strip {
+.sidebar-section {
   display: flex;
+  flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-3);
-  border-bottom: 1px solid var(--divider);
-  overflow-x: auto;
+  min-height: 0;
+}
+
+.sidebar-section-header {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size);
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+}
+
+.sidebar-section-header:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tab-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .tab-item {
@@ -156,10 +177,12 @@ select {
 }
 
 .tab {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
-  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -176,13 +199,13 @@ select {
 }
 
 .tab[aria-selected="true"] {
-  background: var(--surface);
+  background: var(--surface-hover);
   border-color: var(--divider);
   color: var(--text-primary);
 }
 
 .tab[aria-selected="true"] + .tab-close {
-  background: var(--surface);
+  background: var(--surface-hover);
   border-color: var(--divider);
   color: var(--text-secondary);
 }

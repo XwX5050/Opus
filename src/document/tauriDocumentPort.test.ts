@@ -573,6 +573,34 @@ describe("tauri document port session, window geometry, and close requests", () 
     await expect(createTauriDocumentPort().loadSession()).resolves.toBeNull();
   });
 
+  it("round-trips sidebar preferences and normalizes malformed ones to defaults", async () => {
+    const port = createTauriDocumentPort();
+    const session = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      sidebar: { collapsed: true, tabsSectionCollapsed: false, filesSectionCollapsed: true },
+    };
+    await port.saveSession(session);
+    await expect(port.loadSession()).resolves.toEqual(session);
+
+    storeMocks.values.set("session", {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      sidebar: { collapsed: "yes", tabsSectionCollapsed: 1 },
+    });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      sidebar: { collapsed: false, tabsSectionCollapsed: false, filesSectionCollapsed: false },
+    });
+  });
+
   it("flushes on close request before destroying the window", async () => {
     const port = createTauriDocumentPort();
     const stop = await port.onCloseRequested(async () => {

@@ -181,7 +181,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "document-panel-document-2");
     expect(screen.getByRole("tab", { name: /B\.md/ })).toHaveAttribute("aria-selected", "true");
     tabs[1].focus();
-    await user.keyboard("{ArrowLeft}");
+    await user.keyboard("{ArrowUp}");
     expect(screen.getByRole("tab", { name: /A\.md/ })).toHaveAttribute("aria-selected", "true");
 
     const duplicatePort = new InspectablePort([file("/NOTES/./a.md", "stale duplicate")]);
@@ -513,7 +513,7 @@ describe("AppShell workspace drawer", () => {
       { workspace: { path: "/notes", title: "notes" } },
     );
 
-  it("stays hidden for loose files and opens after 打开文件夹", async () => {
+  it("stays hidden in the empty state and opens after 打开文件夹", async () => {
     const user = userEvent.setup();
     render(<AppShell port={workspacePort()} />);
 
@@ -521,18 +521,38 @@ describe("AppShell workspace drawer", () => {
 
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
 
-    const sidebar = await screen.findByRole("complementary", { name: "文件侧栏" });
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
     expect(within(sidebar).getByText("notes")).toBeInTheDocument();
     expect(
       await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
     ).toBeInTheDocument();
   });
 
+  it("shows the sidebar for open tabs without a workspace, with no 文件夹 section", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        port={new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]]))}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    expect(
+      within(sidebar).getByRole("button", { name: "打开的标签" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(within(sidebar).getByRole("tab", { name: /a\.md/ })).toBeVisible();
+    expect(
+      within(sidebar).queryByRole("button", { name: "文件夹" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens a clicked tree file in a tab", async () => {
     const user = userEvent.setup();
     render(<AppShell port={workspacePort()} />);
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
-    const sidebar = await screen.findByRole("complementary", { name: "文件侧栏" });
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
 
     await user.click(
       await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
@@ -542,18 +562,40 @@ describe("AppShell workspace drawer", () => {
     expect(editor()).toHaveTextContent("saved");
   });
 
+  it("collapses the 打开的标签 and 文件夹 sections independently", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    await user.click(
+      await within(sidebar).findByRole("treeitem", { name: "alpha.md" }),
+    );
+    await within(sidebar).findByRole("tab", { name: /alpha\.md/ });
+
+    await user.click(within(sidebar).getByRole("button", { name: "打开的标签" }));
+    expect(within(sidebar).queryByRole("tablist")).not.toBeInTheDocument();
+    expect(within(sidebar).getByRole("tree", { name: "工作区文件" })).toBeVisible();
+
+    await user.click(within(sidebar).getByRole("button", { name: "打开的标签" }));
+    expect(within(sidebar).getByRole("tab", { name: /alpha\.md/ })).toBeVisible();
+
+    await user.click(within(sidebar).getByRole("button", { name: "文件夹" }));
+    expect(within(sidebar).queryByRole("tree")).not.toBeInTheDocument();
+    expect(within(sidebar).getByRole("tab", { name: /alpha\.md/ })).toBeVisible();
+  });
+
   it("remains manually collapsible and expandable", async () => {
     const user = userEvent.setup();
     render(<AppShell port={workspacePort()} />);
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
-    await screen.findByRole("complementary", { name: "文件侧栏" });
+    await screen.findByRole("complementary", { name: "侧栏" });
 
     await user.click(screen.getByRole("button", { name: "收起侧栏" }));
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "展开侧栏" }));
     expect(
-      await screen.findByRole("complementary", { name: "文件侧栏" }),
+      await screen.findByRole("complementary", { name: "侧栏" }),
     ).toBeInTheDocument();
   });
 
@@ -561,7 +603,7 @@ describe("AppShell workspace drawer", () => {
     const user = userEvent.setup();
     render(<AppShell port={workspacePort()} />);
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
-    const sidebar = await screen.findByRole("complementary", { name: "文件侧栏" });
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
 
     await user.click(
       within(sidebar).getByRole("button", { name: "关闭文件夹" }),
@@ -569,6 +611,53 @@ describe("AppShell workspace drawer", () => {
 
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开侧栏" })).not.toBeInTheDocument();
+  });
+
+  it("persists collapse preferences and restores them from the session", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md")]]),
+      {
+        workspace: { path: "/notes", title: "notes" },
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+          sidebar: {
+            collapsed: true,
+            tabsSectionCollapsed: true,
+            filesSectionCollapsed: false,
+          },
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+
+    // Restored: tabs are back, the whole sidebar starts collapsed.
+    await screen.findByRole("button", { name: "展开侧栏" });
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+
+    // Expanding reveals the restored tabs-section collapse, then every
+    // interaction is written back into the persisted session.
+    await user.click(screen.getByRole("button", { name: "展开侧栏" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    expect(within(sidebar).queryByRole("tablist")).not.toBeInTheDocument();
+
+    await user.click(within(sidebar).getByRole("button", { name: "打开的标签" }));
+    expect(within(sidebar).getByRole("tab", { name: /a\.md/ })).toBeVisible();
+    await waitFor(() =>
+      expect(port.session?.sidebar).toEqual({
+        collapsed: false,
+        tabsSectionCollapsed: false,
+        filesSectionCollapsed: false,
+      }),
+    );
+
+    await user.click(within(sidebar).getByRole("button", { name: "收起侧栏" }));
+    await waitFor(() =>
+      expect(port.session?.sidebar?.collapsed).toBe(true),
+    );
   });
 });
 
@@ -600,7 +689,7 @@ describe("AppShell recent items and recovery", () => {
     expect(within(recent).getByRole("button", { name: "文件夹 /notes" })).toBeVisible();
 
     await user.click(within(recent).getByRole("button", { name: "文件夹 /notes" }));
-    expect(await screen.findByRole("complementary", { name: "文件侧栏" })).toBeVisible();
+    expect(await screen.findByRole("complementary", { name: "侧栏" })).toBeVisible();
 
     await user.click(
       within(await screen.findByRole("region", { name: "最近打开" })).getByRole("button", {

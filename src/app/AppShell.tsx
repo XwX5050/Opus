@@ -8,6 +8,7 @@ import RecoveryDialog from "../recovery/RecoveryDialog";
 import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
 import SettingsDialog from "./SettingsDialog";
+import TabList from "./TabList";
 import { type EventSubscriber, useAppController } from "./useAppController";
 
 export type ImageDropSubscriber = (
@@ -33,7 +34,10 @@ export default function AppShell({
   const controller = useAppController(port, subscribeToEvents);
   useTheme(controller.theme, controller.editorPreferences);
   const [sourceMode, setSourceMode] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebar = controller.sidebarPreferences;
+  const setSidebar = controller.setSidebarPreferences;
+  const sidebarAvailable =
+    controller.state.tabs.length > 0 || controller.workspace !== null;
   const [settingsRequested, setSettingsRequested] = useState(false);
   const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
@@ -96,8 +100,8 @@ export default function AppShell({
   // Opening a workspace always reveals the drawer; it stays manually
   // collapsible afterwards.
   useEffect(() => {
-    if (workspacePath) setSidebarCollapsed(false);
-  }, [workspacePath]);
+    if (workspacePath) setSidebar((current) => ({ ...current, collapsed: false }));
+  }, [workspacePath, setSidebar]);
 
   useEffect(() => {
     if (!subscribeToImageDrops) return;
@@ -237,22 +241,6 @@ export default function AppShell({
     trapDialogFocus(event);
   };
 
-  const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const tabs = controller.state.tabs;
-    let targetIndex: number | null = null;
-    if (event.key === "ArrowLeft") targetIndex = (index - 1 + tabs.length) % tabs.length;
-    if (event.key === "ArrowRight") targetIndex = (index + 1) % tabs.length;
-    if (event.key === "Home") targetIndex = 0;
-    if (event.key === "End") targetIndex = tabs.length - 1;
-    if (targetIndex === null) return;
-    event.preventDefault();
-    controller.activate(tabs[targetIndex].id);
-    const tabButtons = event.currentTarget
-      .closest('[role="tablist"]')
-      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabButtons?.[targetIndex]?.focus();
-  };
-
   return (
     <main
       ref={shellRef}
@@ -284,8 +272,13 @@ export default function AppShell({
             </button>
           </>
         )}
-        {controller.workspace && sidebarCollapsed && (
-          <button type="button" onClick={() => setSidebarCollapsed(false)}>展开侧栏</button>
+        {sidebarAvailable && sidebar.collapsed && (
+          <button
+            type="button"
+            onClick={() => setSidebar((current) => ({ ...current, collapsed: false }))}
+          >
+            展开侧栏
+          </button>
         )}
         <button
           type="button"
@@ -300,60 +293,72 @@ export default function AppShell({
         </button>
       </header>
 
-      {controller.state.tabs.length > 0 && (
-        <div role="tablist" aria-label="打开的文档" className="tab-strip">
-          {controller.state.tabs.map((tab, index) => (
-            <div key={tab.id} className="tab-item">
-              <button
-                type="button"
-                role="tab"
-                id={`document-tab-${tab.id}`}
-                className="tab"
-                aria-selected={tab.id === controller.state.activeId}
-                aria-controls={`document-panel-${tab.id}`}
-                tabIndex={tab.id === controller.state.activeId ? 0 : -1}
-                onClick={() => controller.activate(tab.id)}
-                onKeyDown={(event) => onTabKeyDown(event, index)}
-              >
-                {tab.title}
-                {tab.status !== "clean" && (
-                  <>
-                    <span aria-hidden="true" className="tab-dirty"> ●</span>
-                    <span className="visually-hidden"> 未保存</span>
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                className="tab-close"
-                aria-label={`关闭 ${tab.title}`}
-                disabled={Boolean(tab.pendingSave)}
-                onClick={() => closeTab(tab.id)}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       <section
         role={active ? "tabpanel" : undefined}
         id={active ? `document-panel-${active.id}` : undefined}
         aria-labelledby={active ? `document-tab-${active.id}` : undefined}
         className="app-body"
       >
-        {controller.workspace && !sidebarCollapsed && (
-          <aside aria-label="文件侧栏" className="sidebar">
+        {sidebarAvailable && !sidebar.collapsed && (
+          <aside aria-label="侧栏" className="sidebar">
             <div className="sidebar-actions">
-              <button type="button" onClick={() => setSidebarCollapsed(true)}>收起侧栏</button>
+              <button
+                type="button"
+                onClick={() => setSidebar((current) => ({ ...current, collapsed: true }))}
+              >
+                收起侧栏
+              </button>
             </div>
-            <FileSidebar
-              root={controller.workspace}
-              port={port}
-              onOpenFile={(path) => void controller.openPath(path)}
-              onCloseWorkspace={controller.closeWorkspace}
-            />
+            {controller.state.tabs.length > 0 && (
+              <section aria-label="打开的标签" className="sidebar-section">
+                <button
+                  type="button"
+                  className="sidebar-section-header"
+                  aria-expanded={!sidebar.tabsSectionCollapsed}
+                  onClick={() =>
+                    setSidebar((current) => ({
+                      ...current,
+                      tabsSectionCollapsed: !current.tabsSectionCollapsed,
+                    }))
+                  }
+                >
+                  打开的标签
+                </button>
+                {!sidebar.tabsSectionCollapsed && (
+                  <TabList
+                    tabs={controller.state.tabs}
+                    activeId={controller.state.activeId}
+                    onActivate={controller.activate}
+                    onClose={closeTab}
+                  />
+                )}
+              </section>
+            )}
+            {controller.workspace && (
+              <section aria-label="文件夹" className="sidebar-section">
+                <button
+                  type="button"
+                  className="sidebar-section-header"
+                  aria-expanded={!sidebar.filesSectionCollapsed}
+                  onClick={() =>
+                    setSidebar((current) => ({
+                      ...current,
+                      filesSectionCollapsed: !current.filesSectionCollapsed,
+                    }))
+                  }
+                >
+                  文件夹
+                </button>
+                {!sidebar.filesSectionCollapsed && (
+                  <FileSidebar
+                    root={controller.workspace}
+                    port={port}
+                    onOpenFile={(path) => void controller.openPath(path)}
+                    onCloseWorkspace={controller.closeWorkspace}
+                  />
+                )}
+              </section>
+            )}
           </aside>
         )}
         <div className="editor-area">

@@ -106,9 +106,47 @@ export interface RecentItem {
 }
 
 /**
+ * Sidebar collapse preferences persisted with the session. All three default
+ * to expanded/visible so sessions written by older versions load unchanged.
+ */
+export interface SidebarPreferences {
+  readonly collapsed: boolean;
+  readonly tabsSectionCollapsed: boolean;
+  readonly filesSectionCollapsed: boolean;
+}
+
+export const DEFAULT_SIDEBAR_PREFERENCES: SidebarPreferences = {
+  collapsed: false,
+  tabsSectionCollapsed: false,
+  filesSectionCollapsed: false,
+};
+
+/** Repair data read from the persisted session; invalid fields get defaults. */
+export const normalizeSidebarPreferences = (value: unknown): SidebarPreferences => {
+  if (typeof value !== "object" || value === null) {
+    return { ...DEFAULT_SIDEBAR_PREFERENCES };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    collapsed:
+      typeof record.collapsed === "boolean"
+        ? record.collapsed
+        : DEFAULT_SIDEBAR_PREFERENCES.collapsed,
+    tabsSectionCollapsed:
+      typeof record.tabsSectionCollapsed === "boolean"
+        ? record.tabsSectionCollapsed
+        : DEFAULT_SIDEBAR_PREFERENCES.tabsSectionCollapsed,
+    filesSectionCollapsed:
+      typeof record.filesSectionCollapsed === "boolean"
+        ? record.filesSectionCollapsed
+        : DEFAULT_SIDEBAR_PREFERENCES.filesSectionCollapsed,
+  };
+};
+
+/**
  * Session metadata persisted separately from recovery drafts: only paths,
  * ordering and UI preferences live here, never document content (dirty
- * content lives in drafts). Theme/editor preferences (Task 11) are optional
+ * content lives in drafts). Theme/editor/sidebar preferences are optional
  * so sessions persisted by older versions still load.
  */
 export interface PersistedSession {
@@ -118,4 +156,5 @@ export interface PersistedSession {
   readonly workspacePath: string | null;
   readonly theme?: ThemePreference;
   readonly editorPreferences?: EditorPreferences;
+  readonly sidebar?: SidebarPreferences;
 }

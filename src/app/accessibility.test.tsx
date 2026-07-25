@@ -47,6 +47,7 @@ describe("accessibility: roles and names", () => {
     await user.click(screen.getByRole("button", { name: "打开文件" }));
 
     const tablist = screen.getByRole("tablist", { name: "打开的文档" });
+    expect(tablist).toHaveAttribute("aria-orientation", "vertical");
     const tabs = within(tablist).getAllByRole("tab");
     expect(tabs).toHaveLength(2);
     for (const tab of tabs) expect(tab).toHaveAccessibleName();
@@ -65,7 +66,7 @@ describe("accessibility: roles and names", () => {
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
 
-    expect(screen.getByRole("complementary", { name: "文件侧栏" })).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "侧栏" })).toBeVisible();
     const tree = await screen.findByRole("tree", { name: "工作区文件" });
     const items = within(tree).getAllByRole("treeitem");
     expect(items.length).toBeGreaterThan(0);
@@ -147,7 +148,7 @@ describe("accessibility: keyboard-only flows", () => {
     expect(port.writes[0].text).toBe("xsaved");
   });
 
-  it("switches tabs with arrow keys from the tab strip", async () => {
+  it("switches tabs with arrow keys from the vertical tab list", async () => {
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(
       new Map([
@@ -160,7 +161,7 @@ describe("accessibility: keyboard-only flows", () => {
 
     const tabs = screen.getAllByRole("tab");
     tabs[0].focus();
-    await user.keyboard("{ArrowRight}");
+    await user.keyboard("{ArrowDown}");
     expect(screen.getAllByRole("tab")[1]).toHaveFocus();
     expect(screen.getAllByRole("tab")[1]).toHaveAttribute("aria-selected", "true");
   });
@@ -177,12 +178,12 @@ describe("accessibility: keyboard-only flows", () => {
     const collapse = await screen.findByRole("button", { name: "收起侧栏" });
     collapse.focus();
     await user.keyboard("{Enter}");
-    expect(screen.queryByRole("complementary", { name: "文件侧栏" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "侧栏" })).not.toBeInTheDocument();
 
     const expand = screen.getByRole("button", { name: "展开侧栏" });
     expand.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("complementary", { name: "文件侧栏" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "侧栏" })).toBeInTheDocument();
   });
 
   it("operates the settings dialog entirely from the keyboard", async () => {

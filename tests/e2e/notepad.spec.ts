@@ -225,7 +225,7 @@ test("opens the folder drawer and opens a file from the tree", async ({
   });
 
   await page.getByRole("button", { name: "打开文件夹" }).click();
-  const sidebar = page.locator('aside[aria-label="文件侧栏"]');
+  const sidebar = page.locator('aside[aria-label="侧栏"]');
   await expect(sidebar).toBeVisible();
 
   await sidebar
@@ -241,9 +241,9 @@ test("opens the folder drawer and opens a file from the tree", async ({
 
   // The drawer stays manually collapsible.
   await page.getByRole("button", { name: "收起侧栏" }).click();
-  await expect(page.locator('aside[aria-label="文件侧栏"]')).toHaveCount(0);
+  await expect(page.locator('aside[aria-label="侧栏"]')).toHaveCount(0);
   await page.getByRole("button", { name: "展开侧栏" }).click();
-  await expect(page.locator('aside[aria-label="文件侧栏"]')).toBeVisible();
+  await expect(page.locator('aside[aria-label="侧栏"]')).toBeVisible();
 });
 
 test("surfaces an external conflict and keeps local edits", async ({

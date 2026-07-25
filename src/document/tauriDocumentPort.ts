@@ -10,6 +10,7 @@ import {
   normalizeThemePreference,
 } from "../theme/preferences";
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecentItem, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
+import { normalizeSidebarPreferences } from "./types";
 
 type OpenDto = { path: string; text: string; has_utf8_bom: boolean; newline: OpenedFile["newline"]; modified_unix_ms: number; version: string };
 type SaveDto = { path: string; modified_unix_ms: number; version: string };
@@ -95,6 +96,11 @@ const parseSession = (value: unknown): PersistedSession | null => {
       : {}),
     ...(record.editorPreferences !== undefined
       ? { editorPreferences: normalizeEditorPreferences(record.editorPreferences) }
+      : {}),
+    // Sidebar preferences are optional too; malformed values fall back to the
+    // all-expanded defaults.
+    ...(record.sidebar !== undefined
+      ? { sidebar: normalizeSidebarPreferences(record.sidebar) }
       : {}),
   };
 };

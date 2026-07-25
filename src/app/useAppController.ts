@@ -7,14 +7,17 @@ import {
   normalizePathKey,
   type DocumentAction,
 } from "../document/documentReducer";
-import type {
-  DiskEvent,
-  DocumentSnapshot,
-  DocumentState,
-  OpenedFile,
-  PersistedSession,
-  RecentItem,
-  RecoveryDraftInfo,
+import {
+  DEFAULT_SIDEBAR_PREFERENCES,
+  normalizeSidebarPreferences,
+  type DiskEvent,
+  type DocumentSnapshot,
+  type DocumentState,
+  type OpenedFile,
+  type PersistedSession,
+  type RecentItem,
+  type RecoveryDraftInfo,
+  type SidebarPreferences,
 } from "../document/types";
 import {
   draftFromSnapshot,
@@ -83,6 +86,8 @@ export function useAppController(
     useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
   const [editorPreferences, setEditorPreferencesState] =
     useState<EditorPreferences>(DEFAULT_EDITOR_PREFERENCES);
+  const [sidebarPreferences, setSidebarPreferences] =
+    useState<SidebarPreferences>(DEFAULT_SIDEBAR_PREFERENCES);
   const [recoveryDrafts, setRecoveryDrafts] =
     useState<ReadonlyArray<RecoveryDraftInfo> | null>(null);
   const workspacePathRef = useRef<string | null>(null);
@@ -724,6 +729,7 @@ export function useAppController(
         setEditorPreferencesState(
           normalizeEditorPreferences(session.editorPreferences),
         );
+        setSidebarPreferences(normalizeSidebarPreferences(session.sidebar));
       }
 
       let drafts: ReadonlyArray<RecoveryDraftInfo> = [];
@@ -765,8 +771,8 @@ export function useAppController(
   }, [addOpenedFiles, dispatch, isCurrent, openWorkspaceRoot, port]);
 
   // Persist the session (recent items, tab order, active tab, workspace,
-  // theme and editor preferences) whenever any of them change. Draft content
-  // is persisted separately.
+  // theme, editor and sidebar preferences) whenever any of them change.
+  // Draft content is persisted separately.
   const sessionTabKey = state.tabs.map((tab) => tab.path ?? "").join("\n");
   const sessionActivePath =
     state.tabs.find((tab) => tab.id === state.activeId)?.path ?? null;
@@ -784,6 +790,7 @@ export function useAppController(
       workspacePath: workspacePathRef.current,
       theme,
       editorPreferences,
+      sidebar: sidebarPreferences,
     }).catch(() => {
       // Session persistence is best-effort.
     });
@@ -795,6 +802,7 @@ export function useAppController(
     sessionWorkspacePath,
     theme,
     editorPreferences,
+    sidebarPreferences,
   ]);
 
   const dismissSaveError = useCallback(() => setSaveError(null), []);
@@ -903,6 +911,8 @@ export function useAppController(
     editorPreferences,
     setTheme,
     setEditorPreferences,
+    sidebarPreferences,
+    setSidebarPreferences,
     recoveryDrafts,
     newDocument,
     openFiles,
