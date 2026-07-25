@@ -11,8 +11,12 @@
  *   - sidebar_interactive_ms (click → folder expanded; informational)
  *   - save_pressure_ms (Cmd+S → dirty indicator cleared; in-memory port)
  *
- * Process-level metrics (hot/cold start, Gatekeeper first launch) need the
- * packaged .app; without a bundle they report "skipped" with instructions.
+ * Process-level metrics: hot start is measured live (launch → normal-quit
+ * cycles of the packaged app, timed via its MARKDOWN_EDIT_PERF_MARK
+ * instrumentation); cold start and the Gatekeeper first launch accumulate
+ * via scripts/measure-startup.mjs --cold / --gatekeeper. Without a bundle
+ * (or with a stale, uninstrumented one) they report "skipped" with
+ * instructions — never faked.
  *
  * Output: tests/perf/report.json + a console summary. Exit code 1 if any
  * measured budget fails. Run `npm run perf:fixtures` first (auto-runs here).
@@ -22,6 +26,12 @@ import { execFileSync, execSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import {
+  DEFAULT_BUNDLE,
+  REQUIRED_COLD_SAMPLES,
+  loadSamples,
+  measureHotStarts,
+} from "./measure-startup.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BASE_URL = process.env.PERF_URL ?? "http://localhost:1420";
@@ -37,6 +47,7 @@ const BUDGETS = {
   input_p95_pressure_ms: 50,
   save_pressure_ms: 1000,
   sidebar_interactive_ms: null, // informational, no release budget
+  gatekeeper_first_launch_ms: null, // informational, recorded separately
 };
 
 // ---------- statistics ----------
@@ -253,21 +264,73 @@ const measureBrowserMetrics = async (metrics) => {
   }
 };
 
-// ---------- process-level metrics (packaged app required) ----------
+// ---------- process-level metrics (packaged app) ----------
 
-const BUNDLE_PATH = path.join(
-  ROOT,
-  "src-tauri/target/release/bundle/macos/Markdown Edit.app",
-);
+const BUNDLE_PATH = DEFAULT_BUNDLE;
 
-const measureProcessMetrics = (metrics) => {
-  const bundleExists = existsSync(BUNDLE_PATH);
-  const reason = bundleExists ? "not_instrumented" : "no_bundle";
-  const instructions = bundleExists
-    ? "A bundle exists, but process-to-editable timing requires an editable marker in the packaged build; see docs/performance.md for the measurement protocol."
-    : "Run `npm run tauri build` to produce src-tauri/target/release/bundle/macos/Markdown Edit.app, then follow the cold/hot start protocol in docs/performance.md.";
-  for (const name of ["hot_start_ms", "cold_start_ms", "gatekeeper_first_launch_ms"]) {
-    metrics[name] = { status: "skipped", reason, instructions, samples: [] };
+/**
+ * Hot start is measured live: real launch → normal-quit cycles of the
+ * bundle, timed via the MARKDOWN_EDIT_PERF_MARK instrumentation
+ * (scripts/measure-startup.mjs). Cold start accumulates one sample per
+ * reboot cycle (`--cold`); Gatekeeper first launch is recorded once after
+ * installing the signed build (`--gatekeeper`). Without a bundle — or with
+ * a stale bundle lacking the instrumentation — the metrics report an
+ * honest skip with instructions; they are never faked.
+ */
+const measureProcessMetrics = async (metrics) => {
+  if (!existsSync(BUNDLE_PATH)) {
+    const instructions =
+      "Run `npm run tauri build` to produce src-tauri/target/release/bundle/macos/Markdown Edit.app, then re-run `npm run perf` (hot start) and collect cold/Gatekeeper samples with scripts/measure-startup.mjs — see docs/performance.md.";
+    for (const name of ["hot_start_ms", "cold_start_ms", "gatekeeper_first_launch_ms"]) {
+      metrics[name] = { status: "skipped", reason: "no_bundle", instructions, samples: [] };
+    }
+    return;
+  }
+
+  try {
+    const { samples, provenance } = await measureHotStarts({
+      bundlePath: BUNDLE_PATH,
+      samples: SAMPLES,
+    });
+    metrics.hot_start_ms.samples = samples.map((sample) => sample.spawnToEditableMs);
+    metrics.hot_start_ms.provenance = provenance.label;
+  } catch (error) {
+    metrics.hot_start_ms = {
+      status: "skipped",
+      reason: "not_instrumented",
+      instructions:
+        "The bundle predates the MARKDOWN_EDIT_PERF_MARK instrumentation. Rebuild with `npm run tauri build`, then re-run `npm run perf`.",
+      error: error instanceof Error ? error.message : String(error),
+      samples: [],
+    };
+  }
+
+  const store = loadSamples();
+  if (store.cold.length >= REQUIRED_COLD_SAMPLES) {
+    metrics.cold_start_ms.samples = store.cold.map((sample) => sample.spawnToEditableMs);
+    if (store.provenance) metrics.cold_start_ms.provenance = store.provenance;
+  } else {
+    metrics.cold_start_ms = {
+      status: "skipped",
+      reason: "cold_samples_pending",
+      instructions:
+        `${store.cold.length}/${REQUIRED_COLD_SAMPLES} cold samples collected. ` +
+        "Run `node scripts/measure-startup.mjs --cold` once per reboot cycle of the already-approved build — see docs/performance.md.",
+      samples: store.cold.map((sample) => sample.spawnToEditableMs),
+    };
+  }
+
+  if (store.gatekeeperFirstLaunchMs !== null && store.gatekeeperFirstLaunchMs !== undefined) {
+    metrics.gatekeeper_first_launch_ms.samples = [store.gatekeeperFirstLaunchMs];
+    if (store.provenance) metrics.gatekeeper_first_launch_ms.provenance = store.provenance;
+  } else {
+    metrics.gatekeeper_first_launch_ms = {
+      status: "skipped",
+      reason: "no_gatekeeper_sample",
+      instructions:
+        "Install the signed/notarized build and run `node scripts/measure-startup.mjs --gatekeeper` on its first launch — see docs/performance.md.",
+      samples: [],
+    };
   }
 };
 
@@ -290,7 +353,7 @@ try {
 } finally {
   server?.kill();
 }
-measureProcessMetrics(metrics);
+await measureProcessMetrics(metrics);
 
 let failed = false;
 for (const [name, budget] of Object.entries(BUDGETS)) {

@@ -12,6 +12,7 @@
     "tauri": "tauri",
     "perf:fixtures": "node scripts/generate-perf-fixtures.mjs",
     "perf": "node scripts/measure-editor.mjs",
+    "perf:startup": "node scripts/measure-startup.mjs",
     "check": "npm run test && npm run build && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {

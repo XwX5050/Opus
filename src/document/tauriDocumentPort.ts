@@ -48,6 +48,20 @@ const draft = (dto: DraftDto): RecoveryDraft => ({ draftId: dto.draft_id, origin
 // imports @tauri-apps/api/core directly.
 export const tauriImagePreviewUrl = (path: string): string => convertFileSrc(path);
 
+/**
+ * Perf harness hook (scripts/measure-startup.mjs): reports the first frame
+ * after the editor mounts to the backend, which appends a UNIX-millisecond
+ * timestamp to the file named by the MARKDOWN_EDIT_PERF_MARK environment
+ * variable — a no-op when that variable is unset, so production behavior is
+ * untouched. Outside the Tauri webview this does nothing at all.
+ */
+export const reportEditorEditable = (): void => {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  void invoke("perf_mark_editor_editable").catch(() => {
+    // Instrumentation must never affect editing.
+  });
+};
+
 const SESSION_STORE_FILE = "session.json";
 const sessionStore = () => Store.load(SESSION_STORE_FILE);
 

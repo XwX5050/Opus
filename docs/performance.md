@@ -63,30 +63,54 @@ dev-only demo hook (`?demo=1&fixture=…`) in headless Chromium.
   to memory, so this measures the UI save path, not disk I/O.
 - *Sidebar interactive*: click → the demo folder's `aria-expanded` flips.
 
-**Process-level metrics (require the packaged app):** hot start, cold start,
-and Gatekeeper first launch measure process → editable and therefore need
-the signed/notarized `.app`. Without a bundle the harness reports them as
-`skipped: no_bundle` (with instructions) — they are never faked.
+**Process-level metrics (packaged app):** `scripts/measure-startup.mjs`
+times process spawn → editor-editable on the real bundle. The readiness
+signal is instrumentation, not a proxy: when the app is launched with the
+`MARKDOWN_EDIT_PERF_MARK` environment variable set to a file path, the
+frontend reports the first frame after the editor mounts and the backend
+(`src-tauri/src/perf_mark.rs`) appends a UNIX-millisecond timestamp to that
+file; the harness diffs it against its own pre-spawn timestamp. Without the
+variable the command is a no-op, so production behavior is untouched.
+Without a bundle — or with a stale bundle lacking the instrumentation —
+`npm run perf` reports these metrics as skipped, with instructions.
+
+```sh
+npm run tauri build            # produce the .app (unsigned local build)
+npm run perf                   # includes 5 real hot-start launch → quit cycles
+node scripts/measure-startup.mjs               # hot-start cycles only
+node scripts/measure-startup.mjs --cold        # one cold sample (run per reboot)
+node scripts/measure-startup.mjs --gatekeeper  # Gatekeeper first launch
+```
+
+Each launch opens `tests/perf/generated/regular-1mb.md` (passed as argv,
+so the editor always mounts), then the app is quit via AppleScript and the
+harness confirms no process remains. The app's persisted session
+(`session.json` in the app-support directory) is backed up before
+measuring and restored afterwards. Samples persist in
+`tests/perf/startup-samples.json` with their provenance — an ad-hoc local
+build is labeled "unsigned dev bundle", since hot/cold budgets officially
+apply to the signed/notarized release build.
 
 ## Gatekeeper handling and start-up timing protocol
 
 Install the same signed/notarized build and launch it once to complete
 quarantine/Gatekeeper verification; record that first launch separately as
 informational `gatekeeper_first_launch_ms`; quit and confirm no process
-remains.
+remains. In practice: right after installing, run
+`node scripts/measure-startup.mjs --gatekeeper` — it performs that single
+first launch, stores the sample in `tests/perf/startup-samples.json`, and
+verifies the process is gone afterwards.
 
 - A **cold-start sample** is the first launch after reboot of that
-  already-approved build (five cold samples = five reboot cycles).
+  already-approved build (five cold samples = five reboot cycles). After
+  each reboot, run `node scripts/measure-startup.mjs --cold` once; the
+  harness appends the sample and `npm run perf` computes median/p95 and
+  pass/fail once five samples exist.
 - A **hot-start sample** begins immediately after a normal quit of the
-  already-approved build.
+  already-approved build. `npm run perf` (or
+  `node scripts/measure-startup.mjs`) collects five of them in one go.
 - The 2-second cold budget **excludes only the separately recorded
   first-verification launch**, not ordinary process or WebView startup.
-
-To enable these measurements, build the bundle
-(`npm run tauri build` →
-`src-tauri/target/release/bundle/macos/Markdown Edit.app`) and time process
-spawn → the editor's editable mark surfacing in the packaged WebView, using
-the quit/reboot protocol above.
 
 ## Current baseline
 
@@ -97,15 +121,19 @@ Vite dev server):
 
 | Metric | Median | p95 | Budget | Result |
 | --- | ---: | ---: | ---: | --- |
-| Hot start | — | — | 1000 ms | skipped (not instrumented) |
-| Cold start | — | — | 2000 ms | skipped (not instrumented) |
-| Open regular (1 MiB) | 116.7 ms | 121.2 ms | 1000 ms | PASS |
-| Open pressure (10 MiB) | 154.8 ms | 157.9 ms | 3000 ms | PASS |
-| Input latency, regular | 5.4 ms | 8.9 ms | 32 ms p95 | PASS |
-| Input latency, pressure | 29.9 ms | 32.7 ms | 50 ms p95 | PASS |
-| Pressure save | 3 ms | 3.8 ms | 1000 ms | PASS |
-| Sidebar interactive | 15 ms | 16 ms | — | info |
-| Gatekeeper first launch | — | — | — | skipped (not instrumented) |
+| Hot start (unsigned dev bundle) | 310 ms | 314 ms | 1000 ms | PASS |
+| Cold start | — (0/5 samples) | — | 2000 ms | skipped (needs reboot cycles) |
+| Open regular (1 MiB) | 117.2 ms | 125.6 ms | 1000 ms | PASS |
+| Open pressure (10 MiB) | 156 ms | 161.2 ms | 3000 ms | PASS |
+| Input latency, regular | 5.5 ms | 10.5 ms | 32 ms p95 | PASS |
+| Input latency, pressure | 30.0 ms | 33.2 ms | 50 ms p95 | PASS |
+| Pressure save | 2 ms | 3 ms | 1000 ms | PASS |
+| Sidebar interactive | 15 ms | 17.8 ms | — | info |
+| Gatekeeper first launch | — | — | — | skipped (needs signed build) |
+
+Hot start is a real process-spawn → editor-editable measurement of the
+locally built (ad-hoc, unnotarized) bundle; the budget officially applies
+to the signed/notarized release build on the M1/8 GB baseline.
 
 Reaching the input budgets required removing two per-keystroke
 O(document-size) string copies: the controlled-value sync in

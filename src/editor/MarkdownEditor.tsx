@@ -7,6 +7,7 @@ import {
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { ClipboardImageInput } from "../document/DocumentPort";
+import { reportEditorEditable } from "../document/tauriDocumentPort";
 import { editorExtensions } from "./editorExtensions";
 import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
@@ -123,13 +124,16 @@ export default function MarkdownEditor({
       }),
     });
     viewRef.current = view;
-    if (import.meta.env.DEV) {
-      // Perf harness hook (scripts/measure-editor.mjs): the first frame
-      // after the editor mounts approximates "open to editable".
-      requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (import.meta.env.DEV) {
+        // Perf harness hook (scripts/measure-editor.mjs): the first frame
+        // after the editor mounts approximates "open to editable".
         performance.mark("markdown-edit:editor-editable");
-      });
-    }
+      }
+      // Process-level hook (scripts/measure-startup.mjs): no-op unless the
+      // app was launched with MARKDOWN_EDIT_PERF_MARK set.
+      reportEditorEditable();
+    });
     return () => {
       viewRef.current = null;
       view.destroy();

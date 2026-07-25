@@ -2,6 +2,7 @@ pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
 pub mod open_events;
+pub mod perf_mark;
 pub mod recovery;
 pub mod watch;
 pub mod workspace;
@@ -36,7 +37,8 @@ pub fn run() {
             document_commands::write_recovery_draft,
             document_commands::list_recovery_drafts,
             document_commands::read_recovery_draft,
-            document_commands::discard_recovery_draft
+            document_commands::discard_recovery_draft,
+            perf_mark::perf_mark_editor_editable
         ])
         .setup(move |app| {
             let initial = open_events::normalize_open_paths(std::env::args().skip(1));
