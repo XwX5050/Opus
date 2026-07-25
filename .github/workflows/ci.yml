@@ -35,3 +35,14 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-e2e-output
+          # test-results/ holds per-test traces (trace: retain-on-failure);
+          # playwright-report/ exists only when the html reporter is used.
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

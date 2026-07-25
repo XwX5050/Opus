@@ -37,6 +37,8 @@ ENTITLEMENTS="$(mktemp -t markdown-edit-entitlements)"
 trap 'rm -f "$ENTITLEMENTS"' EXIT
 
 echo "==> entitlements"
+# NOTE: the `:-` (write to stdout) syntax is deprecated on recent macOS but
+# remains the only form whose output PlistBuddy can read back below.
 if codesign -d --entitlements :- "$APP_PATH" >"$ENTITLEMENTS" 2>/dev/null \
   && [ -s "$ENTITLEMENTS" ]; then
   cat "$ENTITLEMENTS"
@@ -47,7 +49,7 @@ else
   echo "(no entitlements)"
 fi
 
-SIGNATURE_INFO="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
+SIGNATURE_INFO="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)"
 if printf '%s\n' "$SIGNATURE_INFO" | grep -q '^Authority=Developer ID Application:'; then
   echo "==> Gatekeeper assessment (Developer ID signature detected)"
   spctl --assess --type execute --verbose=4 "$APP_PATH" \
