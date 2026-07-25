@@ -96,6 +96,9 @@ const droppedFilePath = (file: File, transfer: DataTransfer): string | null => {
 export const imagePasteExtension = (options: ImagePasteOptions): Extension =>
   EditorView.domEventHandlers({
     paste(event: ClipboardEvent, view: EditorView) {
+      // Defense in depth: a non-editable contentDOM never fires paste, but
+      // a programmatic dispatch would bypass the read-only facet.
+      if (view.state.readOnly) return;
       const items = event.clipboardData?.items;
       if (!items) return;
       for (const item of items) {

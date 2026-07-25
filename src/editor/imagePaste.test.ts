@@ -192,8 +192,9 @@ describe("imagePasteExtension", () => {
     expect(saveClipboardImage).not.toHaveBeenCalled();
   });
 
-  it("swallows drops on a read-only view without inserting", async () => {
-    const saveClipboardImage = vi.fn(async (_input: ClipboardImageInput) => null);
+  const createReadOnlyView = (
+    saveClipboardImage: (input: ClipboardImageInput) => Promise<string | null>,
+  ) => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const view = new EditorView({
@@ -208,6 +209,12 @@ describe("imagePasteExtension", () => {
       }),
     });
     views.push(view);
+    return view;
+  };
+
+  it("swallows drops on a read-only view without inserting", async () => {
+    const saveClipboardImage = vi.fn(async (_input: ClipboardImageInput) => null);
+    const view = createReadOnlyView(saveClipboardImage);
     const file = new File([new Uint8Array([1])], "pic.png", { type: "image/png" });
 
     const event = dropEvent(file, { "text/uri-list": "file:///Pictures/pic.png" });
@@ -215,6 +222,18 @@ describe("imagePasteExtension", () => {
 
     // The drop is consumed (no browser navigation) but never inserted.
     expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("locked");
+    expect(saveClipboardImage).not.toHaveBeenCalled();
+  });
+
+  it("ignores pastes on a read-only view", async () => {
+    const saveClipboardImage = vi.fn(async (_input: ClipboardImageInput) => "copied.png");
+    const view = createReadOnlyView(saveClipboardImage);
+    const file = new File([new Uint8Array([1])], "pic.png", { type: "image/png" });
+
+    view.contentDOM.dispatchEvent(pasteEvent(file));
+    await Promise.resolve();
+
     expect(view.state.doc.toString()).toBe("locked");
     expect(saveClipboardImage).not.toHaveBeenCalled();
   });

@@ -27,6 +27,15 @@ export interface ImageWidgetEnvironment {
   resolveLocalUrl: LocalImageUrlResolver;
 }
 
+export interface ImageWidgetsOptions {
+  /**
+   * When false, the selection never reveals an image's Markdown source —
+   * reading mode keeps widgets mounted wherever the cursor sits.
+   * Default true.
+   */
+  readonly revealSelection?: boolean;
+}
+
 export interface PlannedImageWidget extends ImageWidgetRange {
   alt: string;
   src: string;
@@ -143,7 +152,9 @@ export const planImageWidgets = (
   environment: ImageWidgetEnvironment,
   ranges?: readonly ImageWidgetRange[],
   diagnostics?: ImageWidgetDiagnostics,
+  options?: ImageWidgetsOptions,
 ): PlannedImageWidget[] => {
+  const revealSelection = options?.revealSelection ?? true;
   const planned: PlannedImageWidget[] = [];
   const tree = syntaxTree(state);
   for (const range of normalizeRanges(state.doc.length, ranges)) {
@@ -154,7 +165,7 @@ export const planImageWidgets = (
         if (diagnostics) diagnostics.visitedNodes += 1;
         if (node.name !== "Image") return;
         const nodeRange = { from: node.from, to: node.to };
-        if (selectionIntersects(state, nodeRange)) return;
+        if (revealSelection && selectionIntersects(state, nodeRange)) return;
         // Replace decorations cannot cross line breaks; leave rare
         // multi-line image syntax as source text.
         if (state.sliceDoc(node.from, node.to).includes("\n")) return;
@@ -230,9 +241,16 @@ const decorationsFor = (
   state: EditorState,
   environment: ImageWidgetEnvironment,
   ranges: readonly ImageWidgetRange[],
+  options?: ImageWidgetsOptions,
 ): { decorations: DecorationSet; atomicRanges: DecorationSet } => {
   const decorations: ReturnType<Decoration["range"]>[] = [];
-  for (const { from, to, alt, src } of planImageWidgets(state, environment, ranges)) {
+  for (const { from, to, alt, src } of planImageWidgets(
+    state,
+    environment,
+    ranges,
+    undefined,
+    options,
+  )) {
     decorations.push(
       Decoration.replace({ widget: new ImageWidget(src, alt) }).range(from, to),
     );
@@ -250,8 +268,9 @@ class ImageWidgetsPlugin {
   constructor(
     view: EditorView,
     private readonly environment: ImageWidgetEnvironment,
+    private readonly options?: ImageWidgetsOptions,
   ) {
-    const sets = decorationsFor(view.state, environment, planningRanges(view));
+    const sets = decorationsFor(view.state, environment, planningRanges(view), options);
     this.decorations = sets.decorations;
     this.atomicRanges = sets.atomicRanges;
   }
@@ -268,6 +287,7 @@ class ImageWidgetsPlugin {
         update.state,
         this.environment,
         planningRanges(update.view),
+        this.options,
       );
       this.decorations = sets.decorations;
       this.atomicRanges = sets.atomicRanges;
@@ -289,9 +309,10 @@ const imageWidgetsTheme = EditorView.baseTheme({
 
 export const imageWidgetsExtension = (
   environment: ImageWidgetEnvironment,
+  options?: ImageWidgetsOptions,
 ): Extension => [
   ViewPlugin.define(
-    (view) => new ImageWidgetsPlugin(view, environment),
+    (view) => new ImageWidgetsPlugin(view, environment, options),
     {
       decorations: (plugin) => plugin.decorations,
       provide: (plugin) =>

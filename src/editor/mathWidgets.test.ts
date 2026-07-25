@@ -140,6 +140,15 @@ describe("planMathWidgets", () => {
     expect(planMathWidgets(state)).toEqual([]);
   });
 
+  it("keeps the widget planned under the cursor when revealSelection is false", () => {
+    const state = createState("$x^2$ outside", [{ anchor: 2 }]);
+    const planned = planMathWidgets(state, undefined, undefined, [], {
+      revealSelection: false,
+    });
+    expect(planned).toHaveLength(1);
+    expect(planned[0].source).toBe("x^2");
+  });
+
   it("limits syntax traversal and plans to requested visible ranges", () => {
     const doc = `${Array.from({ length: 200 }, (_, index) => `$x_${index}$`).join("\n\n")}\n\noutside`;
     const state = createState(doc);

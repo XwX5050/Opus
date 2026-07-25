@@ -26,6 +26,14 @@ export interface MathWidgetDiagnostics {
   visitedNodes: number;
 }
 
+export interface MathWidgetsOptions {
+  /**
+   * When false, the selection never reveals a formula's source — reading
+   * mode keeps widgets mounted wherever the cursor sits. Default true.
+   */
+  readonly revealSelection?: boolean;
+}
+
 const selectionIntersects = (state: EditorState, range: MathRange) =>
   state.selection.ranges.some((selection) =>
     selection.empty
@@ -77,7 +85,9 @@ export const planMathWidgets = (
   ranges?: readonly MathRange[],
   diagnostics?: MathWidgetDiagnostics,
   additionallyRevealed: readonly MathRange[] = [],
+  options?: MathWidgetsOptions,
 ): PlannedMathWidget[] => {
+  const revealSelection = options?.revealSelection ?? true;
   const widgets = new Map<string, PlannedMathWidget>();
   const tree = syntaxTree(state);
   for (const range of normalizeRanges(state.doc.length, ranges)) {
@@ -89,7 +99,7 @@ export const planMathWidgets = (
         if (node.name !== InlineMath && node.name !== BlockMath) return;
         const nodeRange = { from: node.from, to: node.to };
         if (
-          selectionIntersects(state, nodeRange) ||
+          (revealSelection && selectionIntersects(state, nodeRange)) ||
           additionallyRevealed.some((revealed) => rangesIntersect(revealed, nodeRange))
         ) {
           return;
@@ -164,6 +174,7 @@ const decorationSetsFor = (
   state: EditorState,
   ranges: readonly MathRange[],
   additionallyRevealed: readonly MathRange[],
+  options?: MathWidgetsOptions,
 ): { decorations: DecorationSet; atomicRanges: DecorationSet } => {
   const replacements: ReturnType<Decoration["range"]>[] = [];
   const atomicRanges: ReturnType<Decoration["range"]>[] = [];
@@ -172,6 +183,7 @@ const decorationSetsFor = (
     ranges,
     undefined,
     additionallyRevealed,
+    options,
   )) {
     if (!displayMode) {
       const replacement = Decoration.replace({
@@ -228,7 +240,10 @@ class MathWidgetsPlugin {
   atomicRanges: DecorationSet;
   private composingRanges: MathRange[];
 
-  constructor(view: EditorView) {
+  constructor(
+    view: EditorView,
+    private readonly options?: MathWidgetsOptions,
+  ) {
     this.composingRanges = view.compositionStarted
       ? selectedMathRanges(view.state)
       : [];
@@ -236,6 +251,7 @@ class MathWidgetsPlugin {
       view.state,
       planningRanges(view),
       this.composingRanges,
+      this.options,
     );
     this.decorations = sets.decorations;
     this.atomicRanges = sets.atomicRanges;
@@ -263,6 +279,7 @@ class MathWidgetsPlugin {
         update.state,
         planningRanges(update.view),
         this.composingRanges,
+        this.options,
       );
       this.decorations = sets.decorations;
       this.atomicRanges = sets.atomicRanges;
@@ -282,24 +299,32 @@ class MathWidgetsPlugin {
   }
 }
 
-const mathWidgetsPlugin = ViewPlugin.fromClass(MathWidgetsPlugin, {
-  decorations: (plugin) => plugin.decorations,
-  provide: (plugin) =>
-    EditorView.atomicRanges.of(
-      (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none,
-    ),
-  eventHandlers: {
-    compositionstart(_event, view) {
-      this.startComposition(view);
+const mathWidgetsPlugin = (options?: MathWidgetsOptions) =>
+  ViewPlugin.fromClass(
+    class extends MathWidgetsPlugin {
+      constructor(view: EditorView) {
+        super(view, options);
+      }
     },
-    compositionupdate(_event, view) {
-      this.startComposition(view);
+    {
+      decorations: (plugin) => plugin.decorations,
+      provide: (plugin) =>
+        EditorView.atomicRanges.of(
+          (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none,
+        ),
+      eventHandlers: {
+        compositionstart(_event, view) {
+          this.startComposition(view);
+        },
+        compositionupdate(_event, view) {
+          this.startComposition(view);
+        },
+        compositionend(_event, view) {
+          this.endComposition(view);
+        },
+      },
     },
-    compositionend(_event, view) {
-      this.endComposition(view);
-    },
-  },
-});
+  );
 
 const mathWidgetsTheme = EditorView.baseTheme({
   ".md-math-inline": { display: "inline-block" },
@@ -311,7 +336,7 @@ const mathWidgetsTheme = EditorView.baseTheme({
   },
 });
 
-export const mathWidgetsExtension = (): Extension => [
-  mathWidgetsPlugin,
+export const mathWidgetsExtension = (options?: MathWidgetsOptions): Extension => [
+  mathWidgetsPlugin(options),
   mathWidgetsTheme,
 ];

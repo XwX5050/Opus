@@ -103,11 +103,14 @@ export default function MarkdownEditor({
       ...(perf === "light"
         ? []
         : [
-            mathWidgetsExtension(),
-            imageWidgetsExtension({
-              getDocumentPath: () => documentPathRef.current,
-              resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
-            }),
+            mathWidgetsExtension({ revealSelection: mode !== "reading" }),
+            imageWidgetsExtension(
+              {
+                getDocumentPath: () => documentPathRef.current,
+                resolveLocalUrl: (path) => imageSupportRef.current.resolveImageUrl(path),
+              },
+              { revealSelection: mode !== "reading" },
+            ),
           ]),
     ];
   };

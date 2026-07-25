@@ -98,6 +98,19 @@ describe("planImageWidgets", () => {
     expect(outside).toHaveLength(1);
   });
 
+  it("keeps the widget planned under the cursor when revealSelection is false", () => {
+    const doc = "![cat](pics/cat.png) rest";
+    const planned = planImageWidgets(
+      createState(doc, 5),
+      environment(),
+      undefined,
+      undefined,
+      { revealSelection: false },
+    );
+    expect(planned).toHaveLength(1);
+    expect(planned[0].alt).toBe("cat");
+  });
+
   it("only plans widgets inside the given ranges", () => {
     const doc = "![a](a.png)\n\n![b](b.png)";
     const planned = planImageWidgets(createState(doc), environment(), [

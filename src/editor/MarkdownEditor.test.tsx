@@ -193,6 +193,24 @@ describe("MarkdownEditor", () => {
       expect(onChange).not.toHaveBeenCalled();
     });
 
+    it("keeps math and image widgets mounted when the selection touches them", () => {
+      const rendered = renderEditor({
+        value: "$x$ and **world**\n\n![img](/p/pic.png)",
+        viewMode: "reading",
+      });
+      const view = editorView();
+
+      // Cursor inside the formula: the widget must not flip to raw $…$.
+      view.dispatch({ selection: { anchor: 1 } });
+      expect(rendered.container.querySelector(".md-math")).not.toBeNull();
+      expect(content().textContent).not.toContain("$x$");
+
+      // Cursor inside the image syntax: same guarantee for image widgets.
+      view.dispatch({ selection: { anchor: 20 } });
+      expect(rendered.container.querySelector(".md-image-widget")).not.toBeNull();
+      expect(content().textContent).not.toContain("![img]");
+    });
+
     it("switches through all three modes in the same view and keeps undo history", async () => {
       const user = userEvent.setup();
       const onChange = vi.fn();

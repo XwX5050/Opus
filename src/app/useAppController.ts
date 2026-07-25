@@ -65,6 +65,23 @@ const findTabByPath = (
   );
 };
 
+/**
+ * Returns the map with `id` moved to `mode`, storing only non-default modes
+ * ("editing" is the default, so it deletes the entry). Pure: returns the
+ * input unchanged when the mode already matches.
+ */
+const withViewMode = (
+  current: ReadonlyMap<string, EditorViewMode>,
+  id: string,
+  mode: EditorViewMode,
+): ReadonlyMap<string, EditorViewMode> => {
+  if ((current.get(id) ?? "editing") === mode) return current;
+  const next = new Map(current);
+  if (mode === "editing") next.delete(id);
+  else next.set(id, mode);
+  return next;
+};
+
 export function useAppController(
   port: DocumentPort,
   subscribeToEvents: EventSubscriber | null = null,
@@ -252,42 +269,34 @@ export function useAppController(
     [viewModes],
   );
 
+  // Mirror of the viewModes state for callbacks that must read the current
+  // mode without depending on state identity (state updaters stay pure —
+  // StrictMode double-invokes them, so ref mutations happen outside).
+  const viewModesRef = useRef(viewModes);
+  useEffect(() => {
+    viewModesRef.current = viewModes;
+  }, [viewModes]);
+
   const setViewMode = useCallback((id: string, mode: EditorViewMode) => {
     if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
-    setViewModes((current) => {
-      if ((current.get(id) ?? "editing") === mode) return current;
-      const next = new Map(current);
-      if (mode === "editing") next.delete(id);
-      else next.set(id, mode);
-      return next;
-    });
+    setViewModes((current) => withViewMode(current, id, mode));
   }, []);
 
   const toggleReading = useCallback((id: string) => {
-    setViewModes((current) => {
-      const target = (current.get(id) ?? "editing") === "reading" ? "editing" : "reading";
-      lastNonSourceViewModes.current.set(id, target);
-      const next = new Map(current);
-      if (target === "editing") next.delete(id);
-      else next.set(id, target);
-      return next;
-    });
+    const target =
+      (viewModesRef.current.get(id) ?? "editing") === "reading" ? "editing" : "reading";
+    lastNonSourceViewModes.current.set(id, target);
+    setViewModes((current) => withViewMode(current, id, target));
   }, []);
 
   const toggleSource = useCallback((id: string) => {
-    setViewModes((current) => {
-      const mode = current.get(id) ?? "editing";
-      const target =
-        mode === "source"
-          ? lastNonSourceViewModes.current.get(id) ?? "editing"
-          : "source";
-      if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
-      if (mode === target) return current;
-      const next = new Map(current);
-      if (target === "editing") next.delete(id);
-      else next.set(id, target);
-      return next;
-    });
+    const mode = viewModesRef.current.get(id) ?? "editing";
+    if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
+    const target =
+      mode === "source"
+        ? lastNonSourceViewModes.current.get(id) ?? "editing"
+        : "source";
+    setViewModes((current) => withViewMode(current, id, target));
   }, []);
 
   // Prune view-mode memory for tabs that no longer exist.
