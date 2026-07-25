@@ -1,0 +1,248 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { EditorView } from "@codemirror/view";
+import { describe, expect, it, vi } from "vitest";
+import MarkdownEditor from "./MarkdownEditor";
+
+const renderEditor = (overrides: Partial<React.ComponentProps<typeof MarkdownEditor>> = {}) => {
+  const props = {
+    value: "",
+    onChange: vi.fn(),
+    onSave: vi.fn(),
+    onReopenClosed: vi.fn(),
+    sourceMode: true,
+    documentPath: "/notes/a.md",
+    saveClipboardImage: vi.fn(async () => null),
+    resolveImageUrl: (path: string) => `asset://localhost${path}`,
+    ...overrides,
+  };
+  return { props, ...render(<MarkdownEditor {...props} />) };
+};
+
+const content = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
+const moveToEnd = () => {
+  const element = content();
+  element.focus();
+  const view = EditorView.findFromDOM(element);
+  if (!view) throw new Error("EditorView not found");
+  view.dispatch({ selection: { anchor: view.state.doc.length } });
+};
+
+const editorView = () => {
+  const view = EditorView.findFromDOM(content());
+  if (!view) throw new Error("EditorView not found");
+  return view;
+};
+
+const atomicRanges = (view: EditorView) => {
+  const ranges: { from: number; to: number }[] = [];
+  for (const provider of view.state.facet(EditorView.atomicRanges)) {
+    provider(view).between(0, view.state.doc.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+  }
+  return ranges;
+};
+
+describe("MarkdownEditor", () => {
+  it.each([
+    ["- item", "- item\n- "],
+    ["> quote", "> quote\n> "],
+    ["- ", ""],
+  ])("uses Markdown Enter behavior for %s", async (before, after) => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderEditor({ value: before, onChange });
+    moveToEnd();
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenLastCalledWith(after);
+  });
+
+  it("runs save and reopen callbacks exactly once from editor keymaps", async () => {
+    const user = userEvent.setup();
+    const { props } = renderEditor();
+    content().focus();
+    await user.keyboard("{Control>}s{/Control}");
+    await user.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+    expect(props.onSave).toHaveBeenCalledOnce();
+    expect(props.onReopenClosed).toHaveBeenCalledOnce();
+  });
+
+  it("updates callback refs and controlled value without rebuilding or adding undo history", async () => {
+    const user = userEvent.setup();
+    const firstSave = vi.fn();
+    const secondSave = vi.fn();
+    const onChange = vi.fn();
+    const view = renderEditor({ value: "one", onSave: firstSave, onChange });
+    const root = view.container.querySelector(".cm-editor");
+    view.rerender(<MarkdownEditor {...view.props} value="external" onSave={secondSave} />);
+    expect(view.container.querySelector(".cm-editor")).toBe(root);
+    expect(content()).toHaveTextContent("external");
+    expect(onChange).not.toHaveBeenCalled();
+    content().focus();
+    await user.keyboard("{Control>}s{/Control}");
+    await user.keyboard("{Control>}z{/Control}");
+    expect(firstSave).not.toHaveBeenCalled();
+    expect(secondSave).toHaveBeenCalledOnce();
+    expect(content()).toHaveTextContent("external");
+  });
+
+  it("destroys its EditorView on unmount", () => {
+    const destroy = vi.spyOn(EditorView.prototype, "destroy");
+    const view = renderEditor();
+    view.unmount();
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("starts without live preview when sourceMode is true", () => {
+    renderEditor({ value: "**world** rest", sourceMode: true });
+    moveToEnd();
+    expect(content().textContent).toContain("**world**");
+    expect(document.querySelector(".cm-live-preview-strong")).toBeNull();
+  });
+
+  it("toggles live preview in the same view without changing selection or firing onChange", () => {
+    const onChange = vi.fn();
+    const rendered = renderEditor({ value: "**world** rest", sourceMode: false, onChange });
+    moveToEnd();
+    const root = rendered.container.querySelector(".cm-editor");
+    const view = editorView();
+    const selection = view.state.selection;
+    expect(content().textContent).not.toContain("**");
+    expect(atomicRanges(view)).not.toHaveLength(0);
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+    expect(editorView()).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(content().textContent).toContain("**world**");
+    expect(atomicRanges(view)).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
+    expect(editorView()).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(content().textContent).not.toContain("**");
+    expect(atomicRanges(view)).not.toHaveLength(0);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("preserves undo history across sourceMode toggles", async () => {
+    const user = userEvent.setup();
+    const rendered = renderEditor({ value: "text", sourceMode: false });
+    moveToEnd();
+    await user.keyboard("!");
+    expect(editorView().state.doc.toString()).toBe("text!");
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    await user.keyboard("{Control>}z{/Control}");
+    expect(editorView().state.doc.toString()).toBe("text");
+  });
+
+  it("toggles math widgets and both Markdown/math atomic ranges in the same view", () => {
+    const value = "$x$ and **bold** outside";
+    const rendered = renderEditor({ value, sourceMode: false });
+    moveToEnd();
+    const view = editorView();
+    const root = rendered.container.querySelector(".cm-editor");
+
+    expect(document.querySelector(".md-math .katex")).not.toBeNull();
+    expect(atomicRanges(view)).toContainEqual({ from: 0, to: 3 });
+    expect(atomicRanges(view)).toContainEqual({ from: 8, to: 10 });
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    expect(editorView()).toBe(view);
+    expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+    expect(document.querySelector(".md-math")).toBeNull();
+    expect(content()).toHaveTextContent("$x$");
+    expect(atomicRanges(view)).toEqual([]);
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
+    expect(editorView()).toBe(view);
+    expect(document.querySelector(".md-math .katex")).not.toBeNull();
+    expect(atomicRanges(view)).toContainEqual({ from: 0, to: 3 });
+    expect(atomicRanges(view)).toContainEqual({ from: 8, to: 10 });
+  });
+
+  it("keeps source revealed when preview is toggled during composition", () => {
+    const rendered = renderEditor({ value: "**world** rest", sourceMode: false });
+    moveToEnd();
+    content().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(content()).toHaveTextContent("**world**");
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} sourceMode={false} />);
+    expect(content()).toHaveTextContent("**world**");
+
+    content().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(content()).not.toHaveTextContent("**");
+  });
+
+  it("inserts a native image drop once, escapes it, and reports the change", () => {
+    const onChange = vi.fn();
+    const rendered = renderEditor({ value: "hello", onChange });
+    const drop = { sequence: 1, paths: ["/p/pic one.png"], x: 0, y: 0 };
+
+    rendered.rerender(<MarkdownEditor {...rendered.props} imageDrop={drop} />);
+    expect(editorView().state.doc.toString()).toBe("![image](</p/pic one.png>)hello");
+    expect(onChange).toHaveBeenCalledWith("![image](</p/pic one.png>)hello");
+
+    // The same drop (same sequence) must not be inserted twice.
+    rendered.rerender(<MarkdownEditor {...rendered.props} imageDrop={{ ...drop }} />);
+    expect(editorView().state.doc.toString()).toBe("![image](</p/pic one.png>)hello");
+
+    // A newer drop is inserted (jsdom has no layout; posAtCoords yields 0).
+    rendered.rerender(
+      <MarkdownEditor {...rendered.props} imageDrop={{ sequence: 2, paths: ["/q/x.png"], x: 0, y: 0 }} />,
+    );
+    expect(editorView().state.doc.toString()).toBe("![image](/q/x.png)![image](</p/pic one.png>)hello");
+  });
+
+  it("ignores an image drop that predates the editor mount", () => {
+    renderEditor({
+      value: "hello",
+      imageDrop: { sequence: 1, paths: ["/p/pic.png"], x: 0, y: 0 },
+    });
+    expect(editorView().state.doc.toString()).toBe("hello");
+  });
+
+  describe("light performance mode", () => {
+    // Cursor (moved to the end) must not touch the math/image ranges:
+    // widgets reveal their Markdown source while the selection overlaps them.
+    const rich = "$x$ and ![img](/p/pic.png)\n\n**bold** tail";
+
+    it("keeps live preview styling but disables math and image widgets without touching text", () => {
+      const onChange = vi.fn();
+      renderEditor({ value: rich, sourceMode: false, performanceMode: "light", onChange });
+      moveToEnd();
+      expect(document.querySelector(".cm-live-preview-strong")).not.toBeNull();
+      expect(document.querySelector(".md-math")).toBeNull();
+      expect(document.querySelector(".md-image-widget")).toBeNull();
+      expect(editorView().state.doc.toString()).toBe(rich);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("switches between light and full in the same view without changing the document", () => {
+      const onChange = vi.fn();
+      const rendered = renderEditor({ value: rich, sourceMode: false, performanceMode: "light", onChange });
+      moveToEnd();
+      const view = editorView();
+      const root = rendered.container.querySelector(".cm-editor");
+      expect(document.querySelector(".md-math")).toBeNull();
+
+      rendered.rerender(<MarkdownEditor {...rendered.props} performanceMode="full" />);
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(document.querySelector(".md-math")).not.toBeNull();
+      expect(document.querySelector(".md-image-widget")).not.toBeNull();
+      expect(view.state.doc.toString()).toBe(rich);
+
+      rendered.rerender(<MarkdownEditor {...rendered.props} performanceMode="light" />);
+      expect(editorView()).toBe(view);
+      expect(document.querySelector(".md-math")).toBeNull();
+      expect(document.querySelector(".md-image-widget")).toBeNull();
+      expect(view.state.doc.toString()).toBe(rich);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
+});

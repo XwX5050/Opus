@@ -1,0 +1,93 @@
+/**
+ * Design tokens for the Baseline-inspired visual system.
+ *
+ * Everything visual resolves through these custom properties: components
+ * never hardcode colors, radii or spacing. Dark is the default theme (the
+ * persisted preference default), applied via `[data-theme]` on <html> by
+ * useTheme; the editor-preference variables (`--editor-*`) are also set
+ * there from the validated preferences.
+ */
+:root {
+  /* Typography */
+  --font-ui:
+    Inter, -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue",
+    "Segoe UI", sans-serif;
+  --font-ui-size: 13px;
+  --font-ui-size-small: 12px;
+
+  /* Density: one spacing scale for the whole shell. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  /* Restrained rounded surfaces. */
+  --radius-small: 5px;
+  --radius-medium: 8px;
+  --radius-large: 12px;
+
+  /* Editor reading column; overridden per preference by useTheme. */
+  --editor-content-width: 760px;
+  --editor-body-size: 16px;
+  --editor-line-height: 1.6;
+  --editor-body-font:
+    -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+
+  /* Motion: subtle, and disabled under prefers-reduced-motion. */
+  --transition-fast: 120ms ease;
+}
+
+/* Dark (default) */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #1d1e23;
+  --surface: #26272e;
+  --surface-hover: #2e3038;
+  --surface-active: #35373f;
+  --text-primary: #e6e7eb;
+  --text-secondary: #a9abb4;
+  --text-muted: #787a85;
+  --divider: rgba(255, 255, 255, 0.08);
+  --accent: #7aa2f7;
+  --accent-soft: rgba(122, 162, 247, 0.16);
+  --danger: #e57373;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --backdrop: rgba(0, 0, 0, 0.4);
+  --focus-ring: rgba(122, 162, 247, 0.65);
+  --selection: rgba(122, 162, 247, 0.28);
+  --search-match: rgba(224, 175, 104, 0.35);
+  --syntax-keyword: #b49ef5;
+  --syntax-string: #a3d9a5;
+  --syntax-comment: #6f7280;
+  --syntax-number: #e0a06a;
+  --syntax-type: #7dc4e4;
+  --syntax-meta: #8b8d96;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #f6f6f7;
+  --surface: #ffffff;
+  --surface-hover: #eeeef1;
+  --surface-active: #e4e4e9;
+  --text-primary: #2a2b31;
+  --text-secondary: #585a63;
+  --text-muted: #8b8d96;
+  --divider: rgba(0, 0, 0, 0.09);
+  --accent: #2f5fd0;
+  --accent-soft: rgba(47, 95, 208, 0.12);
+  --danger: #c23e3e;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+  --backdrop: rgba(0, 0, 0, 0.25);
+  --focus-ring: rgba(47, 95, 208, 0.55);
+  --selection: rgba(47, 95, 208, 0.22);
+  --search-match: rgba(230, 180, 80, 0.45);
+  --syntax-keyword: #6d28d9;
+  --syntax-string: #2f7d32;
+  --syntax-comment: #8b8d96;
+  --syntax-number: #b45309;
+  --syntax-type: #0369a1;
+  --syntax-meta: #6b6d76;
+}

@@ -293,6 +293,8 @@ Reject invalid UTF-8 without writing. Normalize the editor's `\n` text to the re
 
 Add cases for invalid UTF-8, missing parent, read-only target, and a symlink path. The symlink case must write through to the target rather than replace the symlink.
 
+**Deferred cross-platform and release hardening:** a later release-quality task must define and test preservation/handling of ACLs, extended attributes (including Finder tags), owner/group metadata, and platform-specific file semantics. It must run the relevant document-I/O tests on Windows and Linux as well as macOS. These are intentionally not added to Task 2's focused portable core.
+
 - [ ] **Step 5: Run checks and commit**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml document_io`
@@ -319,10 +321,21 @@ git commit -m "feat: add lossless markdown file IO"
 
 ```ts
 export type Newline = "lf" | "cr_lf";
+export type PathPlatform = "linux" | "macos" | "windows";
+export interface SaveTarget {
+  path: string; expectedVersion: string | null;
+}
+export interface PendingWriteRequest {
+  requestId: string; documentId: string; targetPath: string; text: string;
+  hasUtf8Bom: boolean; newline: Newline; expectedVersion: string | null;
+  pathPlatform: PathPlatform;
+}
 export interface DocumentSnapshot {
   id: string; path: string | null; title: string; text: string;
   savedText: string; hasUtf8Bom: boolean; newline: Newline;
-  modifiedUnixMs: number | null; status: "clean" | "dirty" | "conflict" | "missing";
+  modifiedUnixMs: number | null; version: string | null;
+  status: "clean" | "dirty" | "conflict" | "missing";
+  pendingSave?: PendingWriteRequest;
 }
 export interface ClosedTab {
   document: DocumentSnapshot;
@@ -332,27 +345,30 @@ export interface DocumentState {
   tabs: DocumentSnapshot[];
   activeId: string | null;
   recentlyClosed: ClosedTab[];
+  nextSaveSequence: number;
 }
 export interface OpenedFile {
   path: string; text: string; hasUtf8Bom: boolean;
-  newline: Newline; modifiedUnixMs: number;
+  newline: Newline; modifiedUnixMs: number; version: string;
 }
 export class DocumentPortError extends Error {
-  constructor(public readonly code: "invalid_utf8" | "permission_denied" | "not_found" | "io", message: string) {
+  constructor(public readonly code: "invalid_utf8" | "permission_denied" | "not_found" | "conflict" | "io", message: string) {
     super(message);
   }
 }
 export interface DocumentPort {
   chooseAndOpenFiles(): Promise<OpenedFile[]>;
   openPath(path: string): Promise<OpenedFile>;
-  save(doc: DocumentSnapshot): Promise<{ path: string; modifiedUnixMs: number }>;
-  saveAs(doc: DocumentSnapshot): Promise<{ path: string; modifiedUnixMs: number } | null>;
+  chooseSavePath(suggestedName: string): Promise<SaveTarget | null>;
+  write(request: PendingWriteRequest): Promise<{ path: string; modifiedUnixMs: number; version: string }>;
 }
 ```
 
+`modifiedUnixMs` is display/prompt metadata only; it is not a collision-free document version and must not be used to suppress watcher events or prove that a save is current. Reserve the opaque `version: string` field now so later native implementations can change its representation without changing the frontend contract.
+
 - [ ] **Step 2: Write reducer tests before implementation**
 
-Tests must prove: new untitled tab, open file, path de-duplication, edit marks dirty, successful save marks clean, close selects neighbor, external conflict never discards local text, closing records a maximum-20-entry recently-closed stack, and reopening restores the most recently closed tab at its previous index.
+Tests must prove: new untitled tab, open file, global ID and path de-duplication, edit marks dirty, successful save marks clean, close selects neighbor, external conflict never discards local text, closing records a de-duplicated maximum-20-entry recently-closed stack, and reopening restores the most recently closed tab at its previous index. Add save-race coverage proving `saveRequested` accepts only a document ID plus optional selected target, while the reducer generates a monotonic request ID and one frozen `PendingWriteRequest` from the current tab. Pass that exact request value to `DocumentPort.write`; completion/failure/cancel actions carry only the request ID plus result/error. Prove stale callbacks are ignored, edits in flight remain dirty, pending writes block close, and recently closed state never contains a pending request. Add root-aware lexical path tests for POSIX, Windows drive-absolute/drive-relative/rooted/UNC/device forms, and empty relative paths.
 
 ```ts
 it("focuses an existing path instead of duplicating it", () => {
@@ -379,11 +395,11 @@ Expected: FAIL because `documentReducer` is missing.
 
 - [ ] **Step 4: Implement a discriminated-union reducer**
 
-Export `DocumentState`, `DocumentAction`, `initialDocumentState`, and `documentReducer`. `DocumentAction` includes `{ type: "closeConfirmed"; id; disposition: "saved" | "discarded" }` and `{ type: "reopenLastClosed" }`. A discarded dirty tab records `savedText` rather than the discarded edits; a discarded untitled tab records an empty clean snapshot. Cap `recentlyClosed` at 20, keep IDs stable, and compare normalized paths before adding or reopening a tab. If the path is already open, reopening focuses the existing tab and removes the stack entry. No Tauri or React imports are allowed in this file.
+Export `DocumentState`, `DocumentAction`, `initialDocumentState`, and `documentReducer`. `DocumentState.nextSaveSequence` is the sole request-ID source. `saveRequested` derives and freezes `PendingWriteRequest` from the current tab; for ordinary save it derives path/version from that tab, while Save As consumes the `SaveTarget` returned by the port. `saveSucceeded`, `saveFailed`, and `saveCancelled` locate only the matching pending request ID. A successful save records `pendingSave.text`, not the buffer at callback time; edits made in flight remain dirty. Reject a requested target already open under the selected path platform before creating a request. If a target opens during the write, completion marks both source and target conflict without changing either buffer. A result path differing from the request target also fails closed. Pending writes block close; recently closed snapshots are sanitized of pending state. Keep exhaustive action handling with `assertNever`. A discarded dirty tab records `savedText`; cap `recentlyClosed` at 20, de-duplicate it by normalized path (or ID for pathless tabs), keep IDs globally stable, and clone snapshots when moving between collections. No Tauri or React imports are allowed in this file.
 
 - [ ] **Step 5: Add an in-memory port for tests and Storybook-free demos**
 
-`MemoryDocumentPort` accepts a `Map<string, OpenedFile>`, records writes, and implements cancelable `saveAs`. It must clone returned values so tests cannot mutate its backing store accidentally.
+`MemoryDocumentPort` accepts a `Map<string, OpenedFile>` plus a path platform (default macOS), indexes all opens, target selections, and writes by `normalizePathKey`, but preserves the original display path. `chooseSavePath` returns `{ path, expectedVersion }` captured at selection time. `write` consumes only `PendingWriteRequest`, requires `expectedVersion: null` for a missing target or the exact target version for overwrite, and throws `DocumentPortError("conflict", ...)` without recording or replacing bytes on mismatch. It clones inputs, records, and returned values.
 
 - [ ] **Step 6: Run tests and commit**
 
@@ -411,7 +427,7 @@ git commit -m "feat: model multi-tab document state"
 
 - [ ] **Step 1: Write adapter contract tests with mocked `invoke`**
 
-Verify that `openPath` invokes `open_document` with `{ path }`, maps Rust snake_case fields, and converts a structured `invalid_utf8` error into a typed `DocumentPortError`.
+Verify that `openPath` invokes `open_document` with `{ path }`, maps Rust snake_case fields, and converts structured `invalid_utf8` and `conflict` errors into typed `DocumentPortError` values. Verify that `chooseSavePath` only selects/cancels and returns the selected path together with its observed opaque version. Verify that `write` maps the reducer-created `PendingWriteRequest` exactly once without reconstructing fields.
 
 - [ ] **Step 2: Run the adapter test red**
 
@@ -431,13 +447,15 @@ pub fn open_document(path: PathBuf) -> Result<OpenedDocumentDto, CommandError>;
 pub fn save_document(request: SaveDocumentRequest) -> Result<SavedDocumentDto, CommandError>;
 ```
 
+`OpenedDocumentDto` and `SavedDocumentDto` must return both `modified_unix_ms` for display and an opaque `version` for concurrency/watch matching. `SaveDocumentRequest` carries the version observed by the caller so the command can reject a stale save before replacing bytes.
+
 Validate that the path is absolute and the opened target is a regular file or symlink to one. Register commands with `tauri::generate_handler!` and keep shell execution unavailable.
 
 Add `.md` and `.markdown` file associations in `tauri.conf.json`. In `open_events.rs`, normalize the initial process arguments and macOS `RunEvent::Opened` URLs into absolute paths and emit one `open-paths` event to the frontend. Unit-test percent-encoded spaces, duplicate paths, unsupported schemes, and non-Markdown paths.
 
 - [ ] **Step 4: Implement the production port**
 
-Use `@tauri-apps/plugin-dialog` only for `chooseAndOpenFiles`/`saveAs`; use the Rust commands for bytes and metadata. Normalize cancel to an empty array or `null`, never an exception.
+Use `@tauri-apps/plugin-dialog` only for `chooseAndOpenFiles`/`chooseSavePath`; use the Rust commands for bytes and metadata. `chooseSavePath` must not write: after selection, observe the target's current opaque version and return one `SaveTarget`. Normalize cancel to an empty array or `null`, never an exception. `write` accepts only the reducer-created request and performs the version-checked command call.
 
 Subscribe once to `open-paths` and Tauri window drag/drop events. File drops call `openPath`; directory drops call the workspace chooser path added in Task 9. Queue early events until the React controller reports ready so Finder launches cannot lose their first file.
 
@@ -472,7 +490,7 @@ git commit -m "feat: connect document IO to Tauri"
 
 - [ ] **Step 1: Write component tests for the basic notepad workflow**
 
-Use `MemoryDocumentPort` to test: empty state buttons; opening two files creates two tabs; editing adds the dirty dot; `⌘S` calls save; closing dirty tab shows 保存/放弃/取消; opening the same path focuses its tab; closing a clean tab then pressing `⌘⇧T` restores and focuses it; `⌘⇧T` with an empty stack is a no-op.
+Use `MemoryDocumentPort` to test: empty state buttons; opening two files creates two tabs; editing adds the dirty dot; `⌘S` dispatches `saveRequested`, reads the resulting tab's frozen `pendingSave`, and passes that value directly to `write`; closing a tab while a write is pending is blocked; opening the same path focuses its tab; closing a clean tab then pressing `⌘⇧T` restores and focuses it; `⌘⇧T` with an empty stack is a no-op. For untitled/Save As flows, call `chooseSavePath`, dispatch the returned `SaveTarget` through `saveRequested`, and write only if the reducer created a pending request. Dispatch request-ID-aware success, failure, or cancellation after the port call. Keep the reducer's in-flight result collision guard as defense in depth.
 
 - [ ] **Step 2: Run tests red**
 
@@ -784,7 +802,7 @@ git commit -m "feat: add optional folder drawer"
 
 - [ ] **Step 1: Write state-transition tests for disk events**
 
-Cover: clean + changed → reload; dirty + changed → conflict without overwriting text; deleted → missing with buffer retained; saved event matching our own timestamp → ignore; moved/renamed inside an opened root → update path.
+Cover: clean + changed → reload; dirty + changed → conflict without overwriting text; deleted → missing with buffer retained; own-save events matching the saved opaque version or save token → ignore; moved/renamed inside an opened root → update path. A matching millisecond timestamp alone must never suppress a disk event.
 
 - [ ] **Step 2: Implement normalized watcher events**
 
@@ -792,12 +810,12 @@ Use one debounced watcher service and emit:
 
 ```ts
 type DiskEvent =
-  | { kind: "changed"; path: string; modifiedUnixMs: number }
+  | { kind: "changed"; path: string; modifiedUnixMs: number; version: string }
   | { kind: "missing"; path: string }
   | { kind: "moved"; from: string; to: string };
 ```
 
-The controller compares the event timestamp with the last successful save before dispatching reducer actions.
+The controller compares the event version with the last successful save version (or a save token held for that write) before dispatching reducer actions. `modifiedUnixMs` remains display metadata only.
 
 Add the watcher dependency with `cargo add notify --manifest-path src-tauri/Cargo.toml`. Start watching only open document paths and the active workspace; stop each watch when its last consumer closes.
 
@@ -807,7 +825,7 @@ Prove that dirty snapshots are stored under the app data directory, written atom
 
 - [ ] **Step 4: Implement recovery and session persistence**
 
-Persist tab metadata separately from dirty draft content. Recovery records include original path, title, text, BOM, newline, and saved-text hash. On launch, show restore/discard; do not silently open dirty drafts as clean documents.
+Persist tab metadata separately from dirty draft content. Recovery records include original path, title, text, BOM, newline, saved-text hash, and the last observed opaque version. On launch, show restore/discard; do not silently open dirty drafts as clean documents. Parent-directory durability synchronization for recovery/session records belongs to this recovery/persistence phase, not Task 2's document write scope.
 
 Persist the last window size/position, recent file/folder paths, open-tab order, active tab, theme, and editor preferences. Debounce dirty draft writes by 2 seconds and flush on window close. Cap recent items at 10 and silently remove paths that no longer exist only after the user attempts to open them.
 
@@ -817,7 +835,7 @@ Render the persisted recent list in `AppShell` only when no tabs are open. Show 
 
 Conflict actions are “载入磁盘版本”, “保留当前版本”, and “另存为”. Recovery actions are “恢复”, “查看源码”, and “丢弃”. All destructive choices require explicit clicks.
 
-Add controller/component tests for a `DocumentPortError` during save: the active tab remains dirty with its text unchanged; the error dialog exposes “重试” and “另存为”; “重试” calls `save` again for the same tab; “另存为” calls `saveAs`; canceling the save-as dialog returns to the still-dirty tab. Add empty-state tests proving persisted recent files and folders render, open through the correct port method, and disappear only after a confirmed `not_found` result.
+Add controller/component tests for a `DocumentPortError` during save: dispatch `saveFailed` with the exact pending request ID so the active tab remains dirty with text/metadata unchanged; the error dialog exposes “重试” and “另存为”; “重试” dispatches a fresh `saveRequested` and writes only its newly generated pending request; “另存为” calls `chooseSavePath` and dispatches that target before writing; canceling selection or a queued write dispatches `saveCancelled`. Add overlapping-save tests proving stale success/failure cannot clear or replace newer state and edits made during a save remain dirty. Add a pre-save version-conflict test proving a stale request cannot replace newer disk bytes. Add watcher acceptance tests proving changed text/version stay paired. Add empty-state tests proving persisted recent files and folders render, open through the correct port method, and disappear only after confirmed `not_found`.
 
 Run: `npm test && cargo test --manifest-path src-tauri/Cargo.toml`
 

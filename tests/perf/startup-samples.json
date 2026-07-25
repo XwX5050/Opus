@@ -1,0 +1,33 @@
+{
+  "bundle": "src-tauri/target/release/bundle/macos/Markdown Edit.app",
+  "provenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
+  "hot": [
+    {
+      "spawnToEditableMs": 851,
+      "wallMs": 860,
+      "startedAt": "2026-07-25T12:23:45.910Z"
+    },
+    {
+      "spawnToEditableMs": 346,
+      "wallMs": 353,
+      "startedAt": "2026-07-25T12:23:46.874Z"
+    },
+    {
+      "spawnToEditableMs": 319,
+      "wallMs": 325,
+      "startedAt": "2026-07-25T12:23:47.324Z"
+    },
+    {
+      "spawnToEditableMs": 307,
+      "wallMs": 322,
+      "startedAt": "2026-07-25T12:23:47.746Z"
+    },
+    {
+      "spawnToEditableMs": 316,
+      "wallMs": 319,
+      "startedAt": "2026-07-25T12:23:48.162Z"
+    }
+  ],
+  "cold": [],
+  "gatekeeperFirstLaunchMs": null
+}
