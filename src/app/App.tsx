@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { DocumentPort } from "../document/DocumentPort";
-import { createTauriDocumentPort, restoreWindowGeometry, subscribeToImageDrops, subscribeToOpenPaths } from "../document/tauriDocumentPort";
+import { createTauriDocumentPort, restoreWindowGeometry } from "../document/tauriDocumentPort";
 import type { PersistedSession } from "../document/types";
 import { normalizeThemePreference } from "../theme/preferences";
-import AppShell from "./AppShell";
+import { createApp } from "./createApp";
+import { createE2ePort, isE2eMode } from "./e2e";
 
 const DEMO_MARKDOWN = `# Markdown Edit
 
@@ -95,16 +96,29 @@ const createDemoPort = async (params: URLSearchParams): Promise<DocumentPort> =>
   return new MemoryDocumentPort(files, { session });
 };
 
+/**
+ * Port selection happens here and nowhere else:
+ *   - E2E (VITE_E2E=1 + window.__E2E_FIXTURE__): fixture-seeded memory port;
+ *   - dev demo (?demo=1): demo memory port;
+ *   - otherwise: the real Tauri port (always, in production builds).
+ */
 export default function App() {
   const [portError, setPortError] = useState<string | null>(null);
+  const e2e = useMemo(isE2eMode, []);
   const demo = useMemo(
     () =>
+      !e2e &&
       import.meta.env.DEV &&
       new URLSearchParams(window.location.search).has("demo"),
-    [],
+    [e2e],
   );
-  // The demo port may need to fetch a perf fixture first, so it arrives
-  // asynchronously; the production port is created synchronously.
+  const browserShell = e2e || demo;
+  // The E2E port is synchronous (fixture already on window); the demo port
+  // may need to fetch a perf fixture first, so it arrives asynchronously;
+  // the production port is created synchronously.
+  const [e2ePort] = useState<DocumentPort | null>(() =>
+    e2e ? createE2ePort() : null,
+  );
   const [demoPort, setDemoPort] = useState<DocumentPort | null>(null);
   useEffect(() => {
     if (!demo) return;
@@ -124,14 +138,14 @@ export default function App() {
   }, [demo]);
   const port = useMemo(
     () =>
-      demo
+      browserShell
         ? null
         : createTauriDocumentPort((error) => setPortError(error.message)),
-    [demo],
+    [browserShell],
   );
-  const activePort = demo ? demoPort : port;
+  const activePort = browserShell ? (e2ePort ?? demoPort) : port;
   useEffect(() => {
-    if (demo) return;
+    if (browserShell) return;
     let stop: (() => void) | null = null;
     let disposed = false;
     void restoreWindowGeometry().then((created) => {
@@ -144,17 +158,13 @@ export default function App() {
       disposed = true;
       stop?.();
     };
-  }, [demo]);
+  }, [browserShell]);
   if (!activePort) {
     return portError ? <p role="alert">{portError}</p> : null;
   }
-  return (
-    <AppShell
-      port={activePort}
-      subscribeToEvents={demo ? null : subscribeToOpenPaths}
-      subscribeToImageDrops={demo ? null : subscribeToImageDrops}
-      externalError={portError}
-      onDismissExternalError={() => setPortError(null)}
-    />
-  );
+  return createApp(activePort, {
+    browserShell,
+    externalError: portError,
+    onDismissExternalError: () => setPortError(null),
+  });
 }

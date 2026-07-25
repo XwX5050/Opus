@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Release entitlements for Markdown Edit (referenced from tauri.conf.json:
+  bundle.macOS.entitlements, applied with the Hardened Runtime).
+
+  Deliberately empty: the first version ships WITHOUT the App Sandbox
+  (com.apple.security.app-sandbox must NOT appear here — the release
+  verification script scripts/verify-macos-bundle.sh fails the build if it
+  is ever present and true). Security-scoped bookmarks are deferred until a
+  future sandboxed build; recent files/folders store plain paths only
+  (design spec §5.4).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
