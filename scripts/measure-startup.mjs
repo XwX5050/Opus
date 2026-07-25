@@ -21,6 +21,12 @@
  *
  * Samples and provenance persist in tests/perf/startup-samples.json;
  * scripts/measure-editor.mjs folds them into the release report.
+ *
+ * Safety: the harness REFUSES to run while an instance of the bundle is
+ * already running (a forced kill would skip the recovery-draft flush);
+ * quit the app first, or pass --force to close it via a normal graceful
+ * quit. The app's session store is backed up to a temp file before every
+ * launch and restored afterwards — even across a killed harness run.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -105,29 +111,63 @@ export const bundleProvenance = async (bundlePath) => {
 
 // ---------- session store backup/restore ----------
 
-/**
- * Launching the app persists its session (open tabs, window geometry) into
- * the store. Back it up before measuring and restore it afterwards so a
- * benchmark run never disturbs the real session of this app identifier.
- */
-const sessionStoreBackup = (bundleId) => {
-  const file = path.join(
+const sessionStoreFile = (bundleId) =>
+  path.join(
     homedir(),
     "Library/Application Support",
     bundleId,
     "session.json",
   );
+
+const sessionBackupFile = (bundleId) =>
+  path.join(tmpdir(), `markdown-edit-session-backup-${bundleId}.json`);
+
+/**
+ * Launching the app persists its session (open tabs, window geometry) into
+ * the store. Before every launch the store is backed up to a temp FILE —
+ * not memory — so even a harness killed mid-measurement (SIGKILL, crash)
+ * leaves restorable state behind: the next launch restores the stale
+ * backup before doing anything else. Normal restores happen in
+ * launchOnce's finally.
+ */
+const backupSessionStore = (bundleId) => {
+  const file = sessionStoreFile(bundleId);
   const existed = existsSync(file);
-  const content = existed ? readFileSync(file) : null;
-  return {
-    restore() {
-      if (existed && content) writeFileSync(file, content);
-      else if (existsSync(file)) rmSync(file);
-    },
-  };
+  writeFileSync(
+    sessionBackupFile(bundleId),
+    JSON.stringify({
+      file,
+      existed,
+      content: existed ? readFileSync(file, "utf8") : null,
+    }),
+  );
+};
+
+const restoreSessionStore = (bundleId) => {
+  const backupPath = sessionBackupFile(bundleId);
+  if (!existsSync(backupPath)) return;
+  try {
+    const payload = JSON.parse(readFileSync(backupPath, "utf8"));
+    if (payload.existed && payload.content !== null) {
+      mkdirSync(path.dirname(payload.file), { recursive: true });
+      writeFileSync(payload.file, payload.content);
+    } else if (existsSync(payload.file)) {
+      rmSync(payload.file);
+    }
+  } finally {
+    rmSync(backupPath, { force: true });
+  }
 };
 
 // ---------- launch / quit ----------
+
+export class InstanceRunningError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "InstanceRunningError";
+    this.code = "INSTANCE_RUNNING";
+  }
+}
 
 /** Quits any running instance of the bundle binary; throws if one survives. */
 export const ensureNotRunning = async (binaryPath, bundleId) => {
@@ -152,6 +192,26 @@ export const ensureNotRunning = async (binaryPath, bundleId) => {
   if (pids.length > 0) {
     throw new Error(`could not stop running instance (pids: ${pids.join(", ")})`);
   }
+};
+
+/**
+ * The harness must never force-kill an instance it did not spawn: a kill
+ * -9 would skip the recovery-draft flush and could lose user work. Unless
+ * `force` is set, a pre-existing instance is a hard error; with `force`
+ * the instance is closed gracefully (AppleScript quit → draft flush) and
+ * signal kills remain only a last-resort fallback.
+ */
+export const assertNoLiveInstance = async (binaryPath, bundleId, { force = false } = {}) => {
+  const pids = await pidsForBinary(binaryPath);
+  if (pids.length === 0) return;
+  if (!force) {
+    throw new InstanceRunningError(
+      `Markdown Edit is already running (pids: ${pids.join(", ")}). ` +
+        "Quit it first — the harness never force-kills a live instance — " +
+        "or pass --force to close it gracefully via a normal quit.",
+    );
+  }
+  await ensureNotRunning(binaryPath, bundleId);
 };
 
 const quitGracefully = async (child, binaryPath, bundleId) => {
@@ -180,10 +240,15 @@ export const launchOnce = async ({
   bundlePath = DEFAULT_BUNDLE,
   fixturePath = DEFAULT_FIXTURE,
   timeoutMs = LAUNCH_TIMEOUT_MS,
+  force = false,
 }) => {
   const binary = bundleBinary(bundlePath);
   const bundleId = bundleIdentifier(bundlePath);
-  await ensureNotRunning(binary, bundleId);
+  await assertNoLiveInstance(binary, bundleId, { force });
+  // Recover a backup orphaned by a previously killed harness, then take a
+  // fresh one — every launch path (hot, --cold, --gatekeeper) is covered.
+  restoreSessionStore(bundleId);
+  backupSessionStore(bundleId);
   const markFile = path.join(
     tmpdir(),
     `markdown-edit-perf-mark-${process.pid}-${Date.now()}.txt`,
@@ -222,6 +287,7 @@ export const launchOnce = async ({
     };
   } finally {
     await quitGracefully(child, binary, bundleId);
+    restoreSessionStore(bundleId);
     rmSync(markFile, { force: true });
   }
 };
@@ -261,17 +327,12 @@ export const measureHotStarts = async ({
   bundlePath = DEFAULT_BUNDLE,
   fixturePath = DEFAULT_FIXTURE,
   samples = 5,
+  force = false,
 } = {}) => {
-  const bundleId = bundleIdentifier(bundlePath);
-  const backup = sessionStoreBackup(bundleId);
   const provenance = await bundleProvenance(bundlePath);
   const run = [];
-  try {
-    for (let i = 0; i < samples; i += 1) {
-      run.push(await launchOnce({ bundlePath, fixturePath }));
-    }
-  } finally {
-    backup.restore();
+  for (let i = 0; i < samples; i += 1) {
+    run.push(await launchOnce({ bundlePath, fixturePath, force }));
   }
   const store = loadSamples();
   store.bundle = path.relative(ROOT, bundlePath);
@@ -305,6 +366,7 @@ if (isMain) {
   const fixturePath = path.resolve(option("--fixture", DEFAULT_FIXTURE));
   const cold = args.includes("--cold");
   const gatekeeper = args.includes("--gatekeeper");
+  const force = args.includes("--force");
 
   if (!existsSync(bundlePath)) {
     console.error(`bundle not found: ${bundlePath}`);
@@ -316,43 +378,61 @@ if (isMain) {
     process.exit(2);
   }
 
+  // On interruption, put the user's session store back before exiting.
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      try {
+        restoreSessionStore(bundleIdentifier(bundlePath));
+      } catch {
+        // Best effort; the next run restores the stale backup anyway.
+      }
+      process.exit(130);
+    });
+  }
+
   let failed = false;
-  if (cold) {
-    const sample = await launchOnce({ bundlePath, fixturePath });
-    const store = loadSamples();
-    store.cold.push(sample);
-    saveSamples(store);
-    console.log(`cold sample recorded (${store.cold.length}/${REQUIRED_COLD_SAMPLES})`);
-    if (store.cold.length >= REQUIRED_COLD_SAMPLES) {
+  try {
+    if (cold) {
+      const sample = await launchOnce({ bundlePath, fixturePath, force });
+      const store = loadSamples();
+      store.cold.push(sample);
+      saveSamples(store);
+      console.log(`cold sample recorded (${store.cold.length}/${REQUIRED_COLD_SAMPLES})`);
+      if (store.cold.length >= REQUIRED_COLD_SAMPLES) {
+        const pass = report(
+          "cold start",
+          store.cold.map((entry) => entry.spawnToEditableMs),
+          COLD_BUDGET_MS,
+        );
+        failed = failed || pass === false;
+      } else {
+        console.log("pass/fail is computed once 5 cold samples exist — run again after the next reboot");
+      }
+    } else if (gatekeeper) {
+      const sample = await launchOnce({ bundlePath, fixturePath, force });
+      const store = loadSamples();
+      store.gatekeeperFirstLaunchMs = sample.spawnToEditableMs;
+      saveSamples(store);
+      report("gatekeeper first launch", [sample.spawnToEditableMs], null);
+    } else {
+      const samples = Number(option("--samples", "5"));
+      const { samples: run, provenance } = await measureHotStarts({
+        bundlePath,
+        fixturePath,
+        samples,
+        force,
+      });
+      console.log(`provenance: ${provenance.label}`);
       const pass = report(
-        "cold start",
-        store.cold.map((entry) => entry.spawnToEditableMs),
-        COLD_BUDGET_MS,
+        "hot start",
+        run.map((entry) => entry.spawnToEditableMs),
+        HOT_BUDGET_MS,
       );
       failed = failed || pass === false;
-    } else {
-      console.log("pass/fail is computed once 5 cold samples exist — run again after the next reboot");
     }
-  } else if (gatekeeper) {
-    const sample = await launchOnce({ bundlePath, fixturePath });
-    const store = loadSamples();
-    store.gatekeeperFirstLaunchMs = sample.spawnToEditableMs;
-    saveSamples(store);
-    report("gatekeeper first launch", [sample.spawnToEditableMs], null);
-  } else {
-    const samples = Number(option("--samples", "5"));
-    const { samples: run, provenance } = await measureHotStarts({
-      bundlePath,
-      fixturePath,
-      samples,
-    });
-    console.log(`provenance: ${provenance.label}`);
-    const pass = report(
-      "hot start",
-      run.map((entry) => entry.spawnToEditableMs),
-      HOT_BUDGET_MS,
-    );
-    failed = failed || pass === false;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(error?.code === "INSTANCE_RUNNING" ? 3 : 1);
   }
   process.exit(failed ? 1 : 0);
 }

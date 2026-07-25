@@ -42,22 +42,47 @@ const utf8Encoder = new TextEncoder();
 /**
  * Measures the size inputs of {@link modeFor} from raw text. Byte length is
  * the true UTF-8 length (CJK text is 3 bytes per character), not
- * `string.length`.
+ * `string.length`. Line breaks follow CodeMirror (`/\r\n?|\n/`): a CRLF
+ * pair is one separator, a lone CR counts too.
  */
 export const measureText = (text: string): DocumentSize => {
   let lines = 1;
   for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) lines += 1;
+    const code = text.charCodeAt(index);
+    if (code === 10) {
+      lines += 1;
+    } else if (code === 13) {
+      lines += 1;
+      if (text.charCodeAt(index + 1) === 10) index += 1; // CRLF = one break
+    }
   }
   return { bytes: utf8Encoder.encode(text).length, lines };
 };
 
 /**
- * Picks the automatic mode directly from raw text, with a cheap early out:
- * UTF-8 bytes are never fewer than UTF-16 code units, so once `text.length`
- * alone exceeds the byte threshold the document is certainly light and the
- * full encode/line scan can be skipped. This runs on every render while a
- * large document is being edited, so the fast path matters.
+ * Classifies documents whose mode is decidable from UTF-16 length alone,
+ * in O(1):
+ *
+ * - `length > FULL_MODE_MAX_BYTES` → light, because UTF-8 bytes are never
+ *   fewer than UTF-16 code units;
+ * - `length < FULL_MODE_MAX_LINES` → full, because lines ≤ length + 1 ≤
+ *   50,000, and bytes ≤ 3·length < 150 KB ≪ 2 MiB.
+ *
+ * Everything between (50,000–2 MiB code units) is "in band" and returns
+ * null: only the real encode/line scan can decide.
+ */
+export const cheapModeForLength = (length: number): PerformanceMode | null => {
+  if (length > FULL_MODE_MAX_BYTES) return "light";
+  if (length < FULL_MODE_MAX_LINES) return "full";
+  return null;
+};
+
+/**
+ * Picks the automatic mode directly from raw text. O(1) for out-of-band
+ * lengths (see {@link cheapModeForLength}); in-band documents pay the full
+ * O(n) encode/line scan, so callers that evaluate on every keystroke must
+ * bound how often they call this — useAutomaticPerformanceMode debounces
+ * exactly that case (tab switches still scan synchronously, once per open).
  */
 export const modeForText = (text: string): PerformanceMode =>
-  text.length > FULL_MODE_MAX_BYTES ? "light" : modeFor(measureText(text));
+  cheapModeForLength(text.length) ?? modeFor(measureText(text));

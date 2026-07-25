@@ -106,14 +106,41 @@ const ensureDevServer = async () => {
     return null;
   }
   console.log("starting dev server (npm run dev)…");
-  const child = spawn("npm", ["run", "dev"], { cwd: ROOT, stdio: "ignore" });
+  // detached: the npm wrapper and its Vite child share one process group,
+  // so the group kill below can never orphan Vite on port 1420.
+  const child = spawn("npm", ["run", "dev"], {
+    cwd: ROOT,
+    stdio: "ignore",
+    detached: true,
+  });
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (await serverReady()) return child;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
-  child.kill();
+  await stopDevServer(child);
   throw new Error(`dev server did not start at ${BASE_URL}`);
+};
+
+const stopDevServer = async (child) => {
+  if (!child || child.exitCode !== null) return;
+  const killGroup = (signal) => {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      try {
+        child.kill(signal);
+      } catch {
+        // Already gone.
+      }
+    }
+  };
+  killGroup("SIGTERM");
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline && (await serverReady())) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (await serverReady()) killGroup("SIGKILL");
 };
 
 // ---------- page helpers ----------
@@ -291,15 +318,19 @@ const measureProcessMetrics = async (metrics) => {
     const { samples, provenance } = await measureHotStarts({
       bundlePath: BUNDLE_PATH,
       samples: SAMPLES,
+      force: process.env.PERF_FORCE === "1",
     });
     metrics.hot_start_ms.samples = samples.map((sample) => sample.spawnToEditableMs);
     metrics.hot_start_ms.provenance = provenance.label;
   } catch (error) {
+    const instanceRunning =
+      error instanceof Error && "code" in error && error.code === "INSTANCE_RUNNING";
     metrics.hot_start_ms = {
       status: "skipped",
-      reason: "not_instrumented",
-      instructions:
-        "The bundle predates the MARKDOWN_EDIT_PERF_MARK instrumentation. Rebuild with `npm run tauri build`, then re-run `npm run perf`.",
+      reason: instanceRunning ? "instance_running" : "not_instrumented",
+      instructions: instanceRunning
+        ? "Markdown Edit is already running — quit it first (the harness never force-kills a live instance), or re-run with PERF_FORCE=1 to close it via a normal graceful quit."
+        : "The bundle predates the MARKDOWN_EDIT_PERF_MARK instrumentation. Rebuild with `npm run tauri build`, then re-run `npm run perf`.",
       error: error instanceof Error ? error.message : String(error),
       samples: [],
     };
@@ -351,7 +382,7 @@ const server = await ensureDevServer();
 try {
   await measureBrowserMetrics(metrics);
 } finally {
-  server?.kill();
+  await stopDevServer(server);
 }
 await measureProcessMetrics(metrics);
 

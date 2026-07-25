@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
-import { modeForText } from "../editor/performanceMode";
+import { useAutomaticPerformanceMode } from "./usePerformanceMode";
 import RecoveryDialog from "../recovery/RecoveryDialog";
 import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
@@ -65,10 +65,9 @@ export default function AppShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabIdsKey]);
   const activeText = active?.text ?? null;
-  const automaticMode = useMemo(
-    () => (activeText === null ? ("full" as const) : modeForText(activeText)),
-    [activeText],
-  );
+  // Bounded per keystroke: O(1) for out-of-band documents, one synchronous
+  // scan per tab switch, debounced re-evaluation for in-band edits.
+  const automaticMode = useAutomaticPerformanceMode(active?.id ?? null, activeText);
   const forceFull = active !== undefined && forceFullTabs.has(active.id);
   const lightMode = automaticMode === "light" && !forceFull;
   const showPerfBanner = Boolean(

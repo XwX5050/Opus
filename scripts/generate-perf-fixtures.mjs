@@ -4,7 +4,7 @@
  * harness into tests/perf/generated/ (gitignored — never commit these):
  *
  *   regular-1mb.md    ~1 MiB, well under both light-mode thresholds
- *   light-2mb.md      just over 2 MiB (2 MiB + 1 byte), trips the byte threshold
+ *   light-2mb.md      just over 2 MiB, trips the byte threshold
  *   pressure-10mb.md  ~10 MiB and >= 100,000 lines, the pressure scenario
  *
  * Re-running always produces byte-identical files (fixed seed).

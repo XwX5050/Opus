@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cheapModeForLength,
   effectiveMode,
   FULL_MODE_MAX_BYTES,
   FULL_MODE_MAX_LINES,
@@ -63,6 +64,12 @@ describe("measureText", () => {
     expect(measureText("").lines).toBe(1);
   });
 
+  it("splits lines on /\\r\\n?|\\n/ like CodeMirror", () => {
+    expect(measureText("a\rb").lines).toBe(2);
+    expect(measureText("a\r\nb").lines).toBe(2);
+    expect(measureText("a\r\nb\nc\rd").lines).toBe(4);
+  });
+
   it("classifies a real large string through the thresholds", () => {
     const text = `${"x".repeat(99)}\n`.repeat(50_000) + "x";
     const size = measureText(text);
@@ -87,5 +94,19 @@ describe("modeForText", () => {
 
   it("keeps ordinary text in full mode", () => {
     expect(modeForText("# hello\n\nworld\n")).toBe("full");
+  });
+});
+
+describe("cheapModeForLength", () => {
+  it("classifies out-of-band lengths in O(1)", () => {
+    expect(cheapModeForLength(FULL_MODE_MAX_BYTES + 1)).toBe("light");
+    expect(cheapModeForLength(FULL_MODE_MAX_LINES - 1)).toBe("full");
+    expect(cheapModeForLength(0)).toBe("full");
+  });
+
+  it("defers in-band lengths to the full scan", () => {
+    expect(cheapModeForLength(FULL_MODE_MAX_LINES)).toBeNull();
+    expect(cheapModeForLength(FULL_MODE_MAX_BYTES)).toBeNull();
+    expect(cheapModeForLength(800_000)).toBeNull();
   });
 });

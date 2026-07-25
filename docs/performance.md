@@ -18,6 +18,15 @@ light mode (`src/editor/performanceMode.ts`):
   for that tab only; closing and reopening the tab returns to automatic
   mode.
 
+Evaluation is bounded so typing never pays an O(document) scan
+(`src/app/usePerformanceMode.ts`): opening or switching to a tab
+classifies synchronously (once per open, so a light document never mounts
+full widgets even for one frame); documents decidable from length alone
+(over 2 MiB of UTF-16 units, or under 50,000) classify in O(1) on every
+render; in-band edits re-evaluate only after typing pauses (200 ms
+debounce). The mode toggles widget rendering only, so this delay is
+imperceptible — full rendering is the safe direction.
+
 ## Budgets (M1 / 8 GB baseline)
 
 | Metric | Budget | Judged on |
@@ -40,9 +49,16 @@ npm run perf            # measure + tests/perf/report.json + pass/fail summary
 ```
 
 `npm run perf` reuses a dev server on port 1420 if one is running, otherwise
-starts its own and shuts it down afterwards. Fixtures are byte-identical
+starts its own (detached process group) and shuts the whole group down
+afterwards — no orphaned Vite. Fixtures are byte-identical
 across runs (fixed seed): ~1 MiB regular, just over 2 MiB threshold,
 ~10 MiB / ≥100,000-line pressure documents.
+
+**Report artifacts are committed baselines.** `tests/perf/report.json` and
+`tests/perf/startup-samples.json` are small, human-auditable evidence of
+the latest real run and are refreshed (and re-committed) whenever the
+benchmark is re-run. Only the large fixture files under
+`tests/perf/generated/` are gitignored.
 
 ## What is measured
 
@@ -85,11 +101,19 @@ node scripts/measure-startup.mjs --gatekeeper  # Gatekeeper first launch
 Each launch opens `tests/perf/generated/regular-1mb.md` (passed as argv,
 so the editor always mounts), then the app is quit via AppleScript and the
 harness confirms no process remains. The app's persisted session
-(`session.json` in the app-support directory) is backed up before
-measuring and restored afterwards. Samples persist in
-`tests/perf/startup-samples.json` with their provenance — an ad-hoc local
-build is labeled "unsigned dev bundle", since hot/cold budgets officially
-apply to the signed/notarized release build.
+(`session.json` in the app-support directory) is backed up to a temp file
+before every launch and restored afterwards — even if the harness itself
+is killed, the next run restores the stale backup first. Samples persist
+in `tests/perf/startup-samples.json` with their provenance — an ad-hoc
+local build is labeled "unsigned dev bundle", since hot/cold budgets
+officially apply to the signed/notarized release build.
+
+**Warning: quit the app before measuring.** The harness refuses to run
+while an instance of the bundle is already running — a forced kill would
+skip the recovery-draft flush and could lose unsaved work. Either quit the
+app yourself, or pass `--force` (CLI) / `PERF_FORCE=1` (`npm run perf`) to
+close it via a normal graceful quit; signal kills remain only a
+last-resort fallback after the graceful quit times out.
 
 ## Gatekeeper handling and start-up timing protocol
 

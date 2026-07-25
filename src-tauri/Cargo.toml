@@ -15,6 +15,9 @@ name = "markdown_edit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+# The explicit `features = []` is the tauri CLI's normalized form — it
+# rewrites the manifest on every `tauri build`. Keeping it avoids churn;
+# plain cargo ignores the difference.
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
