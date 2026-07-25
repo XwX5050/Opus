@@ -166,6 +166,28 @@ build SHA, chip, and macOS version with the results.
   Developer credentials in the keychain/environment (see
   `docs/releasing.md`). Local ad-hoc builds are labeled non-release by
   `scripts/verify-macos-bundle.sh` and skip Gatekeeper assessment.
+- **Runtime asset scopes are additive-only**: the Rust registry is the
+  authoritative record, but webview-level filesystem grants acquired for a
+  document or workspace persist for the app's lifetime — closing a tab or
+  folder releases the registry reference, not the runtime grant. Accepted
+  because grants only ever widen within a session the user explicitly
+  opened.
+- **FSEvents move detection is best-effort**: a rename on macOS often
+  arrives as a `missing` event for the old path plus a `changed` event for
+  the new one rather than a single `moved` event. Tabs handle both shapes
+  (buffer retained on `missing`, clean tabs follow `moved`), so the
+  worst case is a transient missing marker — never lost text.
+- **Live-instance detection matches the absolute binary path**: the
+  process harness (`scripts/measure-startup.mjs`) finds running instances
+  with `pgrep -f` on the packaged binary's absolute path, so it cannot
+  confuse the app with another process — but it also only detects that
+  exact build location.
+- **No checked-in Markdown fixture corpus**: the plan's
+  `tests/fixtures/markdown/*.md` files were intentionally replaced by
+  printf-based steps in the manual checklist above plus the seeded,
+  generated performance fixtures (`npm run perf:fixtures`,
+  `tests/perf/generated/`, git-ignored), which are deterministic without
+  committing large binaries.
 
 ## Spec coverage audit (design spec §12, nine completion criteria)
 

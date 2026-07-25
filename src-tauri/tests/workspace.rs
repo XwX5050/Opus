@@ -52,7 +52,10 @@ fn list_directory_is_lazy_sorted_directories_first_and_filters_entries() {
     let entries = list_directory(&root, Path::new("")).unwrap();
 
     // Lazy: files inside subdirectories are not listed at the top level.
-    assert_eq!(entry_names(&entries), ["archive", "notes", "a.markdown", "b.md"]);
+    assert_eq!(
+        entry_names(&entries),
+        ["archive", "notes", "a.markdown", "b.md"]
+    );
     assert!(entries[0].is_directory && entries[1].is_directory);
     assert!(!entries[2].is_directory && !entries[3].is_directory);
 
@@ -143,7 +146,10 @@ fn rename_entry_renames_in_place_and_reports_the_new_entry() {
 
     assert_eq!(renamed.name, "renamed.md");
     assert!(!root.join("b.md").exists());
-    assert_eq!(std::fs::read(root.join("b.md").with_file_name("renamed.md")).unwrap(), b"b");
+    assert_eq!(
+        std::fs::read(root.join("b.md").with_file_name("renamed.md")).unwrap(),
+        b"b"
+    );
 
     let renamed_dir = rename_entry(&root, Path::new("archive"), "archive-2").unwrap();
     assert!(renamed_dir.is_directory);

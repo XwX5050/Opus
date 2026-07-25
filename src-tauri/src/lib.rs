@@ -58,12 +58,11 @@ pub fn run() {
                 }
             });
             let disk_handle = app.handle().clone();
-            app.manage(document_commands::SharedWatchService::new(watch::WatchService::new(
-                watch::DEFAULT_DEBOUNCE_WINDOW,
-                move |event| {
+            app.manage(document_commands::SharedWatchService::new(
+                watch::WatchService::new(watch::DEFAULT_DEBOUNCE_WINDOW, move |event| {
                     let _ = disk_handle.emit("document-disk-event", &event);
-                },
-            )));
+                }),
+            ));
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

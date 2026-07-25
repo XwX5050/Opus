@@ -328,6 +328,26 @@ export function useAppController(
             "保存完成时检测到目标路径冲突，文件仍处于未保存状态",
           );
           setError(failure.message);
+        } else {
+          // A save that landed at a new path (save-as, first save of an
+          // untitled document) must move the scope and watch to the new
+          // location. Release old then acquire new under the same stable tab
+          // id, serialized through the per-consumer chain so refcounts stay
+          // balanced.
+          const savedTab = completed.tabs.find((tab) => tab.id === id);
+          const oldPath = latest.path;
+          const newPath = savedTab?.path ?? null;
+          const retargeted =
+            savedTab !== undefined &&
+            newPath !== null &&
+            (oldPath === null ||
+              normalizePathKey(oldPath, pending.pathPlatform) !==
+                normalizePathKey(newPath, pending.pathPlatform));
+          if (retargeted) {
+            releaseScope(id);
+            acquireDocumentScope(savedTab);
+            watchConsumer(id, newPath, "document");
+          }
         }
         return succeeded;
       } catch (caught) {
@@ -350,7 +370,7 @@ export function useAppController(
     } finally {
       savingIds.current.delete(id);
     }
-  }, [dispatch, isCurrent, port]);
+  }, [acquireDocumentScope, dispatch, isCurrent, port, releaseScope, watchConsumer]);
 
   const save = useCallback(
     (id = stateRef.current.activeId) => performSave(id, false),
@@ -418,8 +438,11 @@ export function useAppController(
         tab.id === reopeningId &&
         !before.tabs.some((tab) => tab.id === reopeningId),
     );
-    if (added) acquireDocumentScope(added);
-  }, [acquireDocumentScope, dispatch]);
+    if (added) {
+      acquireDocumentScope(added);
+      if (added.path) watchConsumer(added.id, added.path, "document");
+    }
+  }, [acquireDocumentScope, dispatch, watchConsumer]);
 
   // Release every still-held scope and watch when the controller unmounts,
   // keeping the same acquire-then-release serialization as tab closes.

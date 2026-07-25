@@ -45,7 +45,11 @@ fn drafts_live_under_the_store_directory_and_never_touch_original_documents() {
 
     let store = RecoveryStore::new(dir.path().join("recovery"));
     store
-        .write_draft(&draft("document-1", Some(original.clone()), "unsaved edits"))
+        .write_draft(&draft(
+            "document-1",
+            Some(original.clone()),
+            "unsaved edits",
+        ))
         .unwrap();
 
     assert_eq!(std::fs::read(&original).unwrap(), b"on disk");
@@ -59,8 +63,12 @@ fn drafts_live_under_the_store_directory_and_never_touch_original_documents() {
 fn writes_are_atomic_and_leave_no_temp_files_behind() {
     let dir = tempfile::tempdir().unwrap();
     let store = RecoveryStore::new(dir.path().join("recovery"));
-    store.write_draft(&draft("document-1", None, "one")).unwrap();
-    store.write_draft(&draft("document-2", None, "two")).unwrap();
+    store
+        .write_draft(&draft("document-1", None, "one"))
+        .unwrap();
+    store
+        .write_draft(&draft("document-2", None, "two"))
+        .unwrap();
 
     let mut names: Vec<_> = std::fs::read_dir(store.dir())
         .unwrap()
@@ -74,8 +82,12 @@ fn writes_are_atomic_and_leave_no_temp_files_behind() {
 fn updating_a_draft_replaces_it_and_keeps_a_single_listing() {
     let dir = tempfile::tempdir().unwrap();
     let store = RecoveryStore::new(dir.path().join("recovery"));
-    store.write_draft(&draft("document-1", None, "first")).unwrap();
-    store.write_draft(&draft("document-1", None, "second")).unwrap();
+    store
+        .write_draft(&draft("document-1", None, "first"))
+        .unwrap();
+    store
+        .write_draft(&draft("document-1", None, "second"))
+        .unwrap();
 
     assert_eq!(store.list_drafts().unwrap().len(), 1);
     assert_eq!(store.read_draft("document-1").unwrap().text, "second");
@@ -86,8 +98,12 @@ fn a_fresh_store_on_the_same_directory_lists_drafts_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     let recovery_dir = dir.path().join("recovery");
     let first = RecoveryStore::new(recovery_dir.clone());
-    first.write_draft(&draft("document-1", None, "one")).unwrap();
-    first.write_draft(&draft("document-2", None, "two")).unwrap();
+    first
+        .write_draft(&draft("document-1", None, "one"))
+        .unwrap();
+    first
+        .write_draft(&draft("document-2", None, "two"))
+        .unwrap();
     first.discard_draft("document-1").unwrap();
     drop(first);
 
@@ -127,7 +143,9 @@ fn corrupt_files_are_skipped_in_listings_but_reported_on_read() {
     let dir = tempfile::tempdir().unwrap();
     let recovery_dir = dir.path().join("recovery");
     let store = RecoveryStore::new(recovery_dir.clone());
-    store.write_draft(&draft("document-1", None, "good")).unwrap();
+    store
+        .write_draft(&draft("document-1", None, "good"))
+        .unwrap();
     std::fs::create_dir_all(&recovery_dir).unwrap();
     std::fs::write(recovery_dir.join("broken.json"), b"{not json").unwrap();
     std::fs::write(recovery_dir.join("notes.txt"), b"unrelated").unwrap();

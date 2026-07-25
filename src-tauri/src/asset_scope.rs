@@ -12,9 +12,15 @@ pub enum AssetScopeError {
 impl fmt::Display for AssetScopeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotAbsolute { path } => write!(formatter, "path must be absolute: {}", path.display()),
+            Self::NotAbsolute { path } => {
+                write!(formatter, "path must be absolute: {}", path.display())
+            }
             Self::MissingParent { path } => {
-                write!(formatter, "path has no parent directory: {}", path.display())
+                write!(
+                    formatter,
+                    "path has no parent directory: {}",
+                    path.display()
+                )
             }
             Self::UnknownConsumer { consumer_id } => {
                 write!(formatter, "unknown asset scope consumer: {consumer_id}")
@@ -135,12 +141,12 @@ impl AssetScopeRegistry {
     /// Releases every scope held by the consumer. A scope disappears once
     /// its last consumer releases it.
     pub fn release_consumer(&mut self, consumer_id: &str) -> Result<(), AssetScopeError> {
-        let keys = self
-            .consumers
-            .remove(consumer_id)
-            .ok_or_else(|| AssetScopeError::UnknownConsumer {
-                consumer_id: consumer_id.to_string(),
-            })?;
+        let keys =
+            self.consumers
+                .remove(consumer_id)
+                .ok_or_else(|| AssetScopeError::UnknownConsumer {
+                    consumer_id: consumer_id.to_string(),
+                })?;
         for key in keys {
             if let Some(ref_count) = self.scopes.get_mut(&key) {
                 *ref_count -= 1;

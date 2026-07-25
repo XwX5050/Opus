@@ -138,7 +138,9 @@ fn validate_image(path: &Path, bytes: &[u8], mime_type: &str) -> Result<(), Comm
     let extension = path.extension().and_then(|x| x.to_str()).unwrap_or("");
     let matches_mime = match mime_type {
         "image/png" => extension.eq_ignore_ascii_case("png"),
-        "image/jpeg" => extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg"),
+        "image/jpeg" => {
+            extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+        }
         _ => false,
     };
     if !matches_mime {
@@ -439,7 +441,9 @@ pub fn write_recovery_draft(
 
 #[tauri::command]
 pub fn list_recovery_drafts(app: tauri::AppHandle) -> Result<Vec<DraftInfo>, CommandError> {
-    recovery_store(&app)?.list_drafts().map_err(map_recovery_error)
+    recovery_store(&app)?
+        .list_drafts()
+        .map_err(map_recovery_error)
 }
 
 #[tauri::command]
@@ -453,10 +457,7 @@ pub fn read_recovery_draft(
 }
 
 #[tauri::command]
-pub fn discard_recovery_draft(
-    app: tauri::AppHandle,
-    draft_id: String,
-) -> Result<(), CommandError> {
+pub fn discard_recovery_draft(app: tauri::AppHandle, draft_id: String) -> Result<(), CommandError> {
     recovery_store(&app)?
         .discard_draft(&draft_id)
         .map_err(map_recovery_error)

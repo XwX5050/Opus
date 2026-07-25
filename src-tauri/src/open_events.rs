@@ -105,9 +105,11 @@ const IMAGE_EXTENSIONS: [&str; 9] = [
 ];
 
 pub fn is_image_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|x| x.to_str())
-        .is_some_and(|x| IMAGE_EXTENSIONS.iter().any(|ext| x.eq_ignore_ascii_case(ext)))
+    path.extension().and_then(|x| x.to_str()).is_some_and(|x| {
+        IMAGE_EXTENSIONS
+            .iter()
+            .any(|ext| x.eq_ignore_ascii_case(ext))
+    })
 }
 
 /// Payload for the `image-files-dropped` event. `x`/`y` are the physical
@@ -153,7 +155,10 @@ mod tests {
         ]);
         assert_eq!(
             images,
-            vec![PathBuf::from("/tmp/photo.PNG"), PathBuf::from("/tmp/pic.webp")]
+            vec![
+                PathBuf::from("/tmp/photo.PNG"),
+                PathBuf::from("/tmp/pic.webp")
+            ]
         );
         assert_eq!(
             rest,

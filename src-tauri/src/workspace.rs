@@ -18,9 +18,13 @@ pub enum WorkspaceError {
 impl fmt::Display for WorkspaceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotAbsolute { path } => write!(formatter, "path must be absolute: {}", path.display()),
+            Self::NotAbsolute { path } => {
+                write!(formatter, "path must be absolute: {}", path.display())
+            }
             Self::NotFound { path } => write!(formatter, "{} does not exist", path.display()),
-            Self::NotADirectory { path } => write!(formatter, "{} is not a directory", path.display()),
+            Self::NotADirectory { path } => {
+                write!(formatter, "{} is not a directory", path.display())
+            }
             Self::OutsideRoot { path } => write!(
                 formatter,
                 "{} escapes the opened workspace root",
@@ -33,7 +37,9 @@ impl fmt::Display for WorkspaceError {
             ),
             Self::InvalidName { name } => write!(formatter, "invalid entry name: {name}"),
             Self::AlreadyExists { path } => write!(formatter, "{} already exists", path.display()),
-            Self::Io { path, source } => write!(formatter, "I/O error for {}: {source}", path.display()),
+            Self::Io { path, source } => {
+                write!(formatter, "I/O error for {}: {source}", path.display())
+            }
         }
     }
 }
@@ -107,7 +113,9 @@ fn resolve_existing(root: &Path, relative: &Path) -> Result<PathBuf, WorkspaceEr
         root.join(relative)
     };
     let canonical = fs::canonicalize(&candidate).map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => WorkspaceError::NotFound { path: candidate.clone() },
+        io::ErrorKind::NotFound => WorkspaceError::NotFound {
+            path: candidate.clone(),
+        },
         _ => WorkspaceError::Io {
             path: candidate.clone(),
             source: error,
@@ -129,14 +137,18 @@ fn resolve_entry_for_mutation(root: &Path, relative: &Path) -> Result<PathBuf, W
     let root = canonical_root(root)?;
     let candidate = root.join(relative);
     fs::symlink_metadata(&candidate).map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => WorkspaceError::NotFound { path: candidate.clone() },
+        io::ErrorKind::NotFound => WorkspaceError::NotFound {
+            path: candidate.clone(),
+        },
         _ => WorkspaceError::Io {
             path: candidate.clone(),
             source: error,
         },
     })?;
     let canonical = fs::canonicalize(&candidate).map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => WorkspaceError::NotFound { path: candidate.clone() },
+        io::ErrorKind::NotFound => WorkspaceError::NotFound {
+            path: candidate.clone(),
+        },
         _ => WorkspaceError::Io {
             path: candidate.clone(),
             source: error,
@@ -240,7 +252,10 @@ pub fn list_directory(root: &Path, relative: &Path) -> Result<Vec<DirectoryEntry
     Ok(directories)
 }
 
-pub fn create_markdown_file(root: &Path, relative: &Path) -> Result<DirectoryEntry, WorkspaceError> {
+pub fn create_markdown_file(
+    root: &Path,
+    relative: &Path,
+) -> Result<DirectoryEntry, WorkspaceError> {
     if !is_markdown(relative) {
         return Err(WorkspaceError::NotMarkdown {
             path: relative.to_path_buf(),
@@ -254,7 +269,9 @@ pub fn create_markdown_file(root: &Path, relative: &Path) -> Result<DirectoryEnt
         .create_new(true)
         .open(&target)
         .map_err(|error| match error.kind() {
-            io::ErrorKind::AlreadyExists => WorkspaceError::AlreadyExists { path: target.clone() },
+            io::ErrorKind::AlreadyExists => WorkspaceError::AlreadyExists {
+                path: target.clone(),
+            },
             _ => WorkspaceError::Io {
                 path: target.clone(),
                 source: error,
@@ -272,12 +289,19 @@ pub fn create_markdown_file(root: &Path, relative: &Path) -> Result<DirectoryEnt
 /// extension so they cannot be renamed out of the listing. Renaming an
 /// in-root symlink renames the link, never its target, and renaming to the
 /// current name succeeds as a no-op.
-pub fn rename_entry(root: &Path, from: &Path, to_name: &str) -> Result<DirectoryEntry, WorkspaceError> {
+pub fn rename_entry(
+    root: &Path,
+    from: &Path,
+    to_name: &str,
+) -> Result<DirectoryEntry, WorkspaceError> {
     let source = resolve_entry_for_mutation(root, from)?;
     let valid_name = !to_name.is_empty()
         && !to_name.starts_with('.')
         && Path::new(to_name).components().count() == 1
-        && matches!(Path::new(to_name).components().next(), Some(Component::Normal(_)));
+        && matches!(
+            Path::new(to_name).components().next(),
+            Some(Component::Normal(_))
+        );
     if !valid_name {
         return Err(WorkspaceError::InvalidName {
             name: to_name.into(),

@@ -704,6 +704,136 @@ describe("useAppController disk watching", () => {
   });
 });
 
+describe("useAppController scope and watch retargeting", () => {
+  const memoryFile = (path: string, text = "saved"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  it("re-acquires the scope and re-issues the watch when a closed tab is reopened", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+
+    act(() => hook.result.current.close(tab.id));
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "release", consumerId: tab.id },
+      ]),
+    );
+
+    act(() => hook.result.current.reopenClosed());
+
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "release", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+      ]),
+    );
+    expect(port.watchCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+      { kind: "unwatch", consumerId: tab.id },
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+    ]);
+    hook.unmount();
+  });
+
+  it("retargets scope and watch to the new path after a successful save-as", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", memoryFile("/notes/a.md")]]),
+      { savePath: "/notes/copy.md" },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+    act(() => hook.result.current.changeText(tab.id, "copy contents"));
+
+    await act(() => hook.result.current.saveAs(tab.id));
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/copy.md",
+      status: "clean",
+    });
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "release", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/copy.md" },
+      ]),
+    );
+    expect(port.watchCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+      { kind: "unwatch", consumerId: tab.id },
+      { kind: "document", consumerId: tab.id, path: "/notes/copy.md" },
+    ]);
+    hook.unmount();
+  });
+
+  it("delivers disk events for the new path after a save-as", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", memoryFile("/notes/a.md")]]),
+      { savePath: "/notes/copy.md" },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await act(() => hook.result.current.saveAs(tab.id));
+    expect(hook.result.current.state.tabs[0].path).toBe("/notes/copy.md");
+
+    act(() => port.updateFile("/notes/copy.md", "external edit", "foreign", 9));
+    act(() =>
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/copy.md",
+        modifiedUnixMs: 9,
+        version: "foreign",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "external edit",
+        status: "clean",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("acquires scope and watch when an untitled document is first saved", async () => {
+    const port = new MemoryDocumentPort(new Map(), { savePath: "/notes/new.md" });
+    const hook = renderHook(() => useAppController(port));
+    act(() => hook.result.current.newDocument());
+    const tab = hook.result.current.state.tabs[0];
+    expect(port.scopeCalls).toEqual([]);
+    act(() => hook.result.current.changeText(tab.id, "fresh content"));
+
+    await act(() => hook.result.current.save(tab.id));
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/new.md",
+      status: "clean",
+    });
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/new.md" },
+      ]),
+    );
+    expect(port.watchCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/new.md" },
+    ]);
+    hook.unmount();
+  });
+});
+
 describe("useAppController conflict resolution", () => {
   const conflictedController = async () => {
     const port = new MemoryDocumentPort(

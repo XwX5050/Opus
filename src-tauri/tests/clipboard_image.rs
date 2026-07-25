@@ -18,8 +18,14 @@ fn clipboard_image_accepts_jpg_and_jpeg_extensions_for_jpeg_bytes() {
     save_clipboard_image_impl(dir.path().join("a.jpg"), &[255, 216], "image/jpeg").unwrap();
     save_clipboard_image_impl(dir.path().join("b.jpeg"), &[255, 216], "image/jpeg").unwrap();
 
-    assert_eq!(std::fs::read(dir.path().join("a.jpg")).unwrap(), vec![255, 216]);
-    assert_eq!(std::fs::read(dir.path().join("b.jpeg")).unwrap(), vec![255, 216]);
+    assert_eq!(
+        std::fs::read(dir.path().join("a.jpg")).unwrap(),
+        vec![255, 216]
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("b.jpeg")).unwrap(),
+        vec![255, 216]
+    );
 }
 
 #[test]

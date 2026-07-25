@@ -61,7 +61,11 @@ impl fmt::Display for RecoveryError {
             }
             Self::NotFound { draft_id } => write!(formatter, "no recovery draft: {draft_id}"),
             Self::Corrupt { path, message } => {
-                write!(formatter, "corrupt recovery draft {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "corrupt recovery draft {}: {message}",
+                    path.display()
+                )
             }
             Self::Io { path, source } => {
                 write!(formatter, "I/O error for {}: {source}", path.display())
@@ -151,7 +155,10 @@ impl RecoveryStore {
             path: destination.clone(),
             source: error,
         })?;
-        Ok(draft_info(draft, modified_unix_ms(&metadata, &destination)?))
+        Ok(draft_info(
+            draft,
+            modified_unix_ms(&metadata, &destination)?,
+        ))
     }
 
     /// Lists all drafts, oldest information first by draft id for a
@@ -207,11 +214,9 @@ impl RecoveryStore {
         let path = self.draft_path(draft_id);
         match fs::remove_file(&path) {
             Ok(()) => sync_directory(&self.dir),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Err(RecoveryError::NotFound {
-                    draft_id: draft_id.to_string(),
-                })
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Err(RecoveryError::NotFound {
+                draft_id: draft_id.to_string(),
+            }),
             Err(error) => Err(RecoveryError::Io {
                 path,
                 source: error,

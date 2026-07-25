@@ -5,8 +5,12 @@ use markdown_edit_lib::asset_scope::AssetScopeRegistry;
 #[test]
 fn shared_parent_scope_is_removed_only_after_last_tab_closes() {
     let mut scopes = AssetScopeRegistry::default();
-    scopes.acquire_document("tab-a", Path::new("/notes/a.md")).unwrap();
-    scopes.acquire_document("tab-b", Path::new("/notes/b.md")).unwrap();
+    scopes
+        .acquire_document("tab-a", Path::new("/notes/a.md"))
+        .unwrap();
+    scopes
+        .acquire_document("tab-b", Path::new("/notes/b.md"))
+        .unwrap();
     scopes.release_consumer("tab-a").unwrap();
     assert!(scopes.allows(Path::new("/notes/image.png")));
     scopes.release_consumer("tab-b").unwrap();
@@ -64,7 +68,9 @@ fn releasing_an_unknown_consumer_is_an_error() {
 #[test]
 fn non_absolute_paths_are_rejected() {
     let mut scopes = AssetScopeRegistry::default();
-    assert!(scopes.acquire_document("tab-a", Path::new("notes/a.md")).is_err());
+    assert!(scopes
+        .acquire_document("tab-a", Path::new("notes/a.md"))
+        .is_err());
     assert!(scopes.acquire_workspace("ws", Path::new("notes")).is_err());
 }
 
@@ -114,9 +120,18 @@ fn capabilities_default_json_has_no_home_or_whole_filesystem_glob() {
     let text = std::fs::read_to_string(&path).unwrap();
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     let serialized = serde_json::to_string(&json).unwrap();
-    assert!(!serialized.contains("**"), "whole-tree glob found: {serialized}");
-    assert!(!serialized.contains("$HOME"), "home directory scope found: {serialized}");
-    assert!(!serialized.contains("assetProtocol"), "static asset scope found: {serialized}");
+    assert!(
+        !serialized.contains("**"),
+        "whole-tree glob found: {serialized}"
+    );
+    assert!(
+        !serialized.contains("$HOME"),
+        "home directory scope found: {serialized}"
+    );
+    assert!(
+        !serialized.contains("assetProtocol"),
+        "static asset scope found: {serialized}"
+    );
 }
 
 #[test]

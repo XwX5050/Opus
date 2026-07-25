@@ -62,27 +62,53 @@ pub enum RawFsEvent {
 
 fn raw_events(event: &notify::Event) -> Vec<RawFsEvent> {
     match event.kind {
-        EventKind::Create(_) => event.paths.iter().cloned().map(RawFsEvent::Created).collect(),
-        EventKind::Remove(_) => event.paths.iter().cloned().map(RawFsEvent::Removed).collect(),
+        EventKind::Create(_) => event
+            .paths
+            .iter()
+            .cloned()
+            .map(RawFsEvent::Created)
+            .collect(),
+        EventKind::Remove(_) => event
+            .paths
+            .iter()
+            .cloned()
+            .map(RawFsEvent::Removed)
+            .collect(),
         EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if event.paths.len() == 2 => {
             vec![RawFsEvent::Renamed {
                 from: event.paths[0].clone(),
                 to: event.paths[1].clone(),
             }]
         }
-        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
-            event.paths.iter().cloned().map(RawFsEvent::Removed).collect()
-        }
-        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
-            event.paths.iter().cloned().map(RawFsEvent::Created).collect()
-        }
-        EventKind::Modify(_) => event.paths.iter().cloned().map(RawFsEvent::Modified).collect(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => event
+            .paths
+            .iter()
+            .cloned()
+            .map(RawFsEvent::Removed)
+            .collect(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => event
+            .paths
+            .iter()
+            .cloned()
+            .map(RawFsEvent::Created)
+            .collect(),
+        EventKind::Modify(_) => event
+            .paths
+            .iter()
+            .cloned()
+            .map(RawFsEvent::Modified)
+            .collect(),
         // Access events are pure reads and cannot change disk state. Every
         // other kind (including the vague Any/Other kinds some backends
         // produce) is treated as a touch: the flush-time probe decides
         // between `changed` and `missing` anyway.
         EventKind::Access(_) => Vec::new(),
-        _ => event.paths.iter().cloned().map(RawFsEvent::Modified).collect(),
+        _ => event
+            .paths
+            .iter()
+            .cloned()
+            .map(RawFsEvent::Modified)
+            .collect(),
     }
 }
 
@@ -102,7 +128,11 @@ impl fmt::Display for WatchError {
                 write!(formatter, "path must be absolute: {}", path.display())
             }
             Self::MissingParent { path } => {
-                write!(formatter, "path has no parent directory: {}", path.display())
+                write!(
+                    formatter,
+                    "path has no parent directory: {}",
+                    path.display()
+                )
             }
             Self::UnknownConsumer { consumer_id } => {
                 write!(formatter, "unknown watch consumer: {consumer_id}")
@@ -203,19 +233,21 @@ impl WatchRegistry {
                 path: path.to_path_buf(),
             });
         }
-        let parent = path
-            .parent()
-            .ok_or_else(|| WatchError::MissingParent {
-                path: path.to_path_buf(),
-            })?;
+        let parent = path.parent().ok_or_else(|| WatchError::MissingParent {
+            path: path.to_path_buf(),
+        })?;
         let target = WatchTarget {
             path: resolve(parent),
             recursive: false,
         };
-        Ok(self.acquire(consumer_id, WatchKey {
-            path: resolve_document(path),
-            recursive: false,
-        }, target))
+        Ok(self.acquire(
+            consumer_id,
+            WatchKey {
+                path: resolve_document(path),
+                recursive: false,
+            },
+            target,
+        ))
     }
 
     /// Watches a workspace root recursively.
@@ -240,16 +272,14 @@ impl WatchRegistry {
         Ok(self.acquire(consumer_id, key, target))
     }
 
-    fn acquire(
-        &mut self,
-        consumer_id: &str,
-        key: WatchKey,
-        target: WatchTarget,
-    ) -> AcquiredWatch {
-        let entry = self.watches.entry(key.clone()).or_insert_with(|| WatchEntry {
-            refs: 0,
-            target: target.clone(),
-        });
+    fn acquire(&mut self, consumer_id: &str, key: WatchKey, target: WatchTarget) -> AcquiredWatch {
+        let entry = self
+            .watches
+            .entry(key.clone())
+            .or_insert_with(|| WatchEntry {
+                refs: 0,
+                target: target.clone(),
+            });
         let newly_added = entry.refs == 0;
         entry.refs += 1;
         self.consumers
@@ -290,16 +320,13 @@ impl WatchRegistry {
 
     /// Releases every watch held by the consumer and returns the targets
     /// whose last reference disappeared.
-    pub fn release_consumer(
-        &mut self,
-        consumer_id: &str,
-    ) -> Result<Vec<WatchTarget>, WatchError> {
-        let keys = self
-            .consumers
-            .remove(consumer_id)
-            .ok_or_else(|| WatchError::UnknownConsumer {
-                consumer_id: consumer_id.to_string(),
-            })?;
+    pub fn release_consumer(&mut self, consumer_id: &str) -> Result<Vec<WatchTarget>, WatchError> {
+        let keys =
+            self.consumers
+                .remove(consumer_id)
+                .ok_or_else(|| WatchError::UnknownConsumer {
+                    consumer_id: consumer_id.to_string(),
+                })?;
         let mut released = Vec::new();
         for key in keys {
             if let Some(target) = self.release_key(&key) {
@@ -533,8 +560,7 @@ impl WatchService {
             let _ = sender.send(result);
         }) {
             Ok(watcher) => {
-                let dispatcher =
-                    spawn_dispatcher(receiver, Arc::clone(&registry), window, emit);
+                let dispatcher = spawn_dispatcher(receiver, Arc::clone(&registry), window, emit);
                 Self {
                     registry,
                     watcher: Some(Box::new(NotifyWatcher(watcher))),
@@ -633,12 +659,12 @@ impl WatchService {
                 // A path watched both ways is watched recursively; the mode
                 // is never downgraded while any reference remains.
                 if target.recursive && !state.recursive {
-                    watcher.unwatch(&target.path).map_err(|message| {
-                        WatchError::Notify { message }
-                    })?;
-                    watcher.watch(&target.path, true).map_err(|message| {
-                        WatchError::Notify { message }
-                    })?;
+                    watcher
+                        .unwatch(&target.path)
+                        .map_err(|message| WatchError::Notify { message })?;
+                    watcher
+                        .watch(&target.path, true)
+                        .map_err(|message| WatchError::Notify { message })?;
                     state.recursive = true;
                 }
             }
@@ -646,10 +672,13 @@ impl WatchService {
                 watcher
                     .watch(&target.path, target.recursive)
                     .map_err(|message| WatchError::Notify { message })?;
-                self.targets.insert(target.path.clone(), TargetState {
-                    refs: 1,
-                    recursive: target.recursive,
-                });
+                self.targets.insert(
+                    target.path.clone(),
+                    TargetState {
+                        refs: 1,
+                        recursive: target.recursive,
+                    },
+                );
             }
         }
         Ok(())
@@ -664,7 +693,10 @@ impl WatchService {
             self.targets.remove(&target.path);
             if let Some(watcher) = self.watcher.as_mut() {
                 if let Err(message) = watcher.unwatch(&target.path) {
-                    log::warn!("failed to stop watching {}: {message}", target.path.display());
+                    log::warn!(
+                        "failed to stop watching {}: {message}",
+                        target.path.display()
+                    );
                 }
             }
         }
@@ -829,7 +861,10 @@ mod tests {
         let mut queue = DebounceQueue::new(window);
         queue.push(RawFsEvent::Modified(PathBuf::from("/a.md")), start);
 
-        let early = queue.collect(start + Duration::from_millis(50), probe_from(&[("/a.md", Some(7))]));
+        let early = queue.collect(
+            start + Duration::from_millis(50),
+            probe_from(&[("/a.md", Some(7))]),
+        );
         assert!(early.is_empty());
 
         let events = queue.collect(
@@ -874,10 +909,7 @@ mod tests {
             RawFsEvent::Created(PathBuf::from("/a.md")),
             start + Duration::from_millis(10),
         );
-        let events = queue.collect(
-            start + window,
-            probe_from(&[("/a.md", Some(9))]),
-        );
+        let events = queue.collect(start + window, probe_from(&[("/a.md", Some(9))]));
         assert_eq!(
             events,
             vec![DiskEvent::Changed {
@@ -928,10 +960,7 @@ mod tests {
             },
             start,
         );
-        let events = queue.collect(
-            start + window,
-            probe_from(&[("/b.md", Some(1))]),
-        );
+        let events = queue.collect(start + window, probe_from(&[("/b.md", Some(1))]));
         assert_eq!(
             events,
             vec![DiskEvent::Moved {
@@ -1093,7 +1122,10 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(15);
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                assert!(remaining > Duration::ZERO, "timed out waiting for disk event");
+                assert!(
+                    remaining > Duration::ZERO,
+                    "timed out waiting for disk event"
+                );
                 match receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(event) if predicate(&event) => return event,
                     Ok(_) => {}
@@ -1104,9 +1136,9 @@ mod tests {
         };
 
         std::fs::write(&document, "two").unwrap();
-        let changed = wait_for(&|event| {
-            matches!(event, DiskEvent::Changed { path, .. } if *path == watched_path)
-        });
+        let changed = wait_for(
+            &|event| matches!(event, DiskEvent::Changed { path, .. } if *path == watched_path),
+        );
         match changed {
             DiskEvent::Changed { version, .. } => {
                 let (_, expected) = document_io::probe_version(&watched_path).unwrap();
@@ -1116,8 +1148,6 @@ mod tests {
         }
 
         std::fs::remove_file(&document).unwrap();
-        wait_for(&|event| {
-            matches!(event, DiskEvent::Missing { path } if *path == watched_path)
-        });
+        wait_for(&|event| matches!(event, DiskEvent::Missing { path } if *path == watched_path));
     }
 }

@@ -348,8 +348,7 @@ pub fn write_image_bytes(path: &Path, bytes: &[u8]) -> Result<(), DocumentIoErro
             .sync_all()
             .map_err(|error| map_io_error(&destination, error))?;
         drop(temporary_file);
-        fs::rename(&temporary_path, &destination)
-            .map_err(|error| map_io_error(&destination, error))
+        fs::rename(&temporary_path, &destination).map_err(|error| map_io_error(&destination, error))
     })();
 
     if result.is_err() {
