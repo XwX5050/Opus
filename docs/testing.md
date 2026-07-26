@@ -32,7 +32,7 @@ Covered flows (real CodeMirror interactions, no reducer calls):
 
 - open two files, switch tabs, edit, save with ⌘S;
 - dirty close → cancel keeps the tab and edits;
-- live preview ↔ source mode toggle (marker hiding);
+- reading ↔ editing view toggle (marker hiding; reading is read-only);
 - LaTeX success renders KaTeX, invalid formula shows a non-blocking error
   and never blocks editing;
 - find/replace (⌘F panel, replace all) in the current document;
@@ -60,7 +60,9 @@ build SHA, chip, and macOS version with the results.
    open the system pickers and open the selection. For 打开文件夹… the
    native folder picker must appear and respond normally — selecting and
    cancelling both work and the app does not freeze (native panels come
-   from the JS dialog plugin, presented on the main thread).
+   from the JS dialog plugin, presented on the main thread). The same
+   actions are available from the native File menu (打开文件… ⌘O,
+   打开文件夹… ⌘⇧O).
 
 ### Editing
 
@@ -68,10 +70,12 @@ build SHA, chip, and macOS version with the results.
    sentence mid-document. Composition underlines appear during input and
    commit correctly; no dropped or duplicated characters; the dirty
    indicator appears only after committed text changes.
-6. **New / save / save-as**: 新建 creates an untitled tab; ⌘S on it opens
-   the save panel (另存为); after saving, the tab title shows the file name
-   and ⌘S writes back in place. 另存为… on an existing file saves a copy to
-   the chosen path and retargets the tab.
+6. **New / save / save-as**: 新建 (File menu, ⌘N) creates an untitled tab;
+   ⌘S on it opens the save panel (另存为); after saving, the tab title
+   shows the file name and ⌘S writes back in place. 另存为… (File menu,
+   ⌘⇧S) on an existing file saves a copy to the chosen path and retargets
+   the tab. 设置 lives in the App menu (⌘,) and opens the settings dialog;
+   the production header has no text buttons for these actions.
 7. **CRLF/BOM preservation**: prepare a UTF-8-with-BOM, CRLF file (e.g.
    `printf '\xef\xbb\xbfline1\r\nline2\r\n' > bom-crlf.md`). Open, edit,
    ⌘S. Verify with `xxd bom-crlf.md | head` that the BOM survives and
@@ -134,9 +138,22 @@ build SHA, chip, and macOS version with the results.
       dot is violet (accent) for dirty, red (danger) for conflict, and
       muted for a missing file. Section headers (打开的标签 / 文件夹) are
       small, muted, and highlight on hover; collapse/expand works.
-    - **三态视图控件**: 阅读/编辑/源码 renders as a capsule (inset
-      container, pill radius); the active segment has a solid accent fill
-      with white text, inactive segments only brighten on hover.
+    - **头部图标按钮**: the sidebar toggle is a panel-left icon button at
+      the far left of the header; the view mode is a single icon toggle
+      (book = 阅读, pencil = 编辑). Hovering each icon button shows its
+      tooltip (title); both show the accent-tinted focus ring.
+    - **两态视图切换**: 阅读/编辑 toggle via the header icon or ⌘E (there
+      is no source mode); 阅读 renders fully and rejects typing, 编辑
+      restores live preview with marker hiding.
+    - **侧栏拖拽调宽**: dragging the divider between sidebar and editor
+      (role=separator) resizes the sidebar within 200–480 px; the handle
+      also responds to arrow keys; the width persists.
+    - **行距与公式间距**: body text uses the tightened line height
+      (`--editor-line-height` 1.5) and block formulas sit closer to their
+      surrounding paragraphs (`.katex-display` margin 0.25 em) — no large
+      gaps above/below display math.
+    - **滚动隔离**: scrolling the sidebar to its end does not scroll the
+      editor and vice versa (overscroll-behavior: contain on both).
     - **整体质感**: dividers are low-contrast; dialogs use the large radius
       with a soft shadow over a dimmed backdrop; scrollbars are thin and
       only darken on hover; keyboard focus shows the accent-tinted ring on
@@ -213,7 +230,7 @@ build SHA, chip, and macOS version with the results.
 | 2 | Open/drag/create/save Markdown from anywhere | vitest document/save suites; E2E open-two-files + edit/save; manual §Open paths, §6, §7 |
 | 3 | Multiple tabs in one window | vitest tab suites; E2E tab open/switch/close-cancel; manual §8, §9 |
 | 4 | Optional folder with collapsible sidebar | vitest workspace/tree suites; E2E folder-drawer flow; manual §3, §18 |
-| 5 | Markdown + LaTeX source editing and live typesetting | vitest live-preview/math suites; E2E source/live toggle + LaTeX success/error; manual §5, §7 |
+| 5 | Markdown + LaTeX source editing and live typesetting | vitest live-preview/math suites; E2E reading/editing toggle + LaTeX success/error; manual §5, §7 |
 | 6 | No unsaved-content loss on save failure, external change, or crash | vitest conflict/recovery/save-failure suites; E2E conflict + recovery; manual §13–§17 |
 | 7 | Light / Dark / System with consistent Baseline styling | vitest theme suites; `docs/screenshots/`; manual §19, §20 |
 | 8 | Case/whole-word/regex find-replace in the current document | vitest search suite; E2E find/replace; (manual ad hoc during §Editing) |
