@@ -300,6 +300,7 @@ export default function AppShell({
             type="button"
             className="icon-button sidebar-toggle"
             aria-expanded={!sidebar.collapsed}
+            aria-controls="app-sidebar"
             aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
             title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
             onClick={() =>
@@ -345,7 +346,7 @@ export default function AppShell({
 
       <section className="app-body">
         {sidebarAvailable && !sidebar.collapsed && (
-          <aside aria-label="侧栏" className="sidebar">
+          <aside id="app-sidebar" aria-label="侧栏" className="sidebar">
             {controller.state.tabs.length > 0 && (
               <section className="sidebar-section">
                 <button
