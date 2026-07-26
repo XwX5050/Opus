@@ -616,7 +616,7 @@ describe("tauri document port session, window geometry, and close requests", () 
       openPaths: [],
       activePath: null,
       workspacePath: null,
-      sidebar: { collapsed: true, tabsSectionCollapsed: false, filesSectionCollapsed: true },
+      sidebar: { collapsed: true, tabsSectionCollapsed: false, filesSectionCollapsed: true, width: 320 },
     };
     await port.saveSession(session);
     await expect(port.loadSession()).resolves.toEqual(session);
@@ -626,14 +626,47 @@ describe("tauri document port session, window geometry, and close requests", () 
       openPaths: [],
       activePath: null,
       workspacePath: null,
-      sidebar: { collapsed: "yes", tabsSectionCollapsed: 1 },
+      sidebar: { collapsed: "yes", tabsSectionCollapsed: 1, width: "wide" },
     });
     await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
       recent: [],
       openPaths: [],
       activePath: null,
       workspacePath: null,
-      sidebar: { collapsed: false, tabsSectionCollapsed: false, filesSectionCollapsed: false },
+      sidebar: { collapsed: false, tabsSectionCollapsed: false, filesSectionCollapsed: false, width: 260 },
+    });
+  });
+
+  it("clamps persisted sidebar width and defaults a missing one", async () => {
+    const base = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+    };
+    const sidebar = (width?: number) => ({
+      collapsed: false,
+      tabsSectionCollapsed: false,
+      filesSectionCollapsed: false,
+      ...(width !== undefined ? { width } : {}),
+    });
+
+    storeMocks.values.set("session", { ...base, sidebar: sidebar(40) });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      ...base,
+      sidebar: { ...sidebar(200) },
+    });
+
+    storeMocks.values.set("session", { ...base, sidebar: sidebar(9999) });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      ...base,
+      sidebar: { ...sidebar(480) },
+    });
+
+    storeMocks.values.set("session", { ...base, sidebar: sidebar() });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      ...base,
+      sidebar: { ...sidebar(260) },
     });
   });
 

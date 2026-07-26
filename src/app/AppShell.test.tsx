@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
@@ -716,6 +716,7 @@ describe("AppShell workspace drawer", () => {
             collapsed: true,
             tabsSectionCollapsed: true,
             filesSectionCollapsed: false,
+            width: 300,
           },
         },
       },
@@ -739,6 +740,7 @@ describe("AppShell workspace drawer", () => {
         collapsed: false,
         tabsSectionCollapsed: false,
         filesSectionCollapsed: false,
+        width: 300,
       }),
     );
 
@@ -746,6 +748,45 @@ describe("AppShell workspace drawer", () => {
     await waitFor(() =>
       expect(port.session?.sidebar?.collapsed).toBe(true),
     );
+  });
+
+  it("resizes the sidebar by dragging the separator and clamps to the bounds", async () => {
+    const user = userEvent.setup();
+    const port = workspacePort();
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    expect(sidebar).toHaveStyle({ width: "260px" });
+
+    const resizer = screen.getByRole("separator", { name: "调整侧栏宽度" });
+    fireEvent.pointerDown(resizer, { pointerId: 1, button: 0, clientX: 300 });
+    expect(document.body.classList.contains("sidebar-resizing")).toBe(true);
+
+    // Dragging right widens from the 260px start.
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 340 });
+    expect(sidebar).toHaveStyle({ width: "300px" });
+
+    // Out-of-range deltas clamp to [200, 480].
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 3000 });
+    expect(sidebar).toHaveStyle({ width: "480px" });
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: -500 });
+    expect(sidebar).toHaveStyle({ width: "200px" });
+
+    fireEvent.pointerUp(resizer, { pointerId: 1 });
+    expect(document.body.classList.contains("sidebar-resizing")).toBe(false);
+
+    // The final width is persisted through the session.
+    await waitFor(() => expect(port.session?.sidebar?.width).toBe(200));
+  });
+
+  it("hides the resize separator while the sidebar is collapsed", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    await screen.findByRole("separator", { name: "调整侧栏宽度" });
+
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(screen.queryByRole("separator", { name: "调整侧栏宽度" })).not.toBeInTheDocument();
   });
 
   it("keeps the restored whole-sidebar collapse when the session reopens a workspace", async () => {
@@ -763,6 +804,7 @@ describe("AppShell workspace drawer", () => {
             collapsed: true,
             tabsSectionCollapsed: false,
             filesSectionCollapsed: false,
+            width: 260,
           },
         },
       },

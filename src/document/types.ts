@@ -105,20 +105,30 @@ export interface RecentItem {
   readonly kind: "file" | "folder";
 }
 
+/** Drag-resize bounds for the sidebar, in pixels. */
+export const SIDEBAR_MIN_WIDTH = 200;
+export const SIDEBAR_MAX_WIDTH = 480;
+
+export const clampSidebarWidth = (width: number): number =>
+  Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+
 /**
- * Sidebar collapse preferences persisted with the session. All three default
- * to expanded/visible so sessions written by older versions load unchanged.
+ * Sidebar collapse and width preferences persisted with the session. Collapse
+ * flags default to expanded/visible so sessions written by older versions load
+ * unchanged; a missing or invalid width falls back to the default.
  */
 export interface SidebarPreferences {
   readonly collapsed: boolean;
   readonly tabsSectionCollapsed: boolean;
   readonly filesSectionCollapsed: boolean;
+  readonly width: number;
 }
 
 export const DEFAULT_SIDEBAR_PREFERENCES: SidebarPreferences = {
   collapsed: false,
   tabsSectionCollapsed: false,
   filesSectionCollapsed: false,
+  width: 260,
 };
 
 /** Repair data read from the persisted session; invalid fields get defaults. */
@@ -140,6 +150,10 @@ export const normalizeSidebarPreferences = (value: unknown): SidebarPreferences 
       typeof record.filesSectionCollapsed === "boolean"
         ? record.filesSectionCollapsed
         : DEFAULT_SIDEBAR_PREFERENCES.filesSectionCollapsed,
+    width:
+      typeof record.width === "number" && Number.isFinite(record.width)
+        ? clampSidebarWidth(record.width)
+        : DEFAULT_SIDEBAR_PREFERENCES.width,
   };
 };
 

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
-import type { RecentItem } from "../document/types";
+import { clampSidebarWidth, type RecentItem } from "../document/types";
 import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
 import { useAutomaticPerformanceMode } from "./usePerformanceMode";
@@ -58,6 +58,44 @@ export default function AppShell({
   const activeTabVisible =
     sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
   const [settingsRequested, setSettingsRequested] = useState(false);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const sidebarResizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  // Sidebar drag-resize: pointer capture keeps move/up events on the handle
+  // even when the pointer leaves it; width is clamped on every move.
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    sidebarResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: sidebar.width,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setSidebarResizing(true);
+  };
+  const moveSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = sidebarResizeRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    const width = clampSidebarWidth(drag.startWidth + (event.clientX - drag.startX));
+    setSidebar((current) => ({ ...current, width }));
+  };
+  const endSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = sidebarResizeRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    sidebarResizeRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setSidebarResizing(false);
+  };
+  // While dragging, force the resize cursor and block text selection
+  // anywhere under the pointer.
+  useEffect(() => {
+    if (!sidebarResizing) return;
+    document.body.classList.add("sidebar-resizing");
+    return () => document.body.classList.remove("sidebar-resizing");
+  }, [sidebarResizing]);
   const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
   const imageDropSequenceRef = useRef(0);
@@ -412,7 +450,13 @@ export default function AppShell({
 
       <section className="app-body">
         {sidebarAvailable && !sidebar.collapsed && (
-          <aside id="app-sidebar" aria-label="侧栏" className="sidebar">
+          <>
+          <aside
+            id="app-sidebar"
+            aria-label="侧栏"
+            className="sidebar"
+            style={{ width: sidebar.width }}
+          >
             {controller.state.tabs.length > 0 && (
               <section className="sidebar-section">
                 <button
@@ -470,6 +514,17 @@ export default function AppShell({
               </section>
             )}
           </aside>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整侧栏宽度"
+            className="sidebar-resizer"
+            onPointerDown={startSidebarResize}
+            onPointerMove={moveSidebarResize}
+            onPointerUp={endSidebarResize}
+            onPointerCancel={endSidebarResize}
+          />
+          </>
         )}
         <div
           role={active ? "tabpanel" : undefined}
