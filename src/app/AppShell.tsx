@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
-import { clampSidebarWidth, type RecentItem } from "../document/types";
+import {
+  clampSidebarWidth,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  type RecentItem,
+} from "../document/types";
 import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
 import { useAutomaticPerformanceMode } from "./usePerformanceMode";
@@ -59,10 +64,14 @@ export default function AppShell({
     sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
   const [settingsRequested, setSettingsRequested] = useState(false);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  // Live width while dragging; committed to sidebarPreferences (which
+  // persists the session) only on pointerup, not on every move.
+  const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const sidebarResizeRef = useRef<{
     pointerId: number;
     startX: number;
     startWidth: number;
+    lastWidth: number;
   } | null>(null);
   // Sidebar drag-resize: pointer capture keeps move/up events on the handle
   // even when the pointer leaves it; width is clamped on every move.
@@ -72,6 +81,7 @@ export default function AppShell({
       pointerId: event.pointerId,
       startX: event.clientX,
       startWidth: sidebar.width,
+      lastWidth: sidebar.width,
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setSidebarResizing(true);
@@ -80,7 +90,8 @@ export default function AppShell({
     const drag = sidebarResizeRef.current;
     if (drag === null || event.pointerId !== drag.pointerId) return;
     const width = clampSidebarWidth(drag.startWidth + (event.clientX - drag.startX));
-    setSidebar((current) => ({ ...current, width }));
+    drag.lastWidth = width;
+    setSidebarDragWidth(width);
   };
   const endSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = sidebarResizeRef.current;
@@ -88,6 +99,20 @@ export default function AppShell({
     sidebarResizeRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     setSidebarResizing(false);
+    setSidebarDragWidth(null);
+    if (drag.lastWidth !== sidebar.width) {
+      setSidebar((current) => ({ ...current, width: drag.lastWidth }));
+    }
+  };
+  const onSidebarResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = 16;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowRight" ? step : -step;
+    setSidebar((current) => ({
+      ...current,
+      width: clampSidebarWidth(current.width + delta),
+    }));
   };
   // While dragging, force the resize cursor and block text selection
   // anywhere under the pointer.
@@ -458,7 +483,7 @@ export default function AppShell({
             id="app-sidebar"
             aria-label="侧栏"
             className="sidebar"
-            style={{ width: sidebar.width }}
+            style={{ width: sidebarDragWidth ?? sidebar.width }}
           >
             {controller.state.tabs.length > 0 && (
               <section className="sidebar-section">
@@ -521,11 +546,16 @@ export default function AppShell({
             role="separator"
             aria-orientation="vertical"
             aria-label="调整侧栏宽度"
+            aria-valuenow={sidebar.width}
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            tabIndex={0}
             className="sidebar-resizer"
             onPointerDown={startSidebarResize}
             onPointerMove={moveSidebarResize}
             onPointerUp={endSidebarResize}
             onPointerCancel={endSidebarResize}
+            onKeyDown={onSidebarResizerKeyDown}
           />
           </>
         )}

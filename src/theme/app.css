@@ -343,6 +343,7 @@ select:hover {
   margin-left: -3px;
   margin-right: -3px;
   cursor: col-resize;
+  touch-action: none;
   position: relative;
   z-index: 1;
 }
