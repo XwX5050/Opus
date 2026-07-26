@@ -475,7 +475,13 @@ const refreshLivePreview = StateEffect.define<null>();
 export const hiddenFrontmatterDecorations = (state: EditorState): DecorationSet => {
   const node = syntaxTree(state).topNode.getChild(FrontMatter);
   if (!node) return Decoration.none;
-  const to = node.to < state.doc.length ? node.to + 1 : node.to;
+  // Swallow the line break after the closing delimiter (LF, or CRLF one
+  // unit at a time) so reading mode leaves no blank line behind.
+  let to = node.to;
+  if (to < state.doc.length) {
+    to += 1;
+    if (state.doc.sliceString(node.to, to) === "\r" && to < state.doc.length) to += 1;
+  }
   return Decoration.set([Decoration.replace({}).range(node.from, to)]);
 };
 

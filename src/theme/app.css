@@ -453,7 +453,7 @@ body.sidebar-resizing * {
 
 /* Both the unfocused (2-class) and focused (5-class) built-in CodeMirror
  * selection rules need higher-specificity overrides for the token to win. */
-.markdown-editor .cm-selectionBackground,
+.markdown-editor .cm-editor .cm-selectionBackground,
 .markdown-editor ::selection {
   background: var(--selection);
 }
