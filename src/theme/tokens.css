@@ -19,6 +19,7 @@
   --font-ui-size-small: 12px;
 
   /* Density: one spacing scale for the whole shell. */
+  --space-0-5: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -55,11 +56,9 @@
   --text-muted: #6f7079;
   --divider: rgba(255, 255, 255, 0.06);
   --accent: #7f6df2;
-  --accent-hover: #9d8ff7;
   --accent-soft: rgba(127, 109, 242, 0.16);
   --text-on-accent: #ffffff;
   --danger: #e5534b;
-  --danger-soft: rgba(229, 83, 75, 0.16);
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.35);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
   --backdrop: rgba(0, 0, 0, 0.5);
@@ -88,11 +87,9 @@
   --text-muted: #8a8c94;
   --divider: rgba(0, 0, 0, 0.08);
   --accent: #6c56d9;
-  --accent-hover: #5743c2;
   --accent-soft: rgba(108, 86, 217, 0.12);
   --text-on-accent: #ffffff;
   --danger: #cf3f38;
-  --danger-soft: rgba(207, 63, 56, 0.1);
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.1);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
   --backdrop: rgba(0, 0, 0, 0.3);

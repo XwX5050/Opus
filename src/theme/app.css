@@ -192,8 +192,8 @@ select:hover {
 .view-mode-switch {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
   background: var(--surface-inset);
   border: 1px solid var(--divider);
   border-radius: 999px;
@@ -204,7 +204,7 @@ select:hover {
   background: transparent;
   color: var(--text-secondary);
   border-radius: 999px;
-  padding: 2px var(--space-3);
+  padding: var(--space-0-5) var(--space-3);
   line-height: 1.5;
 }
 
@@ -247,7 +247,7 @@ select:hover {
 .tab-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   overflow-y: auto;
   min-height: 0;
 }
@@ -427,7 +427,7 @@ select:hover {
 }
 
 .markdown-editor .cm-line {
-  padding-inline: 2px;
+  padding-inline: var(--space-0-5);
 }
 
 .cm-selectionBackground,
@@ -581,7 +581,7 @@ select:hover {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   max-width: 70ch;
 }
 
@@ -665,7 +665,7 @@ select:hover {
   display: flex;
   gap: var(--space-1);
   align-items: center;
-  padding-block: 3px;
+  padding-block: var(--space-0-5);
   border-radius: var(--radius-medium);
   cursor: default;
   color: var(--text-secondary);

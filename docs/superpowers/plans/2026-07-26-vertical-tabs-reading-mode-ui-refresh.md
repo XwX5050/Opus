@@ -348,6 +348,8 @@ git add src/theme src/app docs/screenshots docs/testing.md
 git commit -m "feat: refresh visual system with Obsidian-inspired styling"
 ```
 
+> 实施记录（2026-07-26）：文件树缩进线放弃——文件树是扁平 `<ul>` + 行内 `paddingLeft`，纯 CSS 无法按深度绘制贯穿参考线，需嵌套结构或占位元素，违反「布局结构尽量不变」约束；行高/缩进/悬停已覆盖。后续树组件重写时再补。
+
 ---
 
 ## 最终验证

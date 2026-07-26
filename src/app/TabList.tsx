@@ -59,7 +59,13 @@ export default function TabList({ tabs, activeId, onActivate, onClose }: TabList
                 >
                   {" ●"}
                 </span>
-                <span className="visually-hidden"> 未保存</span>
+                <span className="visually-hidden">
+                  {tab.status === "conflict"
+                    ? " 冲突"
+                    : tab.status === "missing"
+                      ? " 文件缺失"
+                      : " 未保存"}
+                </span>
               </>
             )}
           </button>
