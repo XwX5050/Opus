@@ -247,6 +247,7 @@ select:hover {
   flex-direction: column;
   gap: var(--space-0-5);
   overflow-y: auto;
+  overscroll-behavior: contain;
   min-height: 0;
 }
 
@@ -332,6 +333,7 @@ select:hover {
   padding: var(--space-3);
   border-right: 1px solid var(--divider);
   background: var(--surface);
+  overscroll-behavior: contain;
 }
 
 .editor-area {
@@ -405,6 +407,7 @@ select:hover {
 .markdown-editor .cm-scroller {
   font-family: var(--editor-body-font);
   line-height: var(--editor-line-height);
+  overscroll-behavior: contain;
 }
 
 .markdown-editor .cm-line {
@@ -639,6 +642,7 @@ select:hover {
   margin: 0;
   padding: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   min-height: 0;
 }
 
