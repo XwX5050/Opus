@@ -193,8 +193,9 @@ select:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--space-5);
-  height: var(--space-5);
+  /* Component-intrinsic hit target: macOS/Obsidian toolbar density (~30px). */
+  width: 30px;
+  height: 30px;
   padding: 0;
   border-color: transparent;
   border-radius: var(--radius-medium);
