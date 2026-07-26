@@ -18,10 +18,22 @@ export type ImageDropSubscriber = (
   signal?: AbortSignal,
 ) => Promise<() => void>;
 
+export type MenuActionSubscriber = (
+  onAction: (action: string) => void,
+  signal?: AbortSignal,
+) => Promise<() => void>;
+
 export interface AppShellProps {
   port: DocumentPort;
   subscribeToEvents?: EventSubscriber | null;
   subscribeToImageDrops?: ImageDropSubscriber | null;
+  subscribeToMenuActions?: MenuActionSubscriber | null;
+  /**
+   * Renders the file-action text buttons (新建/打开文件/打开文件夹/另存为/设置)
+   * in the header. Browser shells have no native menu bar and keep them;
+   * production moves those actions into the macOS menu instead.
+   */
+  fileActionsInHeader?: boolean;
   externalError?: string | null;
   onDismissExternalError?: () => void;
 }
@@ -30,6 +42,8 @@ export default function AppShell({
   port,
   subscribeToEvents = null,
   subscribeToImageDrops = null,
+  subscribeToMenuActions = null,
+  fileActionsInHeader = true,
   externalError = null,
   onDismissExternalError,
 }: AppShellProps) {
@@ -159,6 +173,52 @@ export default function AppShell({
     }
     controller.close(id);
   };
+
+  // The menu subscription registers once per subscriber identity; routing
+  // through a ref keeps the handler in sync with the latest controller state
+  // without re-subscribing on every render.
+  const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
+  menuActionHandlerRef.current = (action: string) => {
+    switch (action) {
+      case "menu.new":
+        controller.newDocument();
+        break;
+      case "menu.open_files":
+        void controller.openFiles();
+        break;
+      case "menu.open_folder":
+        openWorkspaceFromUser();
+        break;
+      case "menu.save_as":
+        if (active) void controller.saveAs(active.id);
+        break;
+      case "menu.settings":
+        // Like the header button, remember the current focus so the dialog
+        // can restore it on close.
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+        setSettingsRequested(true);
+        break;
+      default:
+        break;
+    }
+  };
+
+  useEffect(() => {
+    if (!subscribeToMenuActions) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void subscribeToMenuActions((action) => {
+      if (disposed) return;
+      menuActionHandlerRef.current(action);
+    }).then((created) => {
+      if (disposed) created();
+      else unlisten = created;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [subscribeToMenuActions]);
 
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (anyDialogOpen) return;
@@ -313,10 +373,14 @@ export default function AppShell({
         <strong className="app-title">Markdown Edit</strong>
         {controller.state.tabs.length > 0 && (
           <>
-            <button type="button" onClick={controller.newDocument}>新建</button>
-            <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
-            <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
-            <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
+            {fileActionsInHeader && (
+              <>
+                <button type="button" onClick={controller.newDocument}>新建</button>
+                <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
+                <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
+                <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
+              </>
+            )}
             {active && (
               <button
                 type="button"
@@ -331,17 +395,19 @@ export default function AppShell({
             )}
           </>
         )}
-        <button
-          type="button"
-          onClick={(event) => {
-            // The dialog focuses its own first control before the shell's
-            // effect could capture this, so remember the invoker here.
-            previousFocusRef.current = event.currentTarget;
-            setSettingsRequested(true);
-          }}
-        >
-          设置
-        </button>
+        {fileActionsInHeader && (
+          <button
+            type="button"
+            onClick={(event) => {
+              // The dialog focuses its own first control before the shell's
+              // effect could capture this, so remember the invoker here.
+              previousFocusRef.current = event.currentTarget;
+              setSettingsRequested(true);
+            }}
+          >
+            设置
+          </button>
+        )}
       </header>
 
       <section className="app-body">

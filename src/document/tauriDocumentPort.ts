@@ -391,6 +391,26 @@ export async function subscribeToImageDrops(
   return unlisten;
 }
 
+/**
+ * Subscribes to native menu actions. The backend menu (src-tauri/src/menu.rs)
+ * forwards every custom `menu.*` item id as the string payload of a
+ * "menu-action" event; predefined items (undo, copy, about, …) are handled
+ * natively and never reach this listener.
+ */
+export async function subscribeToMenuActions(
+  onAction: (action: string) => void,
+  signal?: AbortSignal,
+): Promise<UnlistenFn> {
+  const unlisten = await listen<string>("menu-action", (event) => {
+    onAction(event.payload);
+  });
+  if (signal?.aborted) {
+    unlisten();
+    return () => {};
+  }
+  return unlisten;
+}
+
 export async function subscribeToOpenPaths(port: DocumentPort, onFiles: (files: ReadonlyArray<OpenedFile>) => void, onDirectory: (path: string) => void = () => {}, onError: DocumentPortErrorHandler = () => {}, signal?: AbortSignal): Promise<OpenPathSubscriptions> {
   let isReady = false;
   let disposed = false;

@@ -44,6 +44,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
     async dispose() {},
   }),
   subscribeToImageDrops: async () => () => {},
+  subscribeToMenuActions: async () => () => {},
   tauriImagePreviewUrl: (path: string) => path,
   restoreWindowGeometry: async () => () => {},
 }));

@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open, save: mocks.save
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: mocks.emit }));
 
 import { DocumentPortError } from "./DocumentPort";
-import { createTauriDocumentPort, restoreWindowGeometry, subscribeToImageDrops, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
+import { createTauriDocumentPort, restoreWindowGeometry, subscribeToImageDrops, subscribeToMenuActions, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
 
 describe("tauri document port", () => {
   beforeEach(() => vi.resetAllMocks());
@@ -362,6 +362,42 @@ describe("subscribeToImageDrops", () => {
     const controller = new AbortController();
 
     const subscribing = subscribeToImageDrops(vi.fn(), controller.signal);
+    controller.abort();
+    finishListening(unlisten);
+
+    const stop = await subscribing;
+    expect(unlisten).toHaveBeenCalledOnce();
+    stop();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+});
+
+describe("subscribeToMenuActions", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("delivers menu-action payloads and unlistens on stop", async () => {
+    let handler!: (event: { payload: string }) => void;
+    const unlisten = vi.fn();
+    mocks.listen.mockImplementation(async (_name, value) => { handler = value; return unlisten; });
+    const onAction = vi.fn();
+
+    const stop = await subscribeToMenuActions(onAction);
+
+    expect(mocks.listen).toHaveBeenCalledWith("menu-action", expect.any(Function));
+    handler({ payload: "menu.new" });
+    expect(onAction).toHaveBeenCalledWith("menu.new");
+    stop();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("unlistens without delivering when the signal aborts before registration finishes", async () => {
+    let finishListening!: (unlisten: () => void) => void;
+    const registered = new Promise<() => void>((resolve) => { finishListening = resolve; });
+    mocks.listen.mockReturnValue(registered);
+    const unlisten = vi.fn();
+    const controller = new AbortController();
+
+    const subscribing = subscribeToMenuActions(vi.fn(), controller.signal);
     controller.abort();
     finishListening(unlisten);
 

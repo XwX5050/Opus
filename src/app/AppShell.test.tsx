@@ -3,7 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
-import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
+import type { DirectoryEntry, DocumentPort, SavedFile, WorkspaceRoot } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
@@ -60,7 +60,7 @@ class InspectablePort implements DocumentPort {
   async acquireDocumentScope() {}
   async acquireWorkspaceScope() {}
   async releaseAssetScope() {}
-  async chooseWorkspace() { return null; }
+  async chooseWorkspace(): Promise<WorkspaceRoot | null> { return null; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
   async listDirectory() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
@@ -1087,6 +1087,108 @@ describe("AppShell conflict and save-failure dialogs", () => {
 
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
       expect(document.querySelector(".md-math")).not.toBeNull();
+    });
+  });
+
+  describe("native menu actions", () => {
+    const menuSubscriber = () => {
+      let handler!: (action: string) => void;
+      const subscribe = vi.fn(async (onAction: (action: string) => void) => {
+        handler = onAction;
+        return () => {};
+      });
+      return { subscribe, emit: (action: string) => act(() => handler(action)) };
+    };
+
+    it("creates a new document on menu.new", async () => {
+      const menu = menuSubscriber();
+      render(<AppShell port={new InspectablePort()} subscribeToMenuActions={menu.subscribe} />);
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      menu.emit("menu.new");
+
+      expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+    });
+
+    it("opens files on menu.open_files", async () => {
+      const menu = menuSubscriber();
+      render(
+        <AppShell
+          port={new InspectablePort([file("/notes/a.md")])}
+          subscribeToMenuActions={menu.subscribe}
+        />,
+      );
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      menu.emit("menu.open_files");
+
+      expect(await screen.findByRole("tab", { name: /a\.md/ })).toBeVisible();
+    });
+
+    it("opens a workspace and reveals the sidebar on menu.open_folder", async () => {
+      const menu = menuSubscriber();
+      const port = new InspectablePort();
+      port.chooseWorkspace = async () => ({ path: "/ws", title: "ws" });
+      render(<AppShell port={port} subscribeToMenuActions={menu.subscribe} />);
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      menu.emit("menu.open_folder");
+
+      expect(await screen.findByRole("complementary", { name: "侧栏" })).toBeVisible();
+    });
+
+    it("saves the active document as on menu.save_as and ignores it without an active tab", async () => {
+      const user = userEvent.setup();
+      const menu = menuSubscriber();
+      const port = new InspectablePort(
+        [file("/notes/original.md")],
+        { path: "/notes/copy.md", expectedVersion: null },
+      );
+      render(<AppShell port={port} subscribeToMenuActions={menu.subscribe} />);
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      // No active tab yet: the action is ignored.
+      menu.emit("menu.save_as");
+      expect(port.chosenTitles).toHaveLength(0);
+
+      await user.click(screen.getByRole("button", { name: "打开文件" }));
+      await screen.findByRole("tab", { name: /original\.md/ });
+      menu.emit("menu.save_as");
+
+      await waitFor(() => expect(port.writes).toHaveLength(1));
+      expect(port.chosenTitles).toEqual(["original.md"]);
+      expect(port.writes[0]).toMatchObject({ targetPath: "/notes/copy.md" });
+    });
+
+    it("opens the settings dialog on menu.settings", async () => {
+      const menu = menuSubscriber();
+      render(<AppShell port={new InspectablePort()} subscribeToMenuActions={menu.subscribe} />);
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      menu.emit("menu.settings");
+
+      expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
+    });
+
+    it("hides the header file actions when fileActionsInHeader is false", async () => {
+      const user = userEvent.setup();
+      render(
+        <AppShell
+          port={new InspectablePort([file("/notes/a.md")])}
+          fileActionsInHeader={false}
+        />,
+      );
+      // The empty-state buttons stay; open a file through one of them.
+      await user.click(screen.getByRole("button", { name: "打开文件" }));
+      await screen.findByRole("tab", { name: /a\.md/ });
+
+      expect(screen.queryByRole("button", { name: "新建" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "打开文件" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "打开文件夹" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+      // The sidebar toggle and view-mode icons remain in the header.
+      expect(screen.getByRole("button", { name: "编辑模式" })).toBeVisible();
     });
   });
 });

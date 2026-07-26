@@ -1,6 +1,7 @@
 pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
+pub mod menu;
 pub mod open_events;
 pub mod perf_mark;
 pub mod recovery;
@@ -40,6 +41,16 @@ pub fn run() {
             perf_mark::perf_mark_editor_editable
         ])
         .setup(move |app| {
+            app.set_menu(menu::build_menu(app.handle())?)?;
+            app.on_menu_event(move |app_handle, event| {
+                let id: &str = event.id().as_ref();
+                // Predefined items (about, undo, copy, …) also arrive here but
+                // are handled natively; only the custom `menu.*` ids are
+                // forwarded so the frontend never has to filter them out.
+                if id.starts_with("menu.") {
+                    let _ = app_handle.emit("menu-action", id);
+                }
+            });
             let initial = open_events::normalize_open_paths(std::env::args().skip(1));
             setup_queue
                 .lock()
