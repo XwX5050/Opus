@@ -217,6 +217,9 @@ export default function AppShell({
   // without re-subscribing on every render.
   const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
   menuActionHandlerRef.current = (action: string) => {
+    // Menu accelerators bypass the inert background, so gate them like the
+    // shell keyboard shortcuts: no file actions while a modal dialog is up.
+    if (anyDialogOpen) return;
     switch (action) {
       case "menu.new":
         controller.newDocument();
