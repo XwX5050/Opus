@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import { StateEffect, type EditorState, type Extension } from "@codemirror/state";
+import { StateEffect, StateField, type EditorState, type Extension } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -9,6 +9,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import { FrontMatter } from "./frontmatterExtension";
 
 export type PlannedDecorationKind =
   | "mark"
@@ -58,6 +59,7 @@ const structureNames = new Set([
   "Task",
   "FencedCode",
   "HorizontalRule",
+  "FrontMatter",
 ]);
 
 const isHeading = (name: string) =>
@@ -106,6 +108,8 @@ const classNameFor = (node: SyntaxNode): string | undefined => {
       return "cm-live-preview-quote";
     case "FencedCode":
       return "cm-live-preview-code-block";
+    case "FrontMatter":
+      return "cm-live-preview-frontmatter";
     default:
       return undefined;
   }
@@ -464,6 +468,30 @@ const decorationSetsFor = (
 
 const refreshLivePreview = StateEffect.define<null>();
 
+// Reading mode hides frontmatter entirely, like Obsidian's reading view.
+// A replace decoration that spans line breaks is forbidden in a view
+// plugin, so the hiding lives in a state field (same mechanism as code
+// folding). The trailing newline is swallowed too, leaving no blank line.
+export const hiddenFrontmatterDecorations = (state: EditorState): DecorationSet => {
+  const node = syntaxTree(state).topNode.getChild(FrontMatter);
+  if (!node) return Decoration.none;
+  const to = node.to < state.doc.length ? node.to + 1 : node.to;
+  return Decoration.set([Decoration.replace({}).range(node.from, to)]);
+};
+
+const hiddenFrontmatterField = StateField.define<DecorationSet>({
+  create: (state) => hiddenFrontmatterDecorations(state),
+  update: (value, transaction) =>
+    transaction.docChanged ||
+    syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
+      ? hiddenFrontmatterDecorations(transaction.state)
+      : value,
+  provide: (field) => [
+    EditorView.decorations.from(field),
+    EditorView.atomicRanges.from(field, (decorations) => () => decorations),
+  ],
+});
+
 class LivePreviewPlugin {
   decorations: DecorationSet;
   atomicRanges: DecorationSet;
@@ -560,6 +588,12 @@ const livePreviewTheme = EditorView.baseTheme({
   ".cm-live-preview-inline-code, .cm-live-preview-code-block": {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
+  // Frontmatter reads as metadata: code-like but muted and smaller.
+  ".cm-live-preview-frontmatter": {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "0.85em",
+    color: "var(--text-muted)",
+  },
   ".cm-live-preview-inline-code": {
     backgroundColor: "var(--surface)",
     borderRadius: "0.2em",
@@ -587,4 +621,5 @@ const livePreviewTheme = EditorView.baseTheme({
 export const livePreviewExtension = (options?: LivePreviewOptions): Extension => [
   livePreviewPlugin(options),
   livePreviewTheme,
+  ...(options?.revealSelection === false ? [hiddenFrontmatterField] : []),
 ];
