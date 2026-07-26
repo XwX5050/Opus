@@ -8,6 +8,7 @@ import { useAutomaticPerformanceMode } from "./usePerformanceMode";
 import RecoveryDialog from "../recovery/RecoveryDialog";
 import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
+import { BookOpenIcon, PanelLeftIcon, PencilLineIcon } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
 import { type EventSubscriber, useAppController } from "./useAppController";
@@ -170,11 +171,6 @@ export default function AppShell({
       return;
     }
     if (!active) return;
-    if (event.shiftKey && key === "e") {
-      event.preventDefault();
-      controller.toggleSource(active.id);
-      return;
-    }
     if (!event.shiftKey && key === "e") {
       event.preventDefault();
       controller.toggleReading(active.id);
@@ -299,6 +295,20 @@ export default function AppShell({
         className="app-background"
       >
       <header aria-label="应用标题栏" className="app-header">
+        {sidebarAvailable && (
+          <button
+            type="button"
+            className="icon-button sidebar-toggle"
+            aria-expanded={!sidebar.collapsed}
+            aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
+            title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
+            onClick={() =>
+              setSidebar((current) => ({ ...current, collapsed: !current.collapsed }))
+            }
+          >
+            <PanelLeftIcon />
+          </button>
+        )}
         <strong className="app-title">Markdown Edit</strong>
         {controller.state.tabs.length > 0 && (
           <>
@@ -307,28 +317,18 @@ export default function AppShell({
             <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
             <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
             {active && (
-              <div role="group" aria-label="视图模式" className="view-mode-switch">
-                {(["reading", "editing", "source"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={viewMode === mode}
-                    onClick={() => controller.setViewMode(active.id, mode)}
-                  >
-                    {{ reading: "阅读", editing: "编辑", source: "源码" }[mode]}
-                  </button>
-                ))}
-              </div>
+              <button
+                type="button"
+                className="icon-button view-mode-toggle"
+                aria-pressed={viewMode === "reading"}
+                aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                onClick={() => controller.toggleReading(active.id)}
+              >
+                {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+              </button>
             )}
           </>
-        )}
-        {sidebarAvailable && sidebar.collapsed && (
-          <button
-            type="button"
-            onClick={() => setSidebar((current) => ({ ...current, collapsed: false }))}
-          >
-            展开侧栏
-          </button>
         )}
         <button
           type="button"
@@ -346,14 +346,6 @@ export default function AppShell({
       <section className="app-body">
         {sidebarAvailable && !sidebar.collapsed && (
           <aside aria-label="侧栏" className="sidebar">
-            <div className="sidebar-actions">
-              <button
-                type="button"
-                onClick={() => setSidebar((current) => ({ ...current, collapsed: true }))}
-              >
-                收起侧栏
-              </button>
-            </div>
             {controller.state.tabs.length > 0 && (
               <section className="sidebar-section">
                 <button
@@ -452,7 +444,6 @@ export default function AppShell({
             onSave={() => void controller.save(active.id)}
             onReopenClosed={reopenClosed}
             onToggleReading={() => controller.toggleReading(active.id)}
-            onToggleSource={() => controller.toggleSource(active.id)}
             viewMode={viewMode}
             documentPath={active.path}
             saveClipboardImage={(input) => port.saveClipboardImage(input)}

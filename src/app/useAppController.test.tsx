@@ -1415,9 +1415,8 @@ describe("useAppController per-tab view modes", () => {
     expect(hook.result.current.viewModeOf(null)).toBe("editing");
 
     act(() => hook.result.current.setViewMode(a, "reading"));
-    act(() => hook.result.current.setViewMode(b, "source"));
     expect(hook.result.current.viewModeOf(a)).toBe("reading");
-    expect(hook.result.current.viewModeOf(b)).toBe("source");
+    expect(hook.result.current.viewModeOf(b)).toBe("editing");
   });
 
   it("prunes a closed tab's remembered mode", async () => {
@@ -1443,29 +1442,5 @@ describe("useAppController per-tab view modes", () => {
     expect(hook.result.current.viewModeOf(a)).toBe("reading");
     act(() => hook.result.current.toggleReading(a));
     expect(hook.result.current.viewModeOf(a)).toBe("editing");
-
-    // From source, reading is entered directly.
-    act(() => hook.result.current.setViewMode(a, "source"));
-    act(() => hook.result.current.toggleReading(a));
-    expect(hook.result.current.viewModeOf(a)).toBe("reading");
-  });
-
-  it("toggleSource switches to source and back to the last non-source mode", async () => {
-    const hook = renderHook(() => useAppController(twoFilePort()));
-    await act(() => hook.result.current.openFiles());
-    const [a, b] = hook.result.current.state.tabs.map((tab) => tab.id);
-
-    // editing → source → editing
-    act(() => hook.result.current.toggleSource(a));
-    expect(hook.result.current.viewModeOf(a)).toBe("source");
-    act(() => hook.result.current.toggleSource(a));
-    expect(hook.result.current.viewModeOf(a)).toBe("editing");
-
-    // reading → source → reading (the last non-source mode is remembered)
-    act(() => hook.result.current.setViewMode(b, "reading"));
-    act(() => hook.result.current.toggleSource(b));
-    expect(hook.result.current.viewModeOf(b)).toBe("source");
-    act(() => hook.result.current.toggleSource(b));
-    expect(hook.result.current.viewModeOf(b)).toBe("reading");
   });
 });

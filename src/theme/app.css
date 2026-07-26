@@ -188,34 +188,32 @@ select:hover {
   color: var(--accent);
 }
 
-/* Three-state view switch: a capsule holding the segments. */
-.view-mode-switch {
+/* Icon-only header controls: square ghost buttons, quiet until hovered. */
+.icon-button {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-0-5);
-  padding: var(--space-0-5);
-  background: var(--surface-inset);
-  border: 1px solid var(--divider);
-  border-radius: 999px;
-}
-
-.view-mode-switch button {
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  padding: 0;
   border-color: transparent;
+  border-radius: var(--radius-medium);
   background: transparent;
   color: var(--text-secondary);
-  border-radius: 999px;
-  padding: var(--space-0-5) var(--space-3);
-  line-height: 1.5;
 }
 
-.view-mode-switch button:hover:not(:disabled) {
-  background: transparent;
+.icon-button:hover:not(:disabled) {
+  background: var(--surface-hover);
   color: var(--text-primary);
 }
 
-.view-mode-switch button[aria-pressed="true"] {
-  background: var(--accent);
-  color: var(--text-on-accent);
+.icon-button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.icon-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* ---------- Sidebar sections + vertical tab list ---------- */
@@ -334,23 +332,6 @@ select:hover {
   padding: var(--space-3);
   border-right: 1px solid var(--divider);
   background: var(--surface);
-}
-
-.sidebar-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.sidebar-actions button {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--font-ui-size-small);
-}
-
-.sidebar-actions button:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--text-primary);
 }
 
 .editor-area {
@@ -807,9 +788,7 @@ select:hover {
 .app-header button,
 .sidebar-section-header,
 .sidebar-header button,
-.sidebar-actions button,
 .recent-list button,
-.view-mode-switch button,
 .perf-banner button {
   transition: background var(--transition-fast), color var(--transition-fast);
 }

@@ -31,7 +31,6 @@ export interface MarkdownEditorProps {
   onSave(): void;
   onReopenClosed(): void;
   onToggleReading(): void;
-  onToggleSource(): void;
   viewMode: EditorViewMode;
   documentPath: string | null;
   saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
@@ -52,7 +51,6 @@ export default function MarkdownEditor({
   onSave,
   onReopenClosed,
   onToggleReading,
-  onToggleSource,
   viewMode,
   documentPath,
   saveClipboardImage,
@@ -71,14 +69,12 @@ export default function MarkdownEditor({
     onSave,
     onReopenClosed,
     onToggleReading,
-    onToggleSource,
   });
   callbacksRef.current = {
     onChange,
     onSave,
     onReopenClosed,
     onToggleReading,
-    onToggleSource,
   };
   const imageSupportRef = useRef({ saveClipboardImage, resolveImageUrl });
   imageSupportRef.current = { saveClipboardImage, resolveImageUrl };
@@ -89,7 +85,6 @@ export default function MarkdownEditor({
   const lastSyncedValueRef = useRef(value);
 
   const previewExtensionsFor = (mode: EditorViewMode, perf: PerformanceMode) => {
-    if (mode === "source") return [];
     const readOnly =
       mode === "reading"
         ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
@@ -127,7 +122,6 @@ export default function MarkdownEditor({
               onSave: () => callbacksRef.current.onSave(),
               onReopenClosed: () => callbacksRef.current.onReopenClosed(),
               onToggleReading: () => callbacksRef.current.onToggleReading(),
-              onToggleSource: () => callbacksRef.current.onToggleSource(),
             },
             previewCompartmentRef.current.of(
               previewExtensionsFor(viewMode, performanceMode),

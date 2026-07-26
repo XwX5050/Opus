@@ -9,7 +9,7 @@ import { createE2ePort, isE2eMode } from "./e2e";
 
 const DEMO_MARKDOWN = `# Markdown Edit
 
-一个轻量的 macOS Markdown 编辑器,支持**实时预览**与源码模式。
+一个轻量的 macOS Markdown 编辑器,支持**实时预览**与阅读模式。
 
 ## 功能一览
 

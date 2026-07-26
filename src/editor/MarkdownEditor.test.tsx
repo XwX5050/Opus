@@ -11,8 +11,7 @@ const renderEditor = (overrides: Partial<React.ComponentProps<typeof MarkdownEdi
     onSave: vi.fn(),
     onReopenClosed: vi.fn(),
     onToggleReading: vi.fn(),
-    onToggleSource: vi.fn(),
-    viewMode: "source" as const,
+    viewMode: "editing" as const,
     documentPath: "/notes/a.md",
     saveClipboardImage: vi.fn(async () => null),
     resolveImageUrl: (path: string) => `asset://localhost${path}`,
@@ -70,25 +69,12 @@ describe("MarkdownEditor", () => {
     expect(props.onReopenClosed).toHaveBeenCalledOnce();
   });
 
-  it("runs the view-mode toggle callbacks from editor keymaps", async () => {
+  it("runs the view-mode toggle callback from the editor keymap", async () => {
     const user = userEvent.setup();
     const { props } = renderEditor();
     content().focus();
     await user.keyboard("{Control>}e{/Control}");
-    // CodeMirror resolves Mod-Shift-<letter> through event.keyCode, which
-    // user-event leaves at 0 in jsdom; dispatch what a real browser sends.
-    content().dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "E",
-        keyCode: 69,
-        ctrlKey: true,
-        shiftKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
     expect(props.onToggleReading).toHaveBeenCalledOnce();
-    expect(props.onToggleSource).toHaveBeenCalledOnce();
   });
 
   it("updates callback refs and controlled value without rebuilding or adding undo history", async () => {
@@ -117,14 +103,7 @@ describe("MarkdownEditor", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
-  it("starts without live preview in source mode", () => {
-    renderEditor({ value: "**world** rest", viewMode: "source" });
-    moveToEnd();
-    expect(content().textContent).toContain("**world**");
-    expect(document.querySelector(".cm-live-preview-strong")).toBeNull();
-  });
-
-  it("toggles live preview in the same view without changing selection or firing onChange", () => {
+  it("toggles between editing and reading in the same view without changing selection or firing onChange", () => {
     const onChange = vi.fn();
     const rendered = renderEditor({ value: "**world** rest", viewMode: "editing", onChange });
     moveToEnd();
@@ -134,17 +113,18 @@ describe("MarkdownEditor", () => {
     expect(content().textContent).not.toContain("**");
     expect(atomicRanges(view)).not.toHaveLength(0);
 
-    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="source" />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="reading" />);
     expect(rendered.container.querySelector(".cm-editor")).toBe(root);
     expect(editorView()).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
-    expect(content().textContent).toContain("**world**");
-    expect(atomicRanges(view)).toEqual([]);
+    expect(content()).toHaveAttribute("contenteditable", "false");
+    expect(content().textContent).not.toContain("**");
     expect(onChange).not.toHaveBeenCalled();
 
     rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="editing" />);
     expect(editorView()).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
+    expect(content()).toHaveAttribute("contenteditable", "true");
     expect(content().textContent).not.toContain("**");
     expect(atomicRanges(view)).not.toHaveLength(0);
     expect(onChange).not.toHaveBeenCalled();
@@ -157,7 +137,8 @@ describe("MarkdownEditor", () => {
     await user.keyboard("!");
     expect(editorView().state.doc.toString()).toBe("text!");
 
-    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="source" />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="reading" />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="editing" />);
     await user.keyboard("{Control>}z{/Control}");
     expect(editorView().state.doc.toString()).toBe("text");
   });
@@ -211,7 +192,7 @@ describe("MarkdownEditor", () => {
       expect(content().textContent).not.toContain("![img]");
     });
 
-    it("switches through all three modes in the same view and keeps undo history", async () => {
+    it("switches between both modes in the same view and keeps undo history", async () => {
       const user = userEvent.setup();
       const onChange = vi.fn();
       const rendered = renderEditor({ value: "**world** rest", viewMode: "editing", onChange });
@@ -227,23 +208,22 @@ describe("MarkdownEditor", () => {
       expect(content()).toHaveAttribute("contenteditable", "false");
       expect(content().textContent).not.toContain("**");
 
-      rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="source" />);
-      expect(editorView()).toBe(view);
-      expect(content()).toHaveAttribute("contenteditable", "true");
-      expect(content().textContent).toContain("**world**");
-      await user.keyboard("{Control>}z{/Control}");
-      expect(view.state.doc.toString()).toBe("**world** rest");
-      const changeCalls = onChange.mock.calls.length;
-
       rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="editing" />);
       expect(editorView()).toBe(view);
+      expect(content()).toHaveAttribute("contenteditable", "true");
       expect(content().textContent).not.toContain("**");
+      const changeCalls = onChange.mock.calls.length;
+      await user.keyboard("{Control>}z{/Control}");
+      expect(view.state.doc.toString()).toBe("**world** rest");
+
+      rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="reading" />);
+      expect(editorView()).toBe(view);
       // Mode switches reconfigure decorations only; they never emit changes.
-      expect(onChange.mock.calls.length).toBe(changeCalls);
+      expect(onChange.mock.calls.length).toBe(changeCalls + 1);
     });
   });
 
-  it("toggles math widgets and both Markdown/math atomic ranges in the same view", () => {
+  it("toggles math widgets and their atomic ranges in the same view", () => {
     const value = "$x$ and **bold** outside";
     const rendered = renderEditor({ value, viewMode: "editing" });
     moveToEnd();
@@ -254,14 +234,14 @@ describe("MarkdownEditor", () => {
     expect(atomicRanges(view)).toContainEqual({ from: 0, to: 3 });
     expect(atomicRanges(view)).toContainEqual({ from: 8, to: 10 });
 
-    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="source" />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} performanceMode="light" />);
     expect(editorView()).toBe(view);
     expect(rendered.container.querySelector(".cm-editor")).toBe(root);
     expect(document.querySelector(".md-math")).toBeNull();
     expect(content()).toHaveTextContent("$x$");
-    expect(atomicRanges(view)).toEqual([]);
+    expect(atomicRanges(view)).not.toContainEqual({ from: 0, to: 3 });
 
-    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="editing" />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} performanceMode="full" />);
     expect(editorView()).toBe(view);
     expect(document.querySelector(".md-math .katex")).not.toBeNull();
     expect(atomicRanges(view)).toContainEqual({ from: 0, to: 3 });
@@ -274,7 +254,7 @@ describe("MarkdownEditor", () => {
     content().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     expect(content()).toHaveTextContent("**world**");
 
-    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="source" />);
+    rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="reading" />);
     rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="editing" />);
     expect(content()).toHaveTextContent("**world**");
 

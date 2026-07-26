@@ -119,7 +119,7 @@ describe("AppShell", () => {
     expect(subscribeToImageDrops).toHaveBeenCalledOnce();
   });
 
-  it("defaults to editing and switches view modes through the segmented control in the same editor", async () => {
+  it("defaults to editing and toggles view modes through the header icon button in the same editor", async () => {
     const user = userEvent.setup();
     render(
       <AppShell
@@ -134,34 +134,28 @@ describe("AppShell", () => {
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     const root = view.dom;
     const selection = view.state.selection;
-    const switcher = screen.getByRole("group", { name: "视图模式" });
-    const readingButton = within(switcher).getByRole("button", { name: "阅读" });
-    const editingButton = within(switcher).getByRole("button", { name: "编辑" });
-    const sourceButton = within(switcher).getByRole("button", { name: "源码" });
+    const toggle = screen.getByRole("button", { name: "编辑模式" });
 
-    expect(editingButton).toHaveAttribute("aria-pressed", "true");
-    expect(readingButton).toHaveAttribute("aria-pressed", "false");
-    expect(sourceButton).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
     expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
     expect(editor()).not.toHaveTextContent("**");
 
-    await user.click(sourceButton);
-    expect(sourceButton).toHaveAttribute("aria-pressed", "true");
-    expect(editingButton).toHaveAttribute("aria-pressed", "false");
+    await user.click(toggle);
+    const readingToggle = screen.getByRole("button", { name: "阅读模式" });
+    expect(readingToggle).toHaveAttribute("aria-pressed", "true");
     expect(EditorView.findFromDOM(editor())).toBe(view);
     expect(view.state.selection.eq(selection)).toBe(true);
-    expect(root.querySelector(".cm-live-preview-strong")).toBeNull();
-    expect(root.querySelector(".cm-live-preview-horizontal-rule")).toBeNull();
-    expect(editor()).toHaveTextContent("**world**");
-    expect(editor()).toHaveTextContent("---");
-
-    await user.click(editingButton);
-    expect(editingButton).toHaveAttribute("aria-pressed", "true");
-    expect(EditorView.findFromDOM(editor())).toBe(view);
-    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(editor()).toHaveAttribute("contenteditable", "false");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
     expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
+
+    await user.click(readingToggle);
+    expect(screen.getByRole("button", { name: "编辑模式" })).toHaveAttribute("aria-pressed", "false");
+    expect(EditorView.findFromDOM(editor())).toBe(view);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(editor()).toHaveAttribute("contenteditable", "true");
+    expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
   });
 
   it("reading mode renders fully without revealing markers and rejects edits", async () => {
@@ -175,9 +169,7 @@ describe("AppShell", () => {
     const view = EditorView.findFromDOM(editor());
     if (!view) throw new Error("EditorView not found");
 
-    await user.click(
-      within(screen.getByRole("group", { name: "视图模式" })).getByRole("button", { name: "阅读" }),
-    );
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
     // Even with the cursor inside the strong node, markers stay hidden.
     view.dispatch({ selection: { anchor: 4 } });
     expect(editor()).toHaveAttribute("contenteditable", "false");
@@ -189,7 +181,7 @@ describe("AppShell", () => {
     expect(view.state.doc.toString()).toBe("**world** rest");
   });
 
-  it("toggles reading and source modes from the shell when focus is outside the editor", async () => {
+  it("toggles reading mode from the shell when focus is outside the editor", async () => {
     const user = userEvent.setup();
     render(
       <AppShell
@@ -197,26 +189,19 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
-    const switcher = screen.getByRole("group", { name: "视图模式" });
 
     screen.getByRole("main").focus();
     await user.keyboard("{Control>}e{/Control}");
     expect(
-      within(switcher).getByRole("button", { name: "阅读" }),
+      screen.getByRole("button", { name: "阅读模式" }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(editor()).toHaveAttribute("contenteditable", "false");
 
-    await user.keyboard("{Control>}{Shift>}e{/Shift}{/Control}");
+    await user.keyboard("{Control>}e{/Control}");
     expect(
-      within(switcher).getByRole("button", { name: "源码" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    expect(editor()).toHaveTextContent("**world**");
-
-    // Source toggles back to the last non-source mode (reading here).
-    await user.keyboard("{Control>}{Shift>}e{/Shift}{/Control}");
-    expect(
-      within(switcher).getByRole("button", { name: "阅读" }),
-    ).toHaveAttribute("aria-pressed", "true");
+      screen.getByRole("button", { name: "编辑模式" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(editor()).toHaveAttribute("contenteditable", "true");
   });
 
   it("remembers the view mode per tab", async () => {
@@ -232,23 +217,19 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
-    const switcher = screen.getByRole("group", { name: "视图模式" });
-    const pressedMode = () =>
-      within(switcher)
-        .getAllByRole("button")
-        .find((button) => button.getAttribute("aria-pressed") === "true")
-        ?.textContent;
+    const currentMode = () =>
+      screen.getByRole("button", { name: /^(阅读|编辑)模式$/ }).getAttribute("aria-label");
 
     // b.md is active; put it in reading mode.
     expect(screen.getByRole("tab", { name: /b\.md/ })).toHaveAttribute("aria-selected", "true");
-    await user.click(within(switcher).getByRole("button", { name: "阅读" }));
-    expect(pressedMode()).toBe("阅读");
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    expect(currentMode()).toBe("阅读模式");
 
     // a.md keeps its own default; switching back restores b.md's mode.
     await user.click(screen.getByRole("tab", { name: /a\.md/ }));
-    expect(pressedMode()).toBe("编辑");
+    expect(currentMode()).toBe("编辑模式");
     await user.click(screen.getByRole("tab", { name: /b\.md/ }));
-    expect(pressedMode()).toBe("阅读");
+    expect(currentMode()).toBe("阅读模式");
   });
 
   it("opens two files as tabs and focuses an equivalent path instead of duplicating it", async () => {
@@ -761,7 +742,7 @@ describe("AppShell workspace drawer", () => {
       }),
     );
 
-    await user.click(within(sidebar).getByRole("button", { name: "收起侧栏" }));
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
     await waitFor(() =>
       expect(port.session?.sidebar?.collapsed).toBe(true),
     );

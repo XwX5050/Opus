@@ -112,8 +112,6 @@ export function useAppController(
   // always returns to "editing".
   const [viewModes, setViewModes] =
     useState<ReadonlyMap<string, EditorViewMode>>(new Map());
-  // The mode toggleSource returns to (per tab); pruned alongside viewModes.
-  const lastNonSourceViewModes = useRef(new Map<string, "reading" | "editing">());
   const [recoveryDrafts, setRecoveryDrafts] =
     useState<ReadonlyArray<RecoveryDraftInfo> | null>(null);
   const workspacePathRef = useRef<string | null>(null);
@@ -278,24 +276,12 @@ export function useAppController(
   }, [viewModes]);
 
   const setViewMode = useCallback((id: string, mode: EditorViewMode) => {
-    if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
     setViewModes((current) => withViewMode(current, id, mode));
   }, []);
 
   const toggleReading = useCallback((id: string) => {
     const target =
       (viewModesRef.current.get(id) ?? "editing") === "reading" ? "editing" : "reading";
-    lastNonSourceViewModes.current.set(id, target);
-    setViewModes((current) => withViewMode(current, id, target));
-  }, []);
-
-  const toggleSource = useCallback((id: string) => {
-    const mode = viewModesRef.current.get(id) ?? "editing";
-    if (mode !== "source") lastNonSourceViewModes.current.set(id, mode);
-    const target =
-      mode === "source"
-        ? lastNonSourceViewModes.current.get(id) ?? "editing"
-        : "source";
     setViewModes((current) => withViewMode(current, id, target));
   }, []);
 
@@ -303,9 +289,6 @@ export function useAppController(
   const viewModeTabIdsKey = state.tabs.map((tab) => tab.id).join("\n");
   useEffect(() => {
     const open = new Set(state.tabs.map((tab) => tab.id));
-    for (const id of [...lastNonSourceViewModes.current.keys()]) {
-      if (!open.has(id)) lastNonSourceViewModes.current.delete(id);
-    }
     setViewModes((current) => {
       if ([...current.keys()].every((id) => open.has(id))) return current;
       const next = new Map(current);
@@ -998,7 +981,6 @@ export function useAppController(
     viewModeOf,
     setViewMode,
     toggleReading,
-    toggleSource,
     recoveryDrafts,
     newDocument,
     openFiles,

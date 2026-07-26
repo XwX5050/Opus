@@ -28,7 +28,6 @@ export interface EditorCommands {
   onSave(): void;
   onReopenClosed(): void;
   onToggleReading(): void;
-  onToggleSource(): void;
 }
 
 // Syntax colors resolve through the design-token cascade (see
@@ -82,17 +81,6 @@ export const editorExtensions = (
   livePreview,
   search({ top: true }),
   keymap.of([
-    // Both view-mode toggles live ahead of the other bindings. CodeMirror
-    // resolves shifted letters exactly (through the base-key fallback on
-    // event.keyCode), so the two never shadow each other regardless of order.
-    {
-      key: "Mod-Shift-e",
-      preventDefault: true,
-      run: () => {
-        commands.onToggleSource();
-        return true;
-      },
-    },
     {
       key: "Mod-e",
       preventDefault: true,
