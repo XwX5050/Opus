@@ -34,7 +34,7 @@
   /* Editor reading column; overridden per preference by useTheme. */
   --editor-content-width: 760px;
   --editor-body-size: 16px;
-  --editor-line-height: 1.6;
+  --editor-line-height: 1.5;
   --editor-body-font:
     -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
 

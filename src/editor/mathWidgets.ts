@@ -328,7 +328,8 @@ const mathWidgetsPlugin = (options?: MathWidgetsOptions) =>
 
 const mathWidgetsTheme = EditorView.baseTheme({
   ".md-math-inline": { display: "inline-block" },
-  ".md-math-block": { display: "block", padding: "0.25em 0" },
+  ".md-math-block": { display: "block", padding: "0.05em 0" },
+  ".md-math-block .katex-display": { margin: "0.25em 0" },
   ".md-math-error": {
     color: "var(--danger)",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
