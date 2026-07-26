@@ -2,6 +2,10 @@
  * Shell styles. Every value resolves through the tokens in tokens.css —
  * no hardcoded colors, radii or spacing live here. Dark/light switching is
  * driven entirely by `[data-theme]` on <html> (see useTheme).
+ *
+ * Visual language: Obsidian-inspired restraint — low-contrast dividers,
+ * quiet ghost controls that gain a surface on hover, and a single violet
+ * accent reserved for selection, focus and dirty state.
  */
 
 *,
@@ -40,14 +44,20 @@ select {
   border-radius: var(--radius-small);
 }
 
+input:focus-visible,
+select:focus-visible {
+  border-color: var(--accent);
+}
+
 button {
   border: 1px solid var(--divider);
-  border-radius: var(--radius-small);
+  border-radius: var(--radius-medium);
   background: var(--surface);
   color: var(--text-primary);
   padding: var(--space-1) var(--space-3);
   cursor: default;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 button:hover:not(:disabled) {
@@ -65,10 +75,16 @@ button:disabled {
 input,
 select {
   border: 1px solid var(--divider);
-  border-radius: var(--radius-small);
+  border-radius: var(--radius-medium);
   background: var(--canvas);
   color: var(--text-primary);
   padding: var(--space-1) var(--space-2);
+  transition: border-color var(--transition-fast);
+}
+
+input:hover,
+select:hover {
+  border-color: var(--text-muted);
 }
 
 .visually-hidden {
@@ -81,6 +97,33 @@ select {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---------- Scrollbars: thin, quiet until hovered ---------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-hover);
 }
 
 /* ---------- Shell layout ---------- */
@@ -100,8 +143,8 @@ select {
 .app-header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--divider);
   -webkit-app-region: drag;
 }
@@ -120,13 +163,15 @@ select {
   margin-right: auto;
   font-size: var(--font-ui-size);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
+/* Header controls are ghost buttons: quiet until hovered. */
 .app-header button {
   border-color: transparent;
   background: transparent;
   color: var(--text-secondary);
+  padding: var(--space-1) var(--space-2);
 }
 
 .app-header button:hover:not(:disabled) {
@@ -134,15 +179,43 @@ select {
   color: var(--text-primary);
 }
 
+.app-header button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
 .app-header button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
+/* Three-state view switch: a capsule holding the segments. */
 .view-mode-switch {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-inset);
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+}
+
+.view-mode-switch button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 2px var(--space-3);
+  line-height: 1.5;
+}
+
+.view-mode-switch button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.view-mode-switch button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
 /* ---------- Sidebar sections + vertical tab list ---------- */
@@ -158,9 +231,12 @@ select {
   background: transparent;
   border-color: transparent;
   color: var(--text-muted);
-  font-size: var(--font-ui-size);
+  font-size: var(--font-ui-size-small);
+  font-weight: 600;
+  letter-spacing: 0.02em;
   text-align: left;
   padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-medium);
 }
 
 .sidebar-section-header:hover {
@@ -171,7 +247,7 @@ select {
 .tab-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
   overflow-y: auto;
   min-height: 0;
 }
@@ -179,7 +255,7 @@ select {
 .tab-item {
   display: flex;
   align-items: stretch;
-  border-radius: var(--radius-small);
+  border-radius: var(--radius-medium);
 }
 
 .tab {
@@ -192,7 +268,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border-radius: var(--radius-small) 0 0 var(--radius-small);
+  border-radius: var(--radius-medium) 0 0 var(--radius-medium);
 }
 
 .tab-close {
@@ -201,23 +277,43 @@ select {
   background: transparent;
   color: var(--text-muted);
   padding: var(--space-1) var(--space-2);
-  border-radius: 0 var(--radius-small) var(--radius-small) 0;
+  border-radius: 0 var(--radius-medium) var(--radius-medium) 0;
+}
+
+.tab:hover:not([aria-selected="true"]) {
+  background: var(--surface-hover);
+}
+
+.tab:hover:not([aria-selected="true"]) + .tab-close {
+  background: var(--surface-hover);
+}
+
+.tab-close:hover:not(:disabled) {
+  color: var(--text-primary);
 }
 
 .tab[aria-selected="true"] {
-  background: var(--surface-hover);
-  border-color: var(--divider);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
 .tab[aria-selected="true"] + .tab-close {
-  background: var(--surface-hover);
-  border-color: var(--divider);
+  background: var(--surface-active);
   color: var(--text-secondary);
 }
 
+/* Status dots: dirty follows the accent, conflict the danger color, and a
+ * missing file fades back to muted. */
 .tab-dirty {
   color: var(--accent);
+}
+
+.tab-dirty-conflict {
+  color: var(--danger);
+}
+
+.tab-dirty-missing {
+  color: var(--text-muted);
 }
 
 /* ---------- Body: sidebar + reading column ---------- */
@@ -243,6 +339,18 @@ select {
 .sidebar-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.sidebar-actions button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+}
+
+.sidebar-actions button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .editor-area {
@@ -273,6 +381,16 @@ select {
 
 .perf-banner-text {
   flex: 1;
+}
+
+.perf-banner button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.perf-banner button:hover:not(:disabled) {
+  background: var(--surface-hover);
 }
 
 /* The central reading column: width comes from the persisted preference. */
@@ -360,6 +478,7 @@ select {
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.88em;
   background: var(--surface);
+  border: 1px solid var(--divider);
   border-radius: var(--radius-small);
   padding: 0.05em 0.25em;
 }
@@ -375,6 +494,8 @@ select {
 
 .cm-live-preview-quote {
   color: var(--text-secondary);
+  border-left: 2px solid var(--divider);
+  padding-left: var(--space-3);
 }
 
 .cm-live-preview-horizontal-rule {
@@ -450,6 +571,7 @@ select {
 .recent-title {
   font-size: var(--font-ui-size-small);
   font-weight: 600;
+  letter-spacing: 0.02em;
   margin: 0;
   color: var(--text-muted);
 }
@@ -459,7 +581,7 @@ select {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--space-1);
+  gap: 2px;
   max-width: 70ch;
 }
 
@@ -471,6 +593,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-radius: var(--radius-medium);
 }
 
 .recent-list button:hover {
@@ -496,10 +619,23 @@ select {
 .sidebar-title {
   margin-right: auto;
   font-size: var(--font-ui-size);
+  font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-header button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sidebar-header button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .sidebar-filter {
@@ -529,17 +665,37 @@ select {
   display: flex;
   gap: var(--space-1);
   align-items: center;
-  padding-block: 2px;
-  border-radius: var(--radius-small);
+  padding-block: 3px;
+  border-radius: var(--radius-medium);
   cursor: default;
+  color: var(--text-secondary);
 }
 
 .file-tree-row:hover {
   background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .file-tree-row[aria-selected="true"] {
   background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.file-tree-row span[aria-hidden="true"] {
+  color: var(--text-muted);
+}
+
+.file-tree-row button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+  padding: 0 var(--space-1);
+}
+
+.file-tree-row button:hover:not(:disabled) {
+  background: var(--surface-active);
+  color: var(--text-primary);
 }
 
 .file-tree-name {
@@ -565,7 +721,7 @@ select {
   color: var(--text-primary);
   border: 1px solid var(--divider);
   border-radius: var(--radius-large);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-dialog);
   padding: var(--space-4) var(--space-5);
   max-width: 480px;
   display: grid;
@@ -594,7 +750,7 @@ select {
   padding: var(--space-2);
   background: var(--canvas);
   border: 1px solid var(--divider);
-  border-radius: var(--radius-small);
+  border-radius: var(--radius-medium);
   max-height: 200px;
   overflow: auto;
   white-space: pre-wrap;
@@ -637,7 +793,7 @@ select {
   border: 1px solid var(--divider);
   border-left: 3px solid var(--danger);
   border-radius: var(--radius-medium);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-popover);
   padding: var(--space-2) var(--space-3);
   max-width: 70ch;
   z-index: 20;
@@ -648,7 +804,13 @@ select {
 .tab,
 .tab-close,
 .file-tree-row,
-.app-header button {
+.app-header button,
+.sidebar-section-header,
+.sidebar-header button,
+.sidebar-actions button,
+.recent-list button,
+.view-mode-switch button,
+.perf-banner button {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 

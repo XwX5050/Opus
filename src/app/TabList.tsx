@@ -53,7 +53,12 @@ export default function TabList({ tabs, activeId, onActivate, onClose }: TabList
             {tab.title}
             {tab.status !== "clean" && (
               <>
-                <span aria-hidden="true" className="tab-dirty"> ●</span>
+                <span
+                  aria-hidden="true"
+                  className={`tab-dirty${tab.status === "conflict" ? " tab-dirty-conflict" : ""}${tab.status === "missing" ? " tab-dirty-missing" : ""}`}
+                >
+                  {" ●"}
+                </span>
                 <span className="visually-hidden"> 未保存</span>
               </>
             )}

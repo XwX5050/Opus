@@ -1,11 +1,14 @@
 /**
- * Design tokens for the Baseline-inspired visual system.
+ * Design tokens for the Obsidian-inspired visual system.
  *
  * Everything visual resolves through these custom properties: components
  * never hardcode colors, radii or spacing. Dark is the default theme (the
  * persisted preference default), applied via `[data-theme]` on <html> by
  * useTheme; the editor-preference variables (`--editor-*`) are also set
  * there from the validated preferences.
+ *
+ * Palette: restrained, low-contrast surfaces with a single violet accent
+ * (Obsidian purple). Every themed token is defined for both dark and light.
  */
 :root {
   /* Typography */
@@ -22,8 +25,8 @@
   --space-4: 16px;
   --space-5: 24px;
 
-  /* Restrained rounded surfaces. */
-  --radius-small: 5px;
+  /* Three restrained radius steps. */
+  --radius-small: 4px;
   --radius-medium: 8px;
   --radius-large: 12px;
 
@@ -42,25 +45,32 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #1d1e23;
+  --canvas: #1e1f24;
   --surface: #26272e;
   --surface-hover: #2e3038;
   --surface-active: #35373f;
-  --text-primary: #e6e7eb;
-  --text-secondary: #a9abb4;
-  --text-muted: #787a85;
-  --divider: rgba(255, 255, 255, 0.08);
-  --accent: #7aa2f7;
-  --accent-soft: rgba(122, 162, 247, 0.16);
-  --danger: #e57373;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --backdrop: rgba(0, 0, 0, 0.4);
-  --focus-ring: rgba(122, 162, 247, 0.65);
-  --selection: rgba(122, 162, 247, 0.28);
+  --surface-inset: #1a1b20;
+  --text-primary: #e6e6ea;
+  --text-secondary: #a8aab3;
+  --text-muted: #6f7079;
+  --divider: rgba(255, 255, 255, 0.06);
+  --accent: #7f6df2;
+  --accent-hover: #9d8ff7;
+  --accent-soft: rgba(127, 109, 242, 0.16);
+  --text-on-accent: #ffffff;
+  --danger: #e5534b;
+  --danger-soft: rgba(229, 83, 75, 0.16);
+  --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --focus-ring: rgba(127, 109, 242, 0.4);
+  --selection: rgba(127, 109, 242, 0.3);
   --search-match: rgba(224, 175, 104, 0.35);
-  --syntax-keyword: #b49ef5;
+  --scrollbar: rgba(255, 255, 255, 0.1);
+  --scrollbar-hover: rgba(255, 255, 255, 0.22);
+  --syntax-keyword: #b3a1ff;
   --syntax-string: #a3d9a5;
-  --syntax-comment: #6f7280;
+  --syntax-comment: #6f7079;
   --syntax-number: #e0a06a;
   --syntax-type: #7dc4e4;
   --syntax-meta: #8b8d96;
@@ -68,25 +78,32 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --canvas: #f6f6f7;
-  --surface: #ffffff;
-  --surface-hover: #eeeef1;
-  --surface-active: #e4e4e9;
-  --text-primary: #2a2b31;
-  --text-secondary: #585a63;
-  --text-muted: #8b8d96;
-  --divider: rgba(0, 0, 0, 0.09);
-  --accent: #2f5fd0;
-  --accent-soft: rgba(47, 95, 208, 0.12);
-  --danger: #c23e3e;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
-  --backdrop: rgba(0, 0, 0, 0.25);
-  --focus-ring: rgba(47, 95, 208, 0.55);
-  --selection: rgba(47, 95, 208, 0.22);
+  --canvas: #ffffff;
+  --surface: #f5f5f7;
+  --surface-hover: #ececf0;
+  --surface-active: #e2e2e8;
+  --surface-inset: #ececf0;
+  --text-primary: #26262c;
+  --text-secondary: #55575f;
+  --text-muted: #8a8c94;
+  --divider: rgba(0, 0, 0, 0.08);
+  --accent: #6c56d9;
+  --accent-hover: #5743c2;
+  --accent-soft: rgba(108, 86, 217, 0.12);
+  --text-on-accent: #ffffff;
+  --danger: #cf3f38;
+  --danger-soft: rgba(207, 63, 56, 0.1);
+  --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.1);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
+  --backdrop: rgba(0, 0, 0, 0.3);
+  --focus-ring: rgba(108, 86, 217, 0.4);
+  --selection: rgba(108, 86, 217, 0.22);
   --search-match: rgba(230, 180, 80, 0.45);
-  --syntax-keyword: #6d28d9;
+  --scrollbar: rgba(0, 0, 0, 0.12);
+  --scrollbar-hover: rgba(0, 0, 0, 0.26);
+  --syntax-keyword: #6c56d9;
   --syntax-string: #2f7d32;
-  --syntax-comment: #8b8d96;
+  --syntax-comment: #8a8c94;
   --syntax-number: #b45309;
   --syntax-type: #0369a1;
   --syntax-meta: #6b6d76;

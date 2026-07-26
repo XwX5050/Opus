@@ -17,7 +17,7 @@ const DEMO_MARKDOWN = `# Markdown Edit
 - 文件夹侧栏与磁盘监听
 - 数学公式与图片预览
 
-> 设计遵循 Baseline 视觉系统:低对比边框、克制的圆角与细腻的过渡。
+> 设计遵循 Obsidian 风格的视觉系统:低对比边框、克制的圆角与紫色 accent。
 
 \`\`\`rust
 fn main() {

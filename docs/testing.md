@@ -127,7 +127,20 @@ build SHA, chip, and macOS version with the results.
 
 19. **Light / dark / system**: 设置 → theme. Light and Dark apply
     immediately and persist across relaunch; 跟随系统 tracks the macOS
-    appearance (toggle it in System Settings while the app runs).
+    appearance (toggle it in System Settings while the app runs). Then do a
+    visual pass in **both** themes against `docs/screenshots/`:
+    - **垂直标签侧栏**: tab rows have rounded corners; hover raises a
+      subtle surface, the active tab sits on a stronger surface; the status
+      dot is violet (accent) for dirty, red (danger) for conflict, and
+      muted for a missing file. Section headers (打开的标签 / 文件夹) are
+      small, muted, and highlight on hover; collapse/expand works.
+    - **三态视图控件**: 阅读/编辑/源码 renders as a capsule (inset
+      container, pill radius); the active segment has a solid accent fill
+      with white text, inactive segments only brighten on hover.
+    - **整体质感**: dividers are low-contrast; dialogs use the large radius
+      with a soft shadow over a dimmed backdrop; scrollbars are thin and
+      only darken on hover; keyboard focus shows the accent-tinted ring on
+      every interactive control.
 20. **Reduced motion**: enable System Settings → Accessibility → Display →
     Reduce Motion. Sidebar/dialog/state transitions lose nonessential
     animation; the app remains fully usable.
