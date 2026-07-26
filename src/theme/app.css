@@ -451,9 +451,18 @@ body.sidebar-resizing * {
   padding-inline: var(--space-0-5);
 }
 
-.cm-selectionBackground,
-.cm-editor.cm-focused .cm-selectionBackground,
+/* Both the unfocused (2-class) and focused (5-class) built-in CodeMirror
+ * selection rules need higher-specificity overrides for the token to win. */
+.markdown-editor .cm-selectionBackground,
 .markdown-editor ::selection {
+  background: var(--selection);
+}
+
+.markdown-editor
+  .cm-editor.cm-focused
+  > .cm-scroller
+  > .cm-selectionLayer
+  .cm-selectionBackground {
   background: var(--selection);
 }
 

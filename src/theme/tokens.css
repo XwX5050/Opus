@@ -63,7 +63,7 @@
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
   --backdrop: rgba(0, 0, 0, 0.5);
   --focus-ring: rgba(127, 109, 242, 0.4);
-  --selection: rgba(127, 109, 242, 0.3);
+  --selection: rgba(127, 109, 242, 0.18);
   --search-match: rgba(224, 175, 104, 0.35);
   --scrollbar: rgba(255, 255, 255, 0.1);
   --scrollbar-hover: rgba(255, 255, 255, 0.22);
@@ -94,7 +94,7 @@
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
   --backdrop: rgba(0, 0, 0, 0.3);
   --focus-ring: rgba(108, 86, 217, 0.4);
-  --selection: rgba(108, 86, 217, 0.22);
+  --selection: rgba(108, 86, 217, 0.15);
   --search-match: rgba(230, 180, 80, 0.45);
   --scrollbar: rgba(0, 0, 0, 0.12);
   --scrollbar-hover: rgba(0, 0, 0, 0.26);
