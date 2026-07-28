@@ -162,8 +162,11 @@ fn tauri_product_identity_is_opus_without_changing_the_bundle_identifier() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
     let text = std::fs::read_to_string(&path).unwrap();
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let window = &json["app"]["windows"][0];
 
     assert_eq!(json["productName"], "Opus");
-    assert_eq!(json["app"]["windows"][0]["title"], "Opus");
+    assert_eq!(window["title"], "Opus");
+    assert_eq!(window["trafficLightPosition"]["x"], 10);
+    assert_eq!(window["trafficLightPosition"]["y"], 16);
     assert_eq!(json["identifier"], "com.xiongweini.markdown-edit");
 }

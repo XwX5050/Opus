@@ -287,6 +287,26 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
+  it.each(["#", "##", "###", "####", "#####", "######"])(
+    "aligns rendered %s headings with paragraph text",
+    (marker) => {
+      const view = createView(`${marker} Heading\n\nParagraph`);
+      const lines = view.contentDOM.querySelectorAll<HTMLElement>(".cm-line");
+      expect(lines[0]?.textContent).toBe("Heading");
+      expect(lines[2]?.textContent).toBe("Paragraph");
+      view.destroy();
+    },
+  );
+
+  it("reveals the complete ATX heading prefix when the heading is selected", () => {
+    const view = createView("### Heading\n\nParagraph");
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(
+      view.contentDOM.querySelector<HTMLElement>(".cm-line")?.textContent,
+    ).toBe("### Heading");
+    view.destroy();
+  });
+
   it("renders a titled inline link as only its readable label", () => {
     const view = createView("[label](url \"title\") outside");
     expect(view.contentDOM.textContent).toBe("label outside");

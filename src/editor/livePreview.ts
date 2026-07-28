@@ -46,6 +46,20 @@ interface MarkerNode {
   name: string;
 }
 
+const markerRangeForPreview = (
+  state: EditorState,
+  owner: Structure,
+  node: MarkerNode,
+): MarkerNode => {
+  if (!owner.node.name.startsWith("ATXHeading") || node.name !== "HeaderMark") {
+    return node;
+  }
+  const line = state.doc.lineAt(node.to);
+  let to = node.to;
+  while (to < line.to && /[ \t]/.test(state.sliceDoc(to, to + 1))) to += 1;
+  return { ...node, to };
+};
+
 const structureNames = new Set([
   "Emphasis",
   "StrongEmphasis",
@@ -290,25 +304,30 @@ export const planLivePreview = (
 
   for (const { owner, node } of effectiveMarkerCandidates) {
     if (!revealed(owner)) {
-      const source = state.sliceDoc(node.from, node.to);
+      const previewNode = markerRangeForPreview(state, owner, node);
+      const source = state.sliceDoc(previewNode.from, previewNode.to);
       if (owner.node.name === "ListItem") {
         planned.push({
-          from: node.from,
-          to: node.to,
+          from: previewNode.from,
+          to: previewNode.to,
           kind: "list-marker",
           className: "cm-live-preview-list-marker",
           displayText: source === "-" || source === "+" || source === "*" ? "•" : source,
         });
       } else if (owner.node.name === "Task") {
         planned.push({
-          from: node.from,
-          to: node.to,
+          from: previewNode.from,
+          to: previewNode.to,
           kind: "task-checkbox",
           className: "cm-live-preview-task-checkbox",
           checked: source === "[x]" || source === "[X]",
         });
       } else {
-        planned.push({ from: node.from, to: node.to, kind: "replace" });
+        planned.push({
+          from: previewNode.from,
+          to: previewNode.to,
+          kind: "replace",
+        });
       }
     }
   }
