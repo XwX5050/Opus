@@ -1,14 +1,14 @@
 /**
  * Inline SVG icons (Lucide-style: 24 viewBox, 2px strokes, round caps).
- * Decorative-only: every icon is aria-hidden and sized to 18px; the
+ * Decorative-only: every icon is aria-hidden and sized to 20px; the
  * accessible name lives on the button wrapping it. Strokes follow
  * currentColor, so both themes come from the surrounding text color.
  */
 
 const iconProps = {
   xmlns: "http://www.w3.org/2000/svg",
-  width: 18,
-  height: 18,
+  width: 20,
+  height: 20,
   viewBox: "0 0 24 24",
   fill: "none",
   stroke: "currentColor",

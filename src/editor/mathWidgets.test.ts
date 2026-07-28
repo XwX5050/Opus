@@ -178,10 +178,16 @@ describe("mathWidgetsExtension", () => {
     const doc = "$$\na +\nb\n$$\n\noutside";
     const view = createView(doc);
     const widget = view.dom.querySelector(".md-math-block");
+    const continuationLines = view.dom.querySelectorAll(
+      ".cm-block-math-continuation",
+    );
 
     expect(widget).toHaveClass("md-math");
     expect(widget?.querySelector(".katex-display")).not.toBeNull();
     expect(view.contentDOM.textContent).not.toContain("$$");
+    expect(continuationLines).toHaveLength(3);
+    expect(getComputedStyle(continuationLines[0]).height).toBe("0px");
+    expect(getComputedStyle(continuationLines[0]).lineHeight).toBe("0");
     expect(atomicRanges(view)).toContainEqual({ from: 0, to: 11 });
   });
 

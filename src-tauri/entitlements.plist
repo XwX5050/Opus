@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Release entitlements for Markdown Edit (referenced from tauri.conf.json:
+  Release entitlements for Opus (referenced from tauri.conf.json:
   bundle.macOS.entitlements, applied with the Hardened Runtime).
 
   Deliberately empty: the first version ships WITHOUT the App Sandbox

@@ -135,10 +135,35 @@ fn capabilities_default_json_has_no_home_or_whole_filesystem_glob() {
 }
 
 #[test]
+fn capabilities_allow_titlebar_window_dragging() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/default.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let permissions = json["permissions"].as_array().unwrap();
+    assert!(
+        permissions
+            .iter()
+            .any(|permission| permission == "core:window:allow-start-dragging"),
+        "custom titlebar drag permission is missing"
+    );
+}
+
+#[test]
 fn tauri_conf_asset_protocol_scope_is_empty() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
     let text = std::fs::read_to_string(&path).unwrap();
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     let scope = &json["app"]["security"]["assetProtocol"]["scope"];
     assert_eq!(*scope, serde_json::json!([]));
+}
+
+#[test]
+fn tauri_product_identity_is_opus_without_changing_the_bundle_identifier() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+    assert_eq!(json["productName"], "Opus");
+    assert_eq!(json["app"]["windows"][0]["title"], "Opus");
+    assert_eq!(json["identifier"], "com.xiongweini.markdown-edit");
 }

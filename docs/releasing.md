@@ -1,6 +1,6 @@
 # Releasing
 
-How to build, sign, notarize, and verify a Markdown Edit release for macOS.
+How to build, sign, notarize, and verify an Opus release for macOS.
 Releases are Developer ID signed with the Hardened Runtime, notarized by
 Apple, and distributed as a DMG — **without the App Sandbox** (design spec
 §5.4; see `src-tauri/entitlements.plist`, which must stay free of
@@ -43,8 +43,13 @@ xcrun notarytool store-credentials "markdown-edit-notary" \
 #    Hardened Runtime + entitlements come from tauri.conf.json).
 npm run tauri build -- --bundles app,dmg
 
-APP="src-tauri/target/release/bundle/macos/Markdown Edit.app"
-DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
+APP="src-tauri/target/release/bundle/macos/Opus.app"
+DMG_CANDIDATES=(src-tauri/target/release/bundle/dmg/Opus_*.dmg)
+if [ "${#DMG_CANDIDATES[@]}" -ne 1 ] || [ ! -f "${DMG_CANDIDATES[0]}" ]; then
+  echo "Expected exactly one Opus DMG; remove stale Opus builds and retry." >&2
+  exit 1
+fi
+DMG="${DMG_CANDIDATES[0]}"
 
 # 2. Local signature check (also done by scripts/verify-macos-bundle.sh).
 codesign --verify --deep --strict --verbose=2 "$APP"
@@ -76,7 +81,7 @@ npm run check            # vitest + tsc/vite build + cargo test
 npm run test:e2e         # browser-shell E2E (headless Chromium)
 npm run perf             # performance budgets (quit running instances first)
 npm run tauri build -- --bundles app,dmg
-./scripts/verify-macos-bundle.sh "src-tauri/target/release/bundle/macos/Markdown Edit.app"
+./scripts/verify-macos-bundle.sh "src-tauri/target/release/bundle/macos/Opus.app"
 ```
 
 Expected: all automated tests and budgets PASS; the `.app` and `.dmg` exist;
@@ -93,5 +98,5 @@ indicates they must be present"). Re-sign ad-hoc before local verification:
 
 ```sh
 codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist \
-  "src-tauri/target/release/bundle/macos/Markdown Edit.app"
+  "src-tauri/target/release/bundle/macos/Opus.app"
 ```

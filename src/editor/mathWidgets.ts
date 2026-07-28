@@ -195,18 +195,25 @@ const decorationSetsFor = (
     }
 
     let segmentFrom = from;
-    let first = true;
+    let firstLine = true;
     while (segmentFrom < to) {
       const line = state.doc.lineAt(segmentFrom);
       const segmentTo = Math.min(line.to, to);
+      if (!firstLine) {
+        replacements.push(
+          Decoration.line({
+            attributes: { class: "cm-block-math-continuation" },
+          }).range(line.from),
+        );
+      }
       if (segmentTo > segmentFrom) {
         replacements.push(
           Decoration.replace({
-            widget: first ? new MathWidget(source, true) : undefined,
+            widget: firstLine ? new MathWidget(source, true) : undefined,
           }).range(segmentFrom, segmentTo),
         );
-        first = false;
       }
+      firstLine = false;
       if (segmentTo === to) break;
       segmentFrom = line.to + 1;
     }
@@ -330,6 +337,13 @@ const mathWidgetsTheme = EditorView.baseTheme({
   ".md-math-inline": { display: "inline-block" },
   ".md-math-block": { display: "block", padding: "0.05em 0" },
   ".md-math-block .katex-display": { margin: "0.25em 0" },
+  ".cm-block-math-continuation": {
+    height: "0",
+    minHeight: "0",
+    lineHeight: "0",
+    overflow: "hidden",
+    padding: "0 !important",
+  },
   ".md-math-error": {
     color: "var(--danger)",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",

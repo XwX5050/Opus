@@ -7,7 +7,7 @@ import { normalizeThemePreference } from "../theme/preferences";
 import { createApp } from "./createApp";
 import { createE2ePort, isE2eMode } from "./e2e";
 
-const DEMO_MARKDOWN = `# Markdown Edit
+const DEMO_MARKDOWN = `# Opus
 
 一个轻量的 macOS Markdown 编辑器,支持**实时预览**与阅读模式。
 

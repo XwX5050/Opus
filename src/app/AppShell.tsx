@@ -420,7 +420,11 @@ export default function AppShell({
         aria-hidden={anyDialogOpen ? true : undefined}
         className="app-background"
       >
-      <header aria-label="应用标题栏" className="app-header">
+      <header
+        aria-label="应用标题栏"
+        className="app-header"
+        data-tauri-drag-region
+      >
         {sidebarAvailable && (
           <button
             type="button"
@@ -436,7 +440,9 @@ export default function AppShell({
             <PanelLeftIcon />
           </button>
         )}
-        <strong className="app-title">Markdown Edit</strong>
+        <strong className="app-title" data-tauri-drag-region>
+          Opus
+        </strong>
         {controller.state.tabs.length > 0 && (
           <>
             {fileActionsInHeader && (
@@ -477,11 +483,18 @@ export default function AppShell({
       </header>
 
       <section className="app-body">
-        {sidebarAvailable && !sidebar.collapsed && (
+        {sidebarAvailable && (
           <>
+          <div
+            className="sidebar-rail"
+            data-collapsed={sidebar.collapsed}
+            style={{ width: sidebar.collapsed ? 0 : sidebarDragWidth ?? sidebar.width }}
+          >
           <aside
             id="app-sidebar"
             aria-label="侧栏"
+            aria-hidden={sidebar.collapsed ? true : undefined}
+            inert={sidebar.collapsed ? true : undefined}
             className="sidebar"
             style={{ width: sidebarDragWidth ?? sidebar.width }}
           >
@@ -542,6 +555,8 @@ export default function AppShell({
               </section>
             )}
           </aside>
+          </div>
+          {!sidebar.collapsed && (
           <div
             role="separator"
             aria-orientation="vertical"
@@ -557,6 +572,7 @@ export default function AppShell({
             onPointerCancel={endSidebarResize}
             onKeyDown={onSidebarResizerKeyDown}
           />
+          )}
           </>
         )}
         <div

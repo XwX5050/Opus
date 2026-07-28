@@ -490,7 +490,7 @@ describe("tauri document port disk watching and recovery drafts", () => {
   it("maps the full record from read_recovery_draft", async () => {
     invoke.mockResolvedValue({ draft_id: "document-1", original_path: null, title: "t", text: "body", has_utf8_bom: false, newline: "lf", saved_text_hash: "h", saved_version: null });
     const draft = await createTauriDocumentPort().readDraft("document-1");
-    expect(invoke).toHaveBeenCalledWith("read_recovery_draft", { draft_id: "document-1" });
+    expect(invoke).toHaveBeenCalledWith("read_recovery_draft", { draftId: "document-1" });
     expect(draft).toEqual({ draftId: "document-1", originalPath: null, title: "t", text: "body", hasUtf8Bom: false, newline: "lf", savedTextHash: "h", savedVersion: null });
   });
 
@@ -498,7 +498,7 @@ describe("tauri document port disk watching and recovery drafts", () => {
     invoke.mockResolvedValueOnce(undefined).mockRejectedValueOnce({ code: "not_found", message: "no recovery draft: x" });
     const port = createTauriDocumentPort();
     await port.discardDraft("document-1");
-    expect(invoke).toHaveBeenCalledWith("discard_recovery_draft", { draft_id: "document-1" });
+    expect(invoke).toHaveBeenCalledWith("discard_recovery_draft", { draftId: "document-1" });
     await expect(port.discardDraft("x")).rejects.toMatchObject({ code: "not_found" });
   });
 });

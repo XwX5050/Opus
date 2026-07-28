@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Verifies a packaged Markdown Edit macOS bundle without ever launching it.
+# Verifies a packaged Opus macOS bundle without ever launching it.
 #
-#   scripts/verify-macos-bundle.sh path/to/"Markdown Edit.app"
+#   scripts/verify-macos-bundle.sh path/to/Opus.app
 #
 # Checks:
 #   1. the path ends in .app and is a real bundle;

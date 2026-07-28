@@ -1,6 +1,6 @@
 # Testing
 
-How Markdown Edit is verified: automated gates, browser-shell E2E, the
+How Opus is verified: automated gates, browser-shell E2E, the
 performance benchmark, and the manual macOS acceptance checklist. Run every
 applicable section before a release; the release candidate gate is
 `docs/releasing.md` §Release candidate gate.
@@ -50,7 +50,7 @@ build SHA, chip, and macOS version with the results.
 ### Open paths
 
 1. **Finder 打开方式**: right-click a `.md` file in Finder → 打开方式 →
-   Markdown Edit. The file opens in a tab showing its content. Repeat with
+   Opus. The file opens in a tab showing its content. Repeat with
    the app already running: the file opens as a new tab in the same window.
 2. **File drag**: drag a `.md` file from Finder onto the window. It opens in
    a tab; content matches the original (no copy/import).

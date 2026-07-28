@@ -10,14 +10,14 @@ pub fn build_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<
     let settings = MenuItem::with_id(manager, "menu.settings", "设置…", true, Some("CmdOrCtrl+,"))?;
     let app_menu = Submenu::with_items(
         manager,
-        "Markdown Edit",
+        "Opus",
         true,
         &[
-            &PredefinedMenuItem::about(manager, Some("关于 Markdown Edit"), None)?,
+            &PredefinedMenuItem::about(manager, Some("关于 Opus"), None)?,
             &PredefinedMenuItem::separator(manager)?,
             &settings,
             &PredefinedMenuItem::separator(manager)?,
-            &PredefinedMenuItem::quit(manager, Some("退出 Markdown Edit"))?,
+            &PredefinedMenuItem::quit(manager, Some("退出 Opus"))?,
         ],
     )?;
 

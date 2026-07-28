@@ -256,10 +256,16 @@ test("opens the folder drawer and opens a file from the tree", async ({
   await expect(editorContent(page)).toContainText("笔记 A");
 
   // The drawer stays manually collapsible.
+  const sidebarRail = sidebar.locator("..");
   await page.getByRole("button", { name: "收起侧栏" }).click();
-  await expect(page.locator('aside[aria-label="侧栏"]')).toHaveCount(0);
+  await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  await expect(sidebar).toHaveAttribute("inert", "");
+  await expect(sidebarRail).toHaveAttribute("data-collapsed", "true");
+  await expect(sidebarRail).toHaveCSS("width", "0px");
   await page.getByRole("button", { name: "展开侧栏" }).click();
   await expect(page.locator('aside[aria-label="侧栏"]')).toBeVisible();
+  await expect(sidebarRail).toHaveAttribute("data-collapsed", "false");
+  await expect(sidebarRail).toHaveCSS("width", "260px");
 });
 
 test("surfaces an external conflict and keeps local edits", async ({

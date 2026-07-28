@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Markdown Edit",
+  "productName": "Opus",
   "version": "0.1.0",
   "identifier": "com.xiongweini.markdown-edit",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Markdown Edit",
+        "title": "Opus",
         "width": 1080,
         "height": 760,
         "minWidth": 680,

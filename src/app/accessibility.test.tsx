@@ -31,8 +31,16 @@ describe("accessibility: roles and names", () => {
     expect(within(empty).getByRole("button", { name: "新建" })).toBeVisible();
     expect(within(empty).getByRole("button", { name: "打开文件" })).toBeVisible();
     expect(within(empty).getByRole("button", { name: "打开文件夹" })).toBeVisible();
-    expect(screen.getByRole("banner", { name: "应用标题栏" })).toBeVisible();
+    const titlebar = screen.getByRole("banner", { name: "应用标题栏" });
+    expect(titlebar).toBeVisible();
+    expect(titlebar).toHaveAttribute("data-tauri-drag-region");
+    expect(within(titlebar).getByText("Opus")).toHaveAttribute(
+      "data-tauri-drag-region",
+    );
     expect(screen.getByRole("button", { name: "设置" })).toBeVisible();
+    for (const button of within(titlebar).getAllByRole("button")) {
+      expect(button).not.toHaveAttribute("data-tauri-drag-region");
+    }
   });
 
   it("exposes tabs with names, selection state and a labelled panel", async () => {
@@ -136,6 +144,13 @@ describe("accessibility: roles and names", () => {
     expect(panel?.querySelector('input[name="search"]')).toHaveAccessibleName();
     expect(panel?.querySelector('input[name="replace"]')).toHaveAccessibleName();
     expect(document.activeElement).toBe(panel?.querySelector('input[name="search"]'));
+  });
+});
+
+describe("product identity", () => {
+  it("uses Opus as the browser document title", () => {
+    const html = readFileSync("index.html", "utf8");
+    expect(html).toMatch(/<title>Opus<\/title>/);
   });
 });
 
@@ -251,5 +266,47 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(tokensCss).toContain('[data-theme="light"]');
     // The dialog backdrop is themed too (used by .dialog-overlay).
     expect(tokensCss).toMatch(/--backdrop:/);
+  });
+
+  it("keeps the titlebar fixed while the body and sidebar fill the viewport", () => {
+    expect(appCss).toMatch(
+      /\.app-shell\s*\{[^}]*height:\s*100vh;[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/s,
+    );
+    expect(appCss).toMatch(/\.app-body\s*\{[^}]*overflow:\s*hidden;/s);
+    expect(appCss).toMatch(/\.sidebar\s*\{[^}]*height:\s*100%;/s);
+    expect(appCss).toMatch(/\.sidebar\s*\{[^}]*overflow-y:\s*auto;/s);
+  });
+
+  it("uses larger titlebar icon controls", () => {
+    expect(appCss).toMatch(
+      /\.icon-button\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;/s,
+    );
+  });
+
+  it("animates the sidebar rail and honors reduced-motion preferences", () => {
+    expect(tokensCss).toMatch(
+      /--transition-sidebar:\s*160ms cubic-bezier\(0\.2,\s*0,\s*0,\s*1\);/,
+    );
+    expect(appCss).toMatch(
+      /\.sidebar-rail\s*\{[^}]*transition:\s*width var\(--transition-sidebar\),\s*opacity var\(--transition-fast\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.sidebar-rail\[data-collapsed="true"\]\s*\{[^}]*opacity:\s*0;/s,
+    );
+  });
+
+  it("hides a collapsed sidebar from focus on WebViews without inert support", () => {
+    expect(appCss).toMatch(
+      /\.sidebar-rail\[data-collapsed="true"\]\s*\{[^}]*visibility:\s*hidden;/s,
+    );
+  });
+
+  it("uses the text-selection color to highlight reading mode", () => {
+    expect(appCss).toMatch(
+      /\.app-header \.view-mode-toggle\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.app-header \.view-mode-toggle\[aria-pressed="true"\]:hover,\s*\.app-header \.view-mode-toggle\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
+    );
   });
 });

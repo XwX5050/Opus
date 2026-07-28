@@ -11,6 +11,7 @@
     "core:event:allow-emit",
     "core:window:allow-set-size",
     "core:window:allow-set-position",
+    "core:window:allow-start-dragging",
     "core:window:allow-inner-size",
     "core:window:allow-outer-position",
     "core:window:allow-available-monitors",

@@ -135,8 +135,13 @@ describe("AppShell", () => {
     const root = view.dom;
     const selection = view.state.selection;
     const toggle = screen.getByRole("button", { name: "编辑模式" });
+    const sidebarToggle = screen.getByRole("button", { name: "收起侧栏" });
 
     expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle.querySelector("svg")).toHaveAttribute("width", "20");
+    expect(toggle.querySelector("svg")).toHaveAttribute("height", "20");
+    expect(sidebarToggle.querySelector("svg")).toHaveAttribute("width", "20");
+    expect(sidebarToggle.querySelector("svg")).toHaveAttribute("height", "20");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
     expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
     expect(editor()).not.toHaveTextContent("**");
@@ -685,6 +690,25 @@ describe("AppShell workspace drawer", () => {
     expect(
       await screen.findByRole("complementary", { name: "侧栏" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the sidebar mounted in an animated rail while it is collapsed", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={workspacePort()} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    const rail = sidebar.parentElement;
+
+    expect(rail).toHaveClass("sidebar-rail");
+    expect(rail).toHaveAttribute("data-collapsed", "false");
+    expect(rail).toHaveStyle({ width: "260px" });
+
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(document.getElementById("app-sidebar")).toBe(sidebar);
+    expect(sidebar).toHaveAttribute("aria-hidden", "true");
+    expect(sidebar).toHaveAttribute("inert");
+    expect(rail).toHaveAttribute("data-collapsed", "true");
+    expect(rail).toHaveStyle({ width: "0px" });
   });
 
   it("closes the workspace from the sidebar and hides the drawer", async () => {

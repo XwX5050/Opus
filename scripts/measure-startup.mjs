@@ -47,7 +47,7 @@ const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_BUNDLE = path.join(
   ROOT,
-  "src-tauri/target/release/bundle/macos/Markdown Edit.app",
+  "src-tauri/target/release/bundle/macos/Opus.app",
 );
 export const SAMPLES_FILE = path.join(ROOT, "tests/perf/startup-samples.json");
 const DEFAULT_FIXTURE = path.join(ROOT, "tests/perf/generated/regular-1mb.md");
@@ -206,7 +206,7 @@ export const assertNoLiveInstance = async (binaryPath, bundleId, { force = false
   if (pids.length === 0) return;
   if (!force) {
     throw new InstanceRunningError(
-      `Markdown Edit is already running (pids: ${pids.join(", ")}). ` +
+      `Opus is already running (pids: ${pids.join(", ")}). ` +
         "Quit it first — the harness never force-kills a live instance — " +
         "or pass --force to close it gracefully via a normal quit.",
     );

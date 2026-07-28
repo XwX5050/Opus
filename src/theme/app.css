@@ -130,8 +130,10 @@ select:hover {
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto auto 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .app-background {
@@ -146,6 +148,9 @@ select:hover {
   gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--divider);
+  position: relative;
+  z-index: 2;
+  user-select: none;
   -webkit-app-region: drag;
 }
 
@@ -193,9 +198,9 @@ select:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* Component-intrinsic hit target: macOS/Obsidian toolbar density (~30px). */
-  width: 30px;
-  height: 30px;
+  /* A full 36px target keeps the custom titlebar controls easy to hit. */
+  width: 36px;
+  height: 36px;
   padding: 0;
   border-color: transparent;
   border-radius: var(--radius-medium);
@@ -215,6 +220,16 @@ select:hover {
 .icon-button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.app-header .view-mode-toggle[aria-pressed="true"] {
+  background: var(--selection);
+  color: var(--accent);
+}
+
+.app-header .view-mode-toggle[aria-pressed="true"]:hover,
+.app-header .view-mode-toggle[aria-pressed="true"]:active {
+  background: var(--selection);
 }
 
 /* ---------- Sidebar sections + vertical tab list ---------- */
@@ -321,11 +336,27 @@ select:hover {
 .app-body {
   min-height: 0;
   display: flex;
+  overflow: hidden;
+}
+
+.sidebar-rail {
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+  opacity: 1;
+  transition: width var(--transition-sidebar), opacity var(--transition-fast);
+}
+
+.sidebar-rail[data-collapsed="true"] {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .sidebar {
   /* Width comes from inline style (draggable, clamped 200–480px). */
   flex-shrink: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -333,6 +364,7 @@ select:hover {
   padding: var(--space-3);
   border-right: 1px solid var(--divider);
   background: var(--surface);
+  overflow-y: auto;
   overscroll-behavior: contain;
 }
 
@@ -367,6 +399,10 @@ body.sidebar-resizing .sidebar-resizer::after {
 body.sidebar-resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+body.sidebar-resizing .sidebar-rail {
+  transition: none;
 }
 
 body.sidebar-resizing * {

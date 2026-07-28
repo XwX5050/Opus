@@ -307,7 +307,7 @@ const BUNDLE_PATH = DEFAULT_BUNDLE;
 const measureProcessMetrics = async (metrics) => {
   if (!existsSync(BUNDLE_PATH)) {
     const instructions =
-      "Run `npm run tauri build` to produce src-tauri/target/release/bundle/macos/Markdown Edit.app, then re-run `npm run perf` (hot start) and collect cold/Gatekeeper samples with scripts/measure-startup.mjs — see docs/performance.md.";
+      "Run `npm run tauri build` to produce src-tauri/target/release/bundle/macos/Opus.app, then re-run `npm run perf` (hot start) and collect cold/Gatekeeper samples with scripts/measure-startup.mjs — see docs/performance.md.";
     for (const name of ["hot_start_ms", "cold_start_ms", "gatekeeper_first_launch_ms"]) {
       metrics[name] = { status: "skipped", reason: "no_bundle", instructions, samples: [] };
     }
@@ -329,7 +329,7 @@ const measureProcessMetrics = async (metrics) => {
       status: "skipped",
       reason: instanceRunning ? "instance_running" : "not_instrumented",
       instructions: instanceRunning
-        ? "Markdown Edit is already running — quit it first (the harness never force-kills a live instance), or re-run with PERF_FORCE=1 to close it via a normal graceful quit."
+        ? "Opus is already running — quit it first (the harness never force-kills a live instance), or re-run with PERF_FORCE=1 to close it via a normal graceful quit."
         : "The bundle predates the MARKDOWN_EDIT_PERF_MARK instrumentation. Rebuild with `npm run tauri build`, then re-run `npm run perf`.",
       error: error instanceof Error ? error.message : String(error),
       samples: [],

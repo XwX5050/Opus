@@ -299,7 +299,7 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       try { return (await invoke<DraftInfoDto[]>("list_recovery_drafts")).map(draftInfo); } catch (error) { throw failure(error); }
     },
     async readDraft(draftId: string): Promise<RecoveryDraft> {
-      try { return draft(await invoke<DraftDto>("read_recovery_draft", { draft_id: draftId })); } catch (error) { throw failure(error); }
+      try { return draft(await invoke<DraftDto>("read_recovery_draft", { draftId })); } catch (error) { throw failure(error); }
     },
     async writeDraft(record: RecoveryDraft): Promise<RecoveryDraftInfo> {
       try {
@@ -318,7 +318,7 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       } catch (error) { throw failure(error); }
     },
     async discardDraft(draftId: string): Promise<void> {
-      try { await invoke("discard_recovery_draft", { draft_id: draftId }); } catch (error) { throw failure(error); }
+      try { await invoke("discard_recovery_draft", { draftId }); } catch (error) { throw failure(error); }
     },
     async loadSession(): Promise<PersistedSession | null> {
       try {
