@@ -23,7 +23,7 @@ Extend `tauri_product_identity_is_opus_without_changing_the_bundle_identifier`:
 ```rust
 let window = &json["app"]["windows"][0];
 assert_eq!(window["trafficLightPosition"]["x"], 10);
-assert_eq!(window["trafficLightPosition"]["y"], 16);
+assert_eq!(window["trafficLightPosition"]["y"], 24);
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -41,7 +41,7 @@ Expected: FAIL because `trafficLightPosition` is absent.
 Add beside `titleBarStyle`:
 
 ```json
-"trafficLightPosition": { "x": 10, "y": 16 },
+"trafficLightPosition": { "x": 10, "y": 24 },
 ```
 
 - [ ] **Step 4: Run the test and verify GREEN**

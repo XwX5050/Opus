@@ -12,7 +12,7 @@ Live preview replaces only Lezer’s `HeaderMark` range. The required whitespace
 
 ## Design
 
-Set `trafficLightPosition` to `{ "x": 10, "y": 16 }` in the Tauri window configuration. This preserves the existing horizontal inset and places the native controls on the custom titlebar’s vertical center without changing header height or moving web content.
+Set `trafficLightPosition` to `{ "x": 10, "y": 24 }` in the Tauri window configuration. A Retina screenshot showed the controls about 8 logical pixels above the custom 44px titlebar’s center; the corrected inset preserves the existing horizontal position while balancing the space above and below the native controls. Header height and web content remain unchanged.
 
 When live preview hides an ATX `HeaderMark`, extend the replacement range through adjacent spaces or tabs on the same line. Do not cross the line ending, do not alter Setext headings, and do not modify the document. When a heading is selected in editing mode, the existing reveal behavior continues to show the complete source prefix.
 

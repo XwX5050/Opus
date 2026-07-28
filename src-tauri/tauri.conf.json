@@ -20,7 +20,7 @@
         "resizable": true,
         "fullscreen": false,
         "titleBarStyle": "Overlay",
-        "trafficLightPosition": { "x": 10, "y": 16 },
+        "trafficLightPosition": { "x": 10, "y": 24 },
         "hiddenTitle": true
       }
     ],
