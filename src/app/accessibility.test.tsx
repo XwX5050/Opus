@@ -308,6 +308,9 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(appCss).toMatch(
       /\.app-shell\s*\{[^}]*height:\s*100vh;[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/s,
     );
+    expect(appCss).toMatch(
+      /\.app-header\s*\{[^}]*min-height:\s*44px;/s,
+    );
     expect(appCss).toMatch(/\.app-body\s*\{[^}]*overflow:\s*hidden;/s);
     expect(appCss).toMatch(/\.sidebar\s*\{[^}]*height:\s*100%;/s);
     expect(appCss).toMatch(/\.sidebar\s*\{[^}]*overflow-y:\s*auto;/s);
