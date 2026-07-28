@@ -280,6 +280,30 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
+  it("styles blockquote lines as continuous surface cards", () => {
+    expect(appCss).toMatch(
+      /\.cm-live-preview-quote\s*\{[^}]*color:\s*var\(--text-primary\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line\s*\{[^}]*background:\s*var\(--surface\);[^}]*border-left:\s*2px solid var\(--text-muted\);[^}]*padding-inline:\s*var\(--space-5\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-single\s*\{[^}]*border-radius:\s*var\(--radius-medium\);[^}]*padding-block:\s*var\(--space-3\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-first\s*\{[^}]*border-radius:[^;}]*0 0;[^}]*padding-top:\s*var\(--space-3\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-last\s*\{[^}]*border-radius:\s*0 0[^;}]*;[^}]*padding-bottom:\s*var\(--space-3\);/s,
+    );
+  });
+
+  it("keeps inline code inside a highlight on the highlight background", () => {
+    expect(appCss).toMatch(
+      /\.cm-live-preview-highlight \.cm-live-preview-inline-code,\s*\.cm-live-preview-inline-code\.cm-live-preview-highlight\s*\{[^}]*background:\s*var\(--highlight\);[^}]*border-color:\s*var\(--divider\);/s,
+    );
+  });
+
   it("keeps the titlebar fixed while the body and sidebar fill the viewport", () => {
     expect(appCss).toMatch(
       /\.app-shell\s*\{[^}]*height:\s*100vh;[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/s,

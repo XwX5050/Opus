@@ -12,7 +12,7 @@ Reading mode remains read-only and always hides `>`, `==`, and backticks. No Mar
 
 ## Visual Design
 
-Render blockquotes as full-width line-level cards using existing surface, divider, spacing, and radius tokens. A single-line quote has all corners rounded. Multi-line quotes use first, middle, and last line classes so the background and left rail form one continuous card.
+Render blockquotes as full-width line-level cards using the existing surface, muted-text rail, spacing, and radius tokens. A single-line quote has all corners rounded. Multi-line quotes use first, middle, and last line classes so the background and left rail form one continuous card.
 
 Highlighted inline code keeps its monospace font, border, and small radius, but uses the highlight background instead of the normal dark code background. The pin or other unhighlighted prefix remains outside the yellow area.
 

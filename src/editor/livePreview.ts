@@ -14,6 +14,7 @@ import { Highlight, HighlightMark } from "./highlightExtension";
 
 export type PlannedDecorationKind =
   | "mark"
+  | "line"
   | "replace"
   | "horizontal-rule"
   | "list-marker"
@@ -203,6 +204,50 @@ const normalizeRanges = (
   return merged;
 };
 
+const quoteLinePlans = (
+  state: EditorState,
+  structure: Structure,
+  requestedRanges: readonly LivePreviewRange[],
+): PlannedDecoration[] => {
+  const blockFirst = state.doc.lineAt(structure.node.from);
+  const blockLast = state.doc.lineAt(
+    Math.max(structure.node.from, structure.node.to - 1),
+  );
+  const plans: PlannedDecoration[] = [];
+  for (const range of requestedRanges) {
+    const overlapFrom = Math.max(structure.node.from, range.from);
+    const overlapTo = Math.min(structure.node.to, range.to);
+    if (overlapFrom >= overlapTo) continue;
+    const visibleFirst = state.doc.lineAt(overlapFrom);
+    const visibleLast = state.doc.lineAt(
+      Math.max(overlapFrom, overlapTo - 1),
+    );
+    for (
+      let number = visibleFirst.number;
+      number <= visibleLast.number;
+      number += 1
+    ) {
+      const line = state.doc.line(number);
+      const position =
+        blockFirst.number === blockLast.number
+          ? "single"
+          : number === blockFirst.number
+            ? "first"
+            : number === blockLast.number
+              ? "last"
+              : "middle";
+      plans.push({
+        from: line.from,
+        to: line.to,
+        kind: "line",
+        className:
+          `cm-live-preview-quote-line cm-live-preview-quote-line-${position}`,
+      });
+    }
+  }
+  return plans;
+};
+
 export interface LivePreviewOptions {
   /**
    * When false, the selection never reveals source markers — used by reading
@@ -220,8 +265,9 @@ export const planLivePreview = (
   const structures: Structure[] = [];
   const markerCandidates: { owner: Structure; node: MarkerNode }[] = [];
   const tree = syntaxTree(state);
+  const requestedRanges = normalizeRanges(state.doc.length, ranges);
 
-  for (const range of normalizeRanges(state.doc.length, ranges)) {
+  for (const range of requestedRanges) {
     const nodeNames: string[] = [];
     const structureStack: Structure[] = [];
     const createdStructure: boolean[] = [];
@@ -259,19 +305,14 @@ export const planLivePreview = (
 
   const planned: PlannedDecoration[] = [];
   for (const structure of structures) {
+    if (structure.node.name === "Blockquote") {
+      planned.push(...quoteLinePlans(state, structure, requestedRanges));
+    }
     const className = classNameFor(structure.node);
     if (className) {
-      const markFrom =
-        structure.node.name === Highlight
-          ? structure.node.from + 2
-          : structure.node.from;
-      const markTo =
-        structure.node.name === Highlight
-          ? structure.node.to - 2
-          : structure.node.to;
       planned.push({
-        from: markFrom,
-        to: markTo,
+        from: structure.node.from,
+        to: structure.node.to,
         kind: "mark",
         className,
       });
@@ -457,7 +498,14 @@ const decorationSetsFor = (
   const atomicRanges: ReturnType<Decoration["range"]>[] = [];
   for (const item of planLivePreview(state, ranges, undefined, options)) {
     let decoration: ReturnType<Decoration["range"]>;
-    if (item.kind === "mark") {
+    if (item.kind === "line") {
+      decorations.push(
+        Decoration.line({
+          attributes: { class: item.className ?? "" },
+        }).range(item.from),
+      );
+      continue;
+    } else if (item.kind === "mark") {
       decorations.push(
         Decoration.mark({ class: item.className }).range(item.from, item.to),
       );
@@ -636,9 +684,6 @@ const livePreviewTheme = EditorView.baseTheme({
   ".cm-live-preview-inline-code": {
     backgroundColor: "var(--surface)",
     borderRadius: "0.2em",
-  },
-  ".cm-live-preview-quote": {
-    borderLeft: "0.2em solid var(--text-muted)",
   },
   ".cm-live-preview-link": { textDecoration: "underline" },
   ".cm-live-preview-reference-definition": { opacity: "0.75" },

@@ -555,6 +555,12 @@ body.sidebar-resizing * {
   padding: 0.05em 0.25em;
 }
 
+.cm-live-preview-highlight .cm-live-preview-inline-code,
+.cm-live-preview-inline-code.cm-live-preview-highlight {
+  background: var(--highlight);
+  border-color: var(--divider);
+}
+
 .cm-live-preview-code-block {
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.88em;
@@ -565,9 +571,29 @@ body.sidebar-resizing * {
 }
 
 .cm-live-preview-quote {
-  color: var(--text-secondary);
-  border-left: 2px solid var(--divider);
-  padding-left: var(--space-3);
+  color: var(--text-primary);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line {
+  width: 100%;
+  background: var(--surface);
+  border-left: 2px solid var(--text-muted);
+  padding-inline: var(--space-5);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line-single {
+  border-radius: var(--radius-medium);
+  padding-block: var(--space-3);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line-first {
+  border-radius: var(--radius-medium) var(--radius-medium) 0 0;
+  padding-top: var(--space-3);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line-last {
+  border-radius: 0 0 var(--radius-medium) var(--radius-medium);
+  padding-bottom: var(--space-3);
 }
 
 .cm-live-preview-horizontal-rule {

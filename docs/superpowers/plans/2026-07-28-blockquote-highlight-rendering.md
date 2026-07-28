@@ -208,10 +208,10 @@ Require the full card and nested-code rules:
 
 ```ts
 expect(appCss).toMatch(
-  /\.cm-live-preview-quote-line\s*\{[^}]*background:\s*var\(--surface\);[^}]*border-left:\s*2px solid var\(--divider\);[^}]*padding-inline:/s,
+  /\.markdown-editor \.cm-line\.cm-live-preview-quote-line\s*\{[^}]*background:\s*var\(--surface\);[^}]*border-left:\s*2px solid var\(--text-muted\);[^}]*padding-inline:/s,
 );
 expect(appCss).toMatch(
-  /\.cm-live-preview-quote-line-single\s*\{[^}]*border-radius:\s*var\(--radius-medium\);[^}]*padding-block:/s,
+  /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-single\s*\{[^}]*border-radius:\s*var\(--radius-medium\);[^}]*padding-block:/s,
 );
 expect(appCss).toMatch(
   /\.cm-live-preview-highlight \.cm-live-preview-inline-code,[^{]*\{[^}]*background:\s*var\(--highlight\);/s,
@@ -234,28 +234,28 @@ Replace fragment-only quote spacing with line-level presentation:
 
 ```css
 .cm-live-preview-quote {
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
-.cm-live-preview-quote-line {
+.markdown-editor .cm-line.cm-live-preview-quote-line {
   box-sizing: border-box;
   width: 100%;
   background: var(--surface);
-  border-left: 2px solid var(--divider);
+  border-left: 2px solid var(--text-muted);
   padding-inline: var(--space-5);
 }
 
-.cm-live-preview-quote-line-single {
+.markdown-editor .cm-line.cm-live-preview-quote-line-single {
   border-radius: var(--radius-medium);
   padding-block: var(--space-3);
 }
 
-.cm-live-preview-quote-line-first {
+.markdown-editor .cm-line.cm-live-preview-quote-line-first {
   border-radius: var(--radius-medium) var(--radius-medium) 0 0;
   padding-top: var(--space-3);
 }
 
-.cm-live-preview-quote-line-last {
+.markdown-editor .cm-line.cm-live-preview-quote-line-last {
   border-radius: 0 0 var(--radius-medium) var(--radius-medium);
   padding-bottom: var(--space-3);
 }

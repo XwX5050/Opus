@@ -28,11 +28,19 @@ const createState = (
 
 const hiddenSource = (state: EditorState, plan: readonly PlannedDecoration[]) =>
   plan
-    .filter(({ kind }) => kind !== "mark")
+    .filter(({ kind }) => kind !== "mark" && kind !== "line")
     .map(({ from, to }) => state.sliceDoc(from, to));
 
 const markedAs = (plan: readonly PlannedDecoration[], className: string) =>
   plan.filter((item) => item.kind === "mark" && item.className === className);
+
+const linesMarkedAs = (
+  plan: readonly PlannedDecoration[],
+  className: string,
+) =>
+  plan.filter(
+    (item) => item.kind === "line" && item.className?.includes(className),
+  );
 
 describe("planLivePreview", () => {
   it("plans all supported constructs from a real GFM syntax tree", () => {
@@ -88,6 +96,55 @@ describe("planLivePreview", () => {
     expect(markedAs(plan, "cm-live-preview-link")).toHaveLength(1);
   });
 
+  it("plans a single card line for a one-line blockquote", () => {
+    const state = createState("> quote", [{ anchor: 7 }]);
+
+    expect(
+      linesMarkedAs(
+        planLivePreview(state),
+        "cm-live-preview-quote-line-single",
+      ),
+    ).toEqual([
+      {
+        from: 0,
+        to: 7,
+        kind: "line",
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-single",
+      },
+    ]);
+  });
+
+  it("plans continuous first, middle, and last blockquote card lines", () => {
+    const doc = "> first\n> middle\n> last";
+    const state = createState(doc, [{ anchor: doc.length }]);
+
+    expect(
+      planLivePreview(state)
+        .filter(({ kind }) => kind === "line")
+        .map(({ from, to, className }) => ({ from, to, className })),
+    ).toEqual([
+      {
+        from: 0,
+        to: 7,
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-first",
+      },
+      {
+        from: 8,
+        to: 16,
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-middle",
+      },
+      {
+        from: 17,
+        to: 23,
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-last",
+      },
+    ]);
+  });
+
   it.each([
     ["opening delimiter", 0],
     ["content", 4],
@@ -112,15 +169,15 @@ describe("planLivePreview", () => {
     expect(hiddenSource(state, plan).filter((text) => text === "**")).toHaveLength(2);
   });
 
-  it("highlights only content and hides both highlight delimiters outside selection", () => {
+  it("marks the complete highlight node and hides both delimiters outside selection", () => {
     const state = createState("==重点== outside", [{ anchor: 10 }]);
     const plan = planLivePreview(state);
 
     expect(hiddenSource(state, plan)).toEqual(["==", "=="]);
     expect(markedAs(plan, "cm-live-preview-highlight")).toEqual([
       {
-        from: 2,
-        to: 4,
+        from: 0,
+        to: 6,
         kind: "mark",
         className: "cm-live-preview-highlight",
       },
@@ -133,6 +190,47 @@ describe("planLivePreview", () => {
 
     expect(hiddenSource(state, plan)).toEqual([]);
     expect(markedAs(plan, "cm-live-preview-highlight")).toHaveLength(1);
+  });
+
+  it("keeps revealed nested source markers inside the highlight while editing", () => {
+    const doc = "> 📌 ==text `D = -D`==";
+    const state = createState(doc, [
+      { anchor: doc.indexOf("D = -D") + 2 },
+    ]);
+    const plan = planLivePreview(state);
+
+    expect(markedAs(plan, "cm-live-preview-highlight")).toEqual([
+      {
+        from: doc.indexOf("=="),
+        to: doc.lastIndexOf("==") + 2,
+        kind: "mark",
+        className: "cm-live-preview-highlight",
+      },
+    ]);
+    expect(hiddenSource(state, plan)).toEqual([]);
+  });
+
+  it("hides every nested source marker while keeping the full reading highlight", () => {
+    const doc = "> 📌 ==text `D = -D`==";
+    const state = createState(doc, [
+      { anchor: doc.indexOf("D = -D") + 2 },
+    ]);
+    const plan = planLivePreview(state, undefined, undefined, {
+      revealSelection: false,
+    });
+    const hidden = hiddenSource(state, plan);
+
+    expect(hidden.filter((source) => source === ">")).toHaveLength(1);
+    expect(hidden.filter((source) => source === "==")).toHaveLength(2);
+    expect(hidden.filter((source) => source === "`")).toHaveLength(2);
+    expect(markedAs(plan, "cm-live-preview-highlight")).toEqual([
+      {
+        from: doc.indexOf("=="),
+        to: doc.lastIndexOf("==") + 2,
+        kind: "mark",
+        className: "cm-live-preview-highlight",
+      },
+    ]);
   });
 
   it("keeps highlight delimiters hidden in reading mode under the cursor", () => {
@@ -299,6 +397,60 @@ describe("planLivePreview", () => {
     expect(rangePlan.every(({ from, to }) => from >= targetFrom && to <= targetTo)).toBe(true);
     expect(rangePlan.length).toBeLessThan(fullPlan.length / 100);
     expect(rangeDiagnostics.visitedNodes).toBeLessThan(fullDiagnostics.visitedNodes / 100);
+  });
+
+  it("limits blockquote line decorations to requested document ranges", () => {
+    const doc = Array.from(
+      { length: 300 },
+      (_, index) => `> quote-${index}`,
+    ).join("\n");
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const target = state.doc.line(151);
+
+    const plan = planLivePreview(state, [
+      { from: target.from, to: target.to },
+    ]);
+
+    expect(plan.filter(({ kind }) => kind === "line")).toEqual([
+      {
+        from: target.from,
+        to: target.to,
+        kind: "line",
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-middle",
+      },
+    ]);
+  });
+
+  it("does not duplicate blockquote line decorations across disjoint ranges", () => {
+    const doc = "> first\n> middle\n> last";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const first = state.doc.line(1);
+    const last = state.doc.line(3);
+
+    const plan = planLivePreview(state, [
+      { from: first.from, to: first.to },
+      { from: last.from, to: last.to },
+    ]);
+
+    expect(
+      plan
+        .filter(({ kind }) => kind === "line")
+        .map(({ from, to, className }) => ({ from, to, className })),
+    ).toEqual([
+      {
+        from: first.from,
+        to: first.to,
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-first",
+      },
+      {
+        from: last.from,
+        to: last.to,
+        className:
+          "cm-live-preview-quote-line cm-live-preview-quote-line-last",
+      },
+    ]);
   });
 });
 
