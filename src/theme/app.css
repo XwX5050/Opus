@@ -155,7 +155,7 @@ select:hover {
 }
 
 .tauri .app-header {
-  padding-left: 84px;
+  padding: var(--space-1) 14px var(--space-1) 86px;
 }
 
 .app-header button,

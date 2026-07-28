@@ -166,7 +166,7 @@ fn tauri_product_identity_is_opus_without_changing_the_bundle_identifier() {
 
     assert_eq!(json["productName"], "Opus");
     assert_eq!(window["title"], "Opus");
-    assert_eq!(window["trafficLightPosition"]["x"], 10);
+    assert_eq!(window["trafficLightPosition"]["x"], 16);
     assert_eq!(
         window["trafficLightPosition"]["y"], 24,
         "traffic lights should be vertically centered in the 44px titlebar"

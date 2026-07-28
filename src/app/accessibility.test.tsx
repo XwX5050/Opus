@@ -283,6 +283,12 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
+  it("matches native macOS horizontal titlebar insets", () => {
+    expect(appCss).toMatch(
+      /\.tauri \.app-header\s*\{[^}]*padding:\s*var\(--space-1\)\s+14px\s+var\(--space-1\)\s+86px;/s,
+    );
+  });
+
   it("animates the sidebar rail and honors reduced-motion preferences", () => {
     expect(tokensCss).toMatch(
       /--transition-sidebar:\s*160ms cubic-bezier\(0\.2,\s*0,\s*0,\s*1\);/,
