@@ -10,6 +10,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { FrontMatter } from "./frontmatterExtension";
+import { Highlight, HighlightMark } from "./highlightExtension";
 
 export type PlannedDecorationKind =
   | "mark"
@@ -74,6 +75,7 @@ const structureNames = new Set([
   "FencedCode",
   "HorizontalRule",
   "FrontMatter",
+  Highlight,
 ]);
 
 const isHeading = (name: string) =>
@@ -110,6 +112,8 @@ const classNameFor = (node: SyntaxNode): string | undefined => {
       return "cm-live-preview-strong";
     case "Strikethrough":
       return "cm-live-preview-strikethrough";
+    case Highlight:
+      return "cm-live-preview-highlight";
     case "InlineCode":
       return "cm-live-preview-inline-code";
     case "Link":
@@ -136,6 +140,8 @@ const shouldReplace = (owner: Structure, node: SyntaxNode) => {
       return node.name === "EmphasisMark";
     case "Strikethrough":
       return node.name === "StrikethroughMark";
+    case Highlight:
+      return node.name === HighlightMark;
     case "InlineCode":
       return node.name === "CodeMark";
     case "Link":
@@ -255,9 +261,17 @@ export const planLivePreview = (
   for (const structure of structures) {
     const className = classNameFor(structure.node);
     if (className) {
+      const markFrom =
+        structure.node.name === Highlight
+          ? structure.node.from + 2
+          : structure.node.from;
+      const markTo =
+        structure.node.name === Highlight
+          ? structure.node.to - 2
+          : structure.node.to;
       planned.push({
-        from: structure.node.from,
-        to: structure.node.to,
+        from: markFrom,
+        to: markTo,
         kind: "mark",
         className,
       });

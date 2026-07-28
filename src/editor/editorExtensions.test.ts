@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { editorExtensions } from "./editorExtensions";
 
 describe("editorExtensions", () => {
-  it("parses GFM and math in the single production Markdown tree", () => {
+  it("parses GFM, math, and highlights in the single production Markdown tree", () => {
     const state = EditorState.create({
-      doc: "~~done~~ and $x^2$",
+      doc: "~~done~~ and $x^2$ and ==重点==",
       extensions: [
         editorExtensions({ onSave: vi.fn(), onReopenClosed: vi.fn(), onToggleReading: vi.fn() }),
       ],
@@ -15,5 +15,6 @@ describe("editorExtensions", () => {
     const tree = syntaxTree(state).toString();
     expect(tree).toContain("Strikethrough");
     expect(tree).toContain("InlineMath");
+    expect(tree).toContain("Highlight(HighlightMark");
   });
 });

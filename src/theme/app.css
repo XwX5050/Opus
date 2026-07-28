@@ -540,6 +540,12 @@ body.sidebar-resizing * {
   text-decoration: line-through;
 }
 
+.cm-live-preview-highlight {
+  background: var(--highlight);
+  border-radius: var(--radius-small);
+  padding-inline: var(--space-0-5);
+}
+
 .cm-live-preview-inline-code {
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.88em;

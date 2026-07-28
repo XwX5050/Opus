@@ -66,6 +66,7 @@
   --focus-ring: rgba(127, 109, 242, 0.4);
   --selection: rgba(127, 109, 242, 0.18);
   --search-match: rgba(224, 175, 104, 0.35);
+  --highlight: #796a32;
   --scrollbar: rgba(255, 255, 255, 0.1);
   --scrollbar-hover: rgba(255, 255, 255, 0.22);
   --syntax-keyword: #b3a1ff;
@@ -97,6 +98,7 @@
   --focus-ring: rgba(108, 86, 217, 0.4);
   --selection: rgba(108, 86, 217, 0.15);
   --search-match: rgba(230, 180, 80, 0.45);
+  --highlight: #ffec99;
   --scrollbar: rgba(0, 0, 0, 0.12);
   --scrollbar-hover: rgba(0, 0, 0, 0.26);
   --syntax-keyword: #6c56d9;

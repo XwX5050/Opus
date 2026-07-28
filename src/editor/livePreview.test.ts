@@ -4,6 +4,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
+import { highlightMarkdownExtension } from "./highlightExtension";
 import {
   livePreviewExtension,
   planLivePreview,
@@ -21,7 +22,7 @@ const createState = (
     ),
     extensions: [
       EditorState.allowMultipleSelections.of(true),
-      markdown({ extensions: [GFM] }),
+      markdown({ extensions: [GFM, highlightMarkdownExtension] }),
     ],
   });
 
@@ -109,6 +110,39 @@ describe("planLivePreview", () => {
       revealSelection: false,
     });
     expect(hiddenSource(state, plan).filter((text) => text === "**")).toHaveLength(2);
+  });
+
+  it("highlights only content and hides both highlight delimiters outside selection", () => {
+    const state = createState("==重点== outside", [{ anchor: 10 }]);
+    const plan = planLivePreview(state);
+
+    expect(hiddenSource(state, plan)).toEqual(["==", "=="]);
+    expect(markedAs(plan, "cm-live-preview-highlight")).toEqual([
+      {
+        from: 2,
+        to: 4,
+        kind: "mark",
+        className: "cm-live-preview-highlight",
+      },
+    ]);
+  });
+
+  it("reveals highlight delimiters under the cursor without removing the highlight", () => {
+    const state = createState("==重点== outside", [{ anchor: 3 }]);
+    const plan = planLivePreview(state);
+
+    expect(hiddenSource(state, plan)).toEqual([]);
+    expect(markedAs(plan, "cm-live-preview-highlight")).toHaveLength(1);
+  });
+
+  it("keeps highlight delimiters hidden in reading mode under the cursor", () => {
+    const state = createState("==重点== outside", [{ anchor: 3 }]);
+    const plan = planLivePreview(state, undefined, undefined, {
+      revealSelection: false,
+    });
+
+    expect(hiddenSource(state, plan)).toEqual(["==", "=="]);
+    expect(markedAs(plan, "cm-live-preview-highlight")).toHaveLength(1);
   });
 
   it("reveals both adjacent structures when the cursor sits on their shared boundary", () => {
@@ -275,7 +309,10 @@ describe("livePreviewExtension", () => {
     const state = EditorState.create({
       doc,
       selection: { anchor: doc.length },
-      extensions: [markdown({ extensions: [GFM] }), livePreviewExtension()],
+      extensions: [
+        markdown({ extensions: [GFM, highlightMarkdownExtension] }),
+        livePreviewExtension(),
+      ],
     });
     return new EditorView({ state, parent });
   };
@@ -357,6 +394,24 @@ describe("livePreviewExtension", () => {
     expect(view.contentDOM.textContent).toContain("**world**");
     view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
     expect(view.contentDOM.textContent).not.toContain("**");
+    view.destroy();
+  });
+
+  it("temporarily reveals highlight source during composition and restores it afterward", () => {
+    const view = createView("==重点== outside");
+    expect(view.contentDOM.textContent).not.toContain("==");
+    expect(view.dom.querySelector(".cm-live-preview-highlight")).not.toBeNull();
+
+    view.contentDOM.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+    expect(view.contentDOM.textContent).toContain("==重点==");
+
+    view.contentDOM.dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true }),
+    );
+    expect(view.contentDOM.textContent).not.toContain("==");
+    expect(view.dom.querySelector(".cm-live-preview-highlight")).not.toBeNull();
     view.destroy();
   });
 

@@ -268,6 +268,18 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(tokensCss).toMatch(/--backdrop:/);
   });
 
+  it("defines Obsidian-style highlight colors for both themes", () => {
+    expect(tokensCss).toMatch(
+      /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*--highlight:\s*#796a32;/s,
+    );
+    expect(tokensCss).toMatch(
+      /:root\[data-theme="light"\]\s*\{[^}]*--highlight:\s*#ffec99;/s,
+    );
+    expect(appCss).toMatch(
+      /\.cm-live-preview-highlight\s*\{[^}]*background:\s*var\(--highlight\);[^}]*border-radius:\s*var\(--radius-small\);[^}]*padding-inline:\s*var\(--space-0-5\);/s,
+    );
+  });
+
   it("keeps the titlebar fixed while the body and sidebar fill the viewport", () => {
     expect(appCss).toMatch(
       /\.app-shell\s*\{[^}]*height:\s*100vh;[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/s,

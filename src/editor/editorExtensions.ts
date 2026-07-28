@@ -23,6 +23,7 @@ import {
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { frontmatterMarkdownExtension } from "./frontmatterExtension";
+import { highlightMarkdownExtension } from "./highlightExtension";
 import { mathMarkdownExtension } from "./mathExtension";
 
 export interface EditorCommands {
@@ -76,7 +77,12 @@ export const editorExtensions = (
   EditorView.lineWrapping,
   markdown({
     codeLanguages: languages,
-    extensions: [GFM, mathMarkdownExtension, frontmatterMarkdownExtension],
+    extensions: [
+      GFM,
+      highlightMarkdownExtension,
+      mathMarkdownExtension,
+      frontmatterMarkdownExtension,
+    ],
     addKeymap: false,
   }),
   livePreview,
