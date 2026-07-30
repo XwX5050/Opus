@@ -1136,12 +1136,16 @@ mod tests {
         };
 
         std::fs::write(&document, "two").unwrap();
-        let changed = wait_for(
-            &|event| matches!(event, DiskEvent::Changed { path, .. } if *path == watched_path),
-        );
+        let (_, expected) = document_io::probe_version(&watched_path).unwrap();
+        let changed = wait_for(&|event| {
+            matches!(
+                event,
+                DiskEvent::Changed { path, version, .. }
+                    if *path == watched_path && version == &expected
+            )
+        });
         match changed {
             DiskEvent::Changed { version, .. } => {
-                let (_, expected) = document_io::probe_version(&watched_path).unwrap();
                 assert_eq!(version, expected);
             }
             _ => unreachable!(),
