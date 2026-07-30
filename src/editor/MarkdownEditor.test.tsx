@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { undoDepth } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import MarkdownEditor from "./MarkdownEditor";
@@ -101,6 +102,91 @@ describe("MarkdownEditor", () => {
     const view = renderEditor();
     view.unmount();
     expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("publishes the parsed outline through the editor callback", async () => {
+    const onOutlineChange = vi.fn();
+    renderEditor({ value: "# Alpha\n## Child", onOutlineChange });
+
+    await waitFor(() => expect(onOutlineChange).toHaveBeenCalled());
+
+    const headings = onOutlineChange.mock.calls.at(-1)?.[0];
+    expect(headings[0].text).toBe("Alpha");
+    expect(headings[0].children[0].text).toBe("Child");
+  });
+
+  it("moves selection and focus for a new editing-mode outline request", () => {
+    const onChange = vi.fn();
+    const rendered = renderEditor({
+      value: "# Alpha\n\ntext",
+      onChange,
+      outlineNavigation: null,
+    });
+    const view = editorView();
+    const historyBefore = undoDepth(view.state);
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        outlineNavigation={{ sequence: 1, from: 0, textFrom: 2 }}
+      />,
+    );
+
+    expect(view.state.selection.main.head).toBe(2);
+    expect(document.activeElement).toBe(content());
+    expect(view.state.doc.toString()).toBe("# Alpha\n\ntext");
+    expect(undoDepth(view.state)).toBe(historyBefore);
+    expect(onChange).not.toHaveBeenCalled();
+
+    view.dispatch({ selection: { anchor: 9 } });
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        outlineNavigation={{ sequence: 1, from: 0, textFrom: 2 }}
+      />,
+    );
+    expect(view.state.selection.main.head).toBe(9);
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        outlineNavigation={{ sequence: 2, from: 0, textFrom: 2 }}
+      />,
+    );
+    expect(view.state.selection.main.head).toBe(2);
+  });
+
+  it("only scrolls for reading-mode outline navigation", () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    const scrollIntoView = vi.spyOn(EditorView, "scrollIntoView");
+    const rendered = renderEditor({
+      value: "# Alpha\n\ntext",
+      viewMode: "reading",
+      outlineNavigation: null,
+    });
+    const view = editorView();
+    view.dispatch({ selection: { anchor: 9 } });
+    outside.focus();
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        viewMode="reading"
+        outlineNavigation={{ sequence: 1, from: 0, textFrom: 2 }}
+      />,
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledWith(0, {
+      y: "start",
+      yMargin: 24,
+    });
+    expect(view.state.selection.main.head).toBe(9);
+    expect(document.activeElement).toBe(outside);
+    expect(view.state.doc.toString()).toBe("# Alpha\n\ntext");
+
+    outside.remove();
+    scrollIntoView.mockRestore();
   });
 
   it("toggles between editing and reading in the same view without changing selection or firing onChange", () => {

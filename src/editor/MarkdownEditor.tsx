@@ -13,6 +13,8 @@ import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
 import { mathWidgetsExtension } from "./mathWidgets";
+import type { OutlineHeading } from "./outline";
+import { outlinePublisherExtension } from "./outlineExtension";
 import type { PerformanceMode } from "./performanceMode";
 import type { EditorViewMode } from "./viewMode";
 
@@ -23,6 +25,12 @@ export interface EditorImageDrop {
   readonly paths: ReadonlyArray<string>;
   readonly x: number;
   readonly y: number;
+}
+
+export interface OutlineNavigationRequest {
+  readonly sequence: number;
+  readonly from: number;
+  readonly textFrom: number;
 }
 
 export interface MarkdownEditorProps {
@@ -36,6 +44,8 @@ export interface MarkdownEditorProps {
   saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
   resolveImageUrl(path: string): string;
   imageDrop?: EditorImageDrop | null;
+  onOutlineChange?(headings: ReadonlyArray<OutlineHeading>): void;
+  outlineNavigation?: OutlineNavigationRequest | null;
   /**
    * Large documents open in "light" mode: Markdown parsing, selection,
    * search and visible-range text styling stay active, while offscreen
@@ -56,6 +66,8 @@ export default function MarkdownEditor({
   saveClipboardImage,
   resolveImageUrl,
   imageDrop = null,
+  onOutlineChange,
+  outlineNavigation = null,
   performanceMode = "full",
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -69,12 +81,14 @@ export default function MarkdownEditor({
     onSave,
     onReopenClosed,
     onToggleReading,
+    onOutlineChange,
   });
   callbacksRef.current = {
     onChange,
     onSave,
     onReopenClosed,
     onToggleReading,
+    onOutlineChange,
   };
   const imageSupportRef = useRef({ saveClipboardImage, resolveImageUrl });
   imageSupportRef.current = { saveClipboardImage, resolveImageUrl };
@@ -132,6 +146,9 @@ export default function MarkdownEditor({
               imageSupportRef.current.saveClipboardImage(input),
             getDocumentPath: () => documentPathRef.current,
           }),
+          outlinePublisherExtension((headings) =>
+            callbacksRef.current.onOutlineChange?.(headings),
+          ),
           EditorView.contentAttributes.of({
             "aria-label": "Markdown 编辑器",
           }),
@@ -202,6 +219,38 @@ export default function MarkdownEditor({
     // Preview extensions read live refs; rebuilding them on toggle is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, performanceMode]);
+
+  const consumedOutlineNavigationRef = useRef(0);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (
+      !view ||
+      !outlineNavigation ||
+      outlineNavigation.sequence <= consumedOutlineNavigationRef.current
+    ) {
+      return;
+    }
+    consumedOutlineNavigationRef.current = outlineNavigation.sequence;
+    const requestedPosition =
+      viewMode === "reading"
+        ? outlineNavigation.from
+        : outlineNavigation.textFrom;
+    const position = Math.min(
+      view.state.doc.length,
+      Math.max(0, requestedPosition),
+    );
+    view.dispatch({
+      ...(viewMode === "editing"
+        ? { selection: { anchor: position } }
+        : {}),
+      effects: EditorView.scrollIntoView(position, {
+        y: "start",
+        yMargin: 24,
+      }),
+    });
+    if (viewMode === "editing") view.focus();
+  }, [outlineNavigation, viewMode]);
 
   // A drop delivered before this editor mounted is stale: only drops with a
   // newer sequence are inserted.
