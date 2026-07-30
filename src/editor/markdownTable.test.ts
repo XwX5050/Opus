@@ -1,4 +1,5 @@
 import { markdown } from "@codemirror/lang-markdown";
+import { syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
@@ -85,8 +86,20 @@ describe("markdownTable", () => {
 
   it("round-trips backslash runs before literal pipes", () => {
     expect(decodeTableCell(String.raw`A\\\|B`)).toBe(String.raw`A\|B`);
-    expect(decodeTableCell(String.raw`A\\|B`)).toBe(String.raw`A\|B`);
+    expect(decodeTableCell(String.raw`A\\|B`)).toBe(String.raw`A\\|B`);
     expect(serializeTableCell(String.raw`A\\|B`)).toBe(`A${"\\".repeat(5)}|B`);
+  });
+
+  it("uses backslash parity to distinguish structural and literal cell pipes", () => {
+    const even = ["A | B | C", "--- | --- | ---", String.raw`one\\ | two | three`].join("\n");
+    const odd = ["A | B", "--- | ---", String.raw`one\|two | three`].join("\n");
+
+    expect(extractMarkdownTables(parse(even))[0].rows[0].map((cell) => cell.source)).toEqual([
+      String.raw`one\\`, "two", "three",
+    ]);
+    expect(extractMarkdownTables(parse(odd))[0].rows[0].map((cell) => cell.displayText)).toEqual([
+      "one|two", "three",
+    ]);
   });
 
   it.each([
@@ -106,6 +119,43 @@ describe("markdownTable", () => {
       { from: secondFrom + 1, to: secondFrom + 2 },
       { from: secondFrom, to: secondFrom + 3 },
     ]).map((table) => table.source)).toEqual([second]);
+  });
+
+  it("does not emit a table for a range that only touches its boundary", () => {
+    const doc = `before\n${["A | B", "--- | ---", "one | two"].join("\n")}\nafter`;
+    const state = parse(doc);
+    const tableNode = syntaxTree(state).topNode.getChild("Table")!;
+
+    expect(extractMarkdownTables(state, [{ from: 0, to: tableNode.from }])).toEqual([]);
+    expect(extractMarkdownTables(state, [{ from: tableNode.to, to: doc.length }])).toEqual([]);
+  });
+
+  it("scans parser-provided row spans for a blockquote table", () => {
+    const doc = ["> A | B", "> --- | ---", "> one | two"].join("\n");
+    const state = parse(doc);
+    const tableNode = syntaxTree(state).topNode.getChild("Blockquote")!.getChild("Table")!;
+    const [table] = extractMarkdownTables(state);
+    const cells = [...table.header, ...table.rows.flat()];
+
+    expect(table.columns).toEqual([{ alignment: "default" }, { alignment: "default" }]);
+    expect(table.header.map((cell) => cell.source)).toEqual(["A", "B"]);
+    expect(table.rows[0].map((cell) => cell.source)).toEqual(["one", "two"]);
+    expect(cells.every((cell) => cell.from >= tableNode.from && cell.to <= tableNode.to)).toBe(true);
+  });
+
+  it("scans parser-provided row spans for a list-contained table", () => {
+    const doc = ["- A | B", "  --- | ---", "  one | two"].join("\n");
+    const state = parse(doc);
+    const tableNode = syntaxTree(state).topNode
+      .getChild("BulletList")!
+      .getChild("ListItem")!
+      .getChild("Table")!;
+    const [table] = extractMarkdownTables(state);
+    const cells = [...table.header, ...table.rows.flat()];
+
+    expect(table.header.map((cell) => cell.source)).toEqual(["A", "B"]);
+    expect(table.rows[0].map((cell) => cell.source)).toEqual(["one", "two"]);
+    expect(cells.every((cell) => cell.from >= tableNode.from && cell.to <= tableNode.to)).toBe(true);
   });
 
   it("preserves surrounding whitespace while giving exact replacement ranges", () => {

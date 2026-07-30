@@ -1,5 +1,6 @@
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
+import type { SyntaxNode } from "@lezer/common";
 
 export type TableAlignment = "default" | "left" | "center" | "right";
 
@@ -33,7 +34,8 @@ const whitespace = (character: string) => character === " " || character === "\t
 export const decodeTableCell = (source: string): string =>
   source.replace(/\\+\|/g, (escapedPipe) => {
     const backslashes = escapedPipe.length - 1;
-    return `${"\\".repeat(Math.floor(backslashes / 2))}|`;
+    if (backslashes % 2 === 0) return escapedPipe;
+    return `${"\\".repeat((backslashes - 1) / 2)}|`;
   });
 
 export const serializeTableCell = (text: string): string =>
@@ -124,17 +126,19 @@ const alignmentFor = (cell: MarkdownTableCell): TableAlignment | null => {
   return cell.source.endsWith(":") ? "right" : "default";
 };
 
-const tableForNode = (state: EditorState, from: number, to: number): MarkdownTable | null => {
-  const first = state.doc.lineAt(from);
-  const last = state.doc.lineAt(Math.max(from, to - 1));
-  if (last.number - first.number < 1) return null;
+const tableForNode = (state: EditorState, table: SyntaxNode): MarkdownTable | null => {
+  let headerNode: SyntaxNode | null = null;
+  let delimiterNode: SyntaxNode | null = null;
+  const rowNodes: SyntaxNode[] = [];
+  for (let child = table.firstChild; child; child = child.nextSibling) {
+    if (child.name === "TableHeader") headerNode = child;
+    else if (child.name === "TableDelimiter") delimiterNode = child;
+    else if (child.name === "TableRow") rowNodes.push(child);
+  }
+  if (!headerNode || !delimiterNode) return null;
 
-  const lines = Array.from(
-    { length: last.number - first.number + 1 },
-    (_, index) => state.doc.line(first.number + index),
-  );
-  const header = cellsForLine(state, lines[0].from, lines[0].to);
-  const delimiter = cellsForLine(state, lines[1].from, lines[1].to);
+  const header = cellsForLine(state, headerNode.from, headerNode.to);
+  const delimiter = cellsForLine(state, delimiterNode.from, delimiterNode.to);
   const alignments = delimiter.map(alignmentFor);
   if (
     header.length === 0 ||
@@ -142,13 +146,13 @@ const tableForNode = (state: EditorState, from: number, to: number): MarkdownTab
     alignments.some((alignment) => alignment === null)
   ) return null;
 
-  const rows = lines.slice(2).map((line) => cellsForLine(state, line.from, line.to));
+  const rows = rowNodes.map((row) => cellsForLine(state, row.from, row.to));
   if (rows.some((row) => row.length !== header.length)) return null;
 
   return {
-    from,
-    to,
-    source: state.sliceDoc(from, to),
+    from: table.from,
+    to: table.to,
+    source: state.sliceDoc(table.from, table.to),
     columns: alignments.map((alignment) => ({ alignment: alignment! })),
     header,
     rows,
@@ -168,10 +172,11 @@ export const extractMarkdownTables = (
       to: range.to,
       enter(node) {
         if (node.name !== "Table") return;
+        if (node.from >= range.to || node.to <= range.from) return;
         const key = `${node.from}:${node.to}`;
         if (seen.has(key)) return;
         seen.add(key);
-        const table = tableForNode(state, node.from, node.to);
+        const table = tableForNode(state, node.node);
         if (table) tables.push(table);
       },
     });
