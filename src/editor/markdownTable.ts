@@ -1,0 +1,180 @@
+import { syntaxTree } from "@codemirror/language";
+import type { EditorState } from "@codemirror/state";
+
+export type TableAlignment = "default" | "left" | "center" | "right";
+
+export interface MarkdownTableCell {
+  readonly from: number;
+  readonly to: number;
+  readonly source: string;
+  readonly displayText: string;
+}
+
+export interface MarkdownTableColumn {
+  readonly alignment: TableAlignment;
+}
+
+export interface MarkdownTable {
+  readonly from: number;
+  readonly to: number;
+  readonly source: string;
+  readonly columns: readonly MarkdownTableColumn[];
+  readonly header: readonly MarkdownTableCell[];
+  readonly rows: readonly (readonly MarkdownTableCell[])[];
+}
+
+export interface TableRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+const whitespace = (character: string) => character === " " || character === "\t";
+
+export const decodeTableCell = (source: string): string =>
+  source.replace(/\\+\|/g, (escapedPipe) => {
+    const backslashes = escapedPipe.length - 1;
+    return `${"\\".repeat(Math.floor(backslashes / 2))}|`;
+  });
+
+export const serializeTableCell = (text: string): string =>
+  text
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/(\\*)\|/g, (_pipe, backslashes: string) =>
+      `${"\\".repeat(backslashes.length * 2 + 1)}|`,
+    );
+
+const normalizeRanges = (
+  docLength: number,
+  ranges: readonly TableRange[] | undefined,
+): TableRange[] => {
+  if (docLength === 0) return [];
+  const requested = ranges ?? [{ from: 0, to: docLength }];
+  const normalized = requested
+    .map((range) => {
+      let from = Math.max(0, Math.min(range.from, range.to, docLength));
+      let to = Math.max(0, Math.min(Math.max(range.from, range.to), docLength));
+      if (from === to) {
+        if (to < docLength) to += 1;
+        else from -= 1;
+      }
+      return { from, to };
+    })
+    .filter(({ from, to }) => from >= 0 && to > from)
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+
+  const merged: { from: number; to: number }[] = [];
+  for (const range of normalized) {
+    const previous = merged.at(-1);
+    if (previous && range.from <= previous.to) previous.to = Math.max(previous.to, range.to);
+    else merged.push({ ...range });
+  }
+  return merged;
+};
+
+const structuralPipes = (line: string): number[] => {
+  const pipes: number[] = [];
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] !== "|") continue;
+    let backslashes = 0;
+    for (let previous = index - 1; previous >= 0 && line[previous] === "\\"; previous -= 1) {
+      backslashes += 1;
+    }
+    if (backslashes % 2 === 0) pipes.push(index);
+  }
+  return pipes;
+};
+
+const cellsForLine = (state: EditorState, from: number, to: number): MarkdownTableCell[] => {
+  const line = state.sliceDoc(from, to);
+  const pipes = structuralPipes(line);
+  let firstContent = 0;
+  while (firstContent < line.length && whitespace(line[firstContent])) firstContent += 1;
+  let lastContent = line.length;
+  while (lastContent > firstContent && whitespace(line[lastContent - 1])) lastContent -= 1;
+
+  const hasLeadingPipe = pipes.includes(firstContent);
+  const hasTrailingPipe = lastContent > 0 && pipes.includes(lastContent - 1);
+  const start = hasLeadingPipe ? firstContent + 1 : 0;
+  const end = hasTrailingPipe ? lastContent - 1 : line.length;
+  const separators = pipes.filter((pipe) => pipe >= start && pipe < end);
+  const boundaries = [start, ...separators.map((pipe) => pipe + 1)];
+  const ends = [...separators, end];
+
+  return boundaries.map((cellStart, index) => {
+    const cellEnd = ends[index];
+    let trimmedStart = cellStart;
+    let trimmedEnd = cellEnd;
+    while (trimmedStart < trimmedEnd && whitespace(line[trimmedStart])) trimmedStart += 1;
+    while (trimmedEnd > trimmedStart && whitespace(line[trimmedEnd - 1])) trimmedEnd -= 1;
+    const source = line.slice(trimmedStart, trimmedEnd);
+    return {
+      from: from + trimmedStart,
+      to: from + trimmedEnd,
+      source,
+      displayText: decodeTableCell(source),
+    };
+  });
+};
+
+const alignmentFor = (cell: MarkdownTableCell): TableAlignment | null => {
+  if (!/^:?-+:?$/.test(cell.source)) return null;
+  if (cell.source.startsWith(":")) {
+    return cell.source.endsWith(":") ? "center" : "left";
+  }
+  return cell.source.endsWith(":") ? "right" : "default";
+};
+
+const tableForNode = (state: EditorState, from: number, to: number): MarkdownTable | null => {
+  const first = state.doc.lineAt(from);
+  const last = state.doc.lineAt(Math.max(from, to - 1));
+  if (last.number - first.number < 1) return null;
+
+  const lines = Array.from(
+    { length: last.number - first.number + 1 },
+    (_, index) => state.doc.line(first.number + index),
+  );
+  const header = cellsForLine(state, lines[0].from, lines[0].to);
+  const delimiter = cellsForLine(state, lines[1].from, lines[1].to);
+  const alignments = delimiter.map(alignmentFor);
+  if (
+    header.length === 0 ||
+    header.length !== delimiter.length ||
+    alignments.some((alignment) => alignment === null)
+  ) return null;
+
+  const rows = lines.slice(2).map((line) => cellsForLine(state, line.from, line.to));
+  if (rows.some((row) => row.length !== header.length)) return null;
+
+  return {
+    from,
+    to,
+    source: state.sliceDoc(from, to),
+    columns: alignments.map((alignment) => ({ alignment: alignment! })),
+    header,
+    rows,
+  };
+};
+
+export const extractMarkdownTables = (
+  state: EditorState,
+  ranges?: readonly TableRange[],
+): MarkdownTable[] => {
+  const tables: MarkdownTable[] = [];
+  const seen = new Set<string>();
+  const tree = syntaxTree(state);
+  for (const range of normalizeRanges(state.doc.length, ranges)) {
+    tree.iterate({
+      from: range.from,
+      to: range.to,
+      enter(node) {
+        if (node.name !== "Table") return;
+        const key = `${node.from}:${node.to}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const table = tableForNode(state, node.from, node.to);
+        if (table) tables.push(table);
+      },
+    });
+  }
+  return tables;
+};
