@@ -38,6 +38,7 @@ interface E2eFixtureSpec {
     openPaths: string[];
     activePath: string | null;
     workspacePath: string | null;
+    outline?: { width: number };
   } | null;
   drafts?: E2eDraftSpec[];
   workspace?: { path: string; title: string } | null;
@@ -181,6 +182,80 @@ test("switches between editing and reading modes", async ({
   await expect(content).not.toContainText("**");
 });
 
+test("opens, navigates, collapses, and resizes the document outline", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [
+      {
+        path: "/docs/outline.md",
+        text: [
+          "# 第一章",
+          "开场",
+          "## 第一节",
+          "内容",
+          "### 细节",
+          "更多内容",
+          "# 第二章",
+          "## 第二节",
+          "结尾",
+        ].join("\n"),
+      },
+    ],
+    session: {
+      ...sessionWith("/docs/outline.md")!,
+      outline: { width: 336 },
+    },
+  });
+
+  const modeToggle = page.getByRole("button", { name: "编辑模式" });
+  const outlineToggle = page.getByRole("button", { name: "展开大纲" });
+  await expect(modeToggle).toBeVisible();
+  await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
+  await expect
+    .poll(() =>
+      modeToggle.evaluate((mode) =>
+        mode.nextElementSibling?.getAttribute("aria-label"),
+      ),
+    )
+    .toBe("展开大纲");
+
+  await outlineToggle.click();
+  const outline = page.getByRole("complementary", { name: "大纲侧栏" });
+  await expect(outline).toBeVisible();
+  await expect(outline).toHaveCSS("width", "336px");
+  await expect(outline.getByRole("treeitem")).toHaveCount(5);
+
+  await outline.getByRole("treeitem", { name: "第一节" }).click();
+  await expect(editorContent(page)).toBeFocused();
+
+  await outline.getByRole("button", { name: "全部折叠" }).click();
+  await expect(outline.getByRole("treeitem", { name: "第一节" })).toHaveCount(0);
+  await expect(outline.getByRole("treeitem", { name: "第二节" })).toHaveCount(0);
+  await expect(outline.getByRole("button", { name: "全部折叠" })).toBeDisabled();
+
+  await outline.getByRole("button", { name: "展开 第二章" }).click();
+  await expect(outline.getByRole("treeitem", { name: "第二节" })).toBeVisible();
+
+  const resizer = page.getByRole("separator", { name: "调整大纲宽度" });
+  const box = await resizer.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + 3, box!.y + 60);
+  await page.mouse.down();
+  await page.mouse.move(box!.x - 41, box!.y + 60);
+  await page.mouse.up();
+  await expect(outline).toHaveCSS("width", "380px");
+
+  await outline.getByRole("button", { name: "收起右侧栏" }).click();
+  await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("#app-outline")).toHaveAttribute("inert", "");
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "展开大纲" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+});
 
 test("renders valid LaTeX and flags invalid LaTeX without blocking edits", async ({
   page,
