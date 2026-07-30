@@ -1107,6 +1107,86 @@ body.outline-resizing * {
   z-index: 20;
 }
 
+/* ---------- Markdown tables ---------- */
+
+.md-table-scroll {
+  width: 100%;
+  margin-block: var(--space-3);
+  overflow-x: auto;
+}
+
+.md-table {
+  width: 100%;
+  min-width: max-content;
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  border-spacing: 0;
+  border-radius: var(--radius-medium);
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.md-table th,
+.md-table td {
+  min-width: calc(var(--space-5) * 4);
+  padding: var(--space-2) var(--space-3);
+  border-right: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.md-table th {
+  font-weight: 600;
+  background: var(--surface-hover);
+}
+
+.md-table [data-alignment="default"],
+.md-table [data-alignment="left"] {
+  text-align: left;
+}
+
+.md-table [data-alignment="center"] {
+  text-align: center;
+}
+
+.md-table [data-alignment="right"] {
+  text-align: right;
+}
+
+.md-table tr > :last-child {
+  border-right: 0;
+}
+
+.md-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.md-table thead:first-child tr:first-child > :first-child {
+  border-top-left-radius: var(--radius-medium);
+}
+
+.md-table thead:first-child tr:first-child > :last-child {
+  border-top-right-radius: var(--radius-medium);
+}
+
+.md-table tbody:last-child tr:last-child > :first-child {
+  border-bottom-left-radius: var(--radius-medium);
+}
+
+.md-table tbody:last-child tr:last-child > :last-child {
+  border-bottom-right-radius: var(--radius-medium);
+}
+
+.cm-line.cm-table-continuation {
+  height: 0;
+  min-height: 0;
+  padding: 0 !important;
+  line-height: 0;
+  overflow: hidden;
+}
+
 /* ---------- Motion ---------- */
 
 .tab,
