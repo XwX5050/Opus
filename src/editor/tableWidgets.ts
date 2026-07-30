@@ -376,6 +376,7 @@ const setCellEditability = (
       tagName === "th" ? "columnheader" : "gridcell",
     );
     element.contentEditable = "true";
+    element.setAttribute("contenteditable", "true");
     element.spellcheck = true;
     element.tabIndex = 0;
   } else {
@@ -415,6 +416,8 @@ export class MarkdownTableWidget extends WidgetType {
   toDOM(view?: EditorView) {
     const scroll = document.createElement("div");
     scroll.className = "md-table-scroll";
+    scroll.contentEditable = "false";
+    scroll.setAttribute("contenteditable", "false");
 
     const tableElement = document.createElement("table");
     tableElement.className = "md-table";
@@ -484,6 +487,8 @@ export class MarkdownTableWidget extends WidgetType {
     ) {
       return false;
     }
+    dom.contentEditable = "false";
+    dom.setAttribute("contenteditable", "false");
 
     const tableElement = dom.firstElementChild;
     const headRows = tableElement.tHead?.rows;

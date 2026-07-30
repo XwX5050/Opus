@@ -239,6 +239,24 @@ describe("tableWidgetsExtension", () => {
     expect(cells.every((cell) => !cell.hasAttribute("role"))).toBe(true);
   });
 
+  it("isolates table cells behind an explicit non-editable widget root", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const editableView = createView(doc, true);
+    const staticView = createView(doc, false);
+
+    for (const view of [editableView, staticView]) {
+      const root = view.dom.querySelector<HTMLElement>(".md-table-scroll")!;
+      expect(root).toHaveAttribute("contenteditable", "false");
+      expect(root.contentEditable).toBe("false");
+    }
+    expect(tableCell(editableView, 2)).toHaveAttribute(
+      "contenteditable",
+      "true",
+    );
+    expect(tableCell(editableView, 2).contentEditable).toBe("true");
+    expect(tableCell(staticView, 2)).not.toHaveAttribute("contenteditable");
+  });
+
   it("renders multiple non-overlapping tables in source order", () => {
     const first = ["A | B", "--- | ---", "one | two"].join("\n");
     const second = ["C | D", "--- | ---", "three | four"].join("\n");
@@ -677,6 +695,9 @@ describe("tableWidgetsExtension", () => {
     });
 
     const cell = tableCell(view, 2);
+    const root = view.dom.querySelector<HTMLElement>(".md-table-scroll")!;
+    expect(root).toHaveAttribute("contenteditable", "false");
+    expect(root.contentEditable).toBe("false");
     expect(cell).toHaveAttribute("contenteditable", "false");
     expect(cell.contentEditable).toBe("false");
     expect(cell.isContentEditable).not.toBe(true);
