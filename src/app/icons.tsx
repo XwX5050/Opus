@@ -39,3 +39,52 @@ export const PencilLineIcon = () => (
     <path d="m15 5 3 3" />
   </svg>
 );
+
+const outlineIconProps = {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: 18,
+  height: 18,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.8,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+  "aria-hidden": true,
+} as const;
+
+export const ListTreeIcon = () => (
+  <svg {...outlineIconProps}>
+    <path d="M4 6h.01" />
+    <path d="M8 6h12" />
+    <path d="M4 12h.01" />
+    <path d="M8 12h12" />
+    <path d="M4 18h.01" />
+    <path d="M8 18h12" />
+  </svg>
+);
+
+export const PanelRightIcon = () => (
+  <svg {...outlineIconProps}>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M15 3v18" />
+  </svg>
+);
+
+export const CollapseAllIcon = () => (
+  <svg {...outlineIconProps}>
+    <path d="m6 5 6 4 6-4" />
+    <path d="m6 19 6-4 6 4" />
+  </svg>
+);
+
+export const DisclosureChevronIcon = () => (
+  <svg
+    {...outlineIconProps}
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+  >
+    <path d="m6 4 4 4-4 4" />
+  </svg>
+);
