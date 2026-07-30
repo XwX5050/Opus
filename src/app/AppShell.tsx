@@ -8,12 +8,25 @@ import {
   type RecentItem,
 } from "../document/types";
 import ConflictDialog from "../conflict/ConflictDialog";
-import MarkdownEditor, { type EditorImageDrop } from "../editor/MarkdownEditor";
+import MarkdownEditor, {
+  type EditorImageDrop,
+  type OutlineNavigationRequest,
+} from "../editor/MarkdownEditor";
+import OutlinePanel from "../editor/OutlinePanel";
+import {
+  collectOutlineParentIds,
+  type OutlineHeading,
+} from "../editor/outline";
 import { useAutomaticPerformanceMode } from "./usePerformanceMode";
 import RecoveryDialog from "../recovery/RecoveryDialog";
 import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
-import { BookOpenIcon, PanelLeftIcon, PencilLineIcon } from "./icons";
+import {
+  BookOpenIcon,
+  ListTreeIcon,
+  PanelLeftIcon,
+  PencilLineIcon,
+} from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
 import { type EventSubscriber, useAppController } from "./useAppController";
@@ -43,6 +56,16 @@ export interface AppShellProps {
   onDismissExternalError?: () => void;
 }
 
+const EMPTY_OUTLINE_IDS: ReadonlySet<string> = new Set();
+
+const pruneTabMap = <T,>(
+  current: ReadonlyMap<string, T>,
+  openIds: ReadonlySet<string>,
+): ReadonlyMap<string, T> => {
+  if ([...current.keys()].every((id) => openIds.has(id))) return current;
+  return new Map([...current].filter(([id]) => openIds.has(id)));
+};
+
 export default function AppShell({
   port,
   subscribeToEvents = null,
@@ -56,6 +79,8 @@ export default function AppShell({
   useTheme(controller.theme, controller.editorPreferences);
   const sidebar = controller.sidebarPreferences;
   const setSidebar = controller.setSidebarPreferences;
+  const outline = controller.outlinePreferences;
+  const setOutline = controller.setOutlinePreferences;
   const sidebarAvailable =
     controller.state.tabs.length > 0 || controller.workspace !== null;
   // The tab element only exists when the sidebar and its tabs section are
@@ -64,10 +89,19 @@ export default function AppShell({
     sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
   const [settingsRequested, setSettingsRequested] = useState(false);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineResizing, setOutlineResizing] = useState(false);
   // Live width while dragging; committed to sidebarPreferences (which
   // persists the session) only on pointerup, not on every move.
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const sidebarResizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    lastWidth: number;
+  } | null>(null);
+  const [outlineDragWidth, setOutlineDragWidth] = useState<number | null>(null);
+  const outlineResizeRef = useRef<{
     pointerId: number;
     startX: number;
     startWidth: number;
@@ -114,6 +148,45 @@ export default function AppShell({
       width: clampSidebarWidth(current.width + delta),
     }));
   };
+  const startOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    outlineResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: outline.width,
+      lastWidth: outline.width,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setOutlineResizing(true);
+  };
+  const moveOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = outlineResizeRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    const width = clampSidebarWidth(
+      drag.startWidth + (drag.startX - event.clientX),
+    );
+    drag.lastWidth = width;
+    setOutlineDragWidth(width);
+  };
+  const endOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = outlineResizeRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    outlineResizeRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setOutlineResizing(false);
+    setOutlineDragWidth(null);
+    if (drag.lastWidth !== outline.width) {
+      setOutline({ width: drag.lastWidth });
+    }
+  };
+  const onOutlineResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? 16 : -16;
+    setOutline((current) => ({
+      width: clampSidebarWidth(current.width + delta),
+    }));
+  };
   // While dragging, force the resize cursor and block text selection
   // anywhere under the pointer.
   useEffect(() => {
@@ -121,6 +194,11 @@ export default function AppShell({
     document.body.classList.add("sidebar-resizing");
     return () => document.body.classList.remove("sidebar-resizing");
   }, [sidebarResizing]);
+  useEffect(() => {
+    if (!outlineResizing) return;
+    document.body.classList.add("outline-resizing");
+    return () => document.body.classList.remove("outline-resizing");
+  }, [outlineResizing]);
   const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
   const imageDropSequenceRef = useRef(0);
@@ -134,6 +212,16 @@ export default function AppShell({
     (tab) => tab.id === controller.state.activeId,
   );
   const viewMode = controller.viewModeOf(active?.id);
+  const [outlinesByTab, setOutlinesByTab] = useState<
+    ReadonlyMap<string, ReadonlyArray<OutlineHeading>>
+  >(new Map());
+  const [collapsedOutlineIdsByTab, setCollapsedOutlineIdsByTab] = useState<
+    ReadonlyMap<string, ReadonlySet<string>>
+  >(new Map());
+  const [outlineNavigation, setOutlineNavigation] = useState<
+    (OutlineNavigationRequest & { readonly tabId: string }) | null
+  >(null);
+  const outlineSequenceRef = useRef(0);
   // Per-tab light-mode UI state: "继续完整渲染" overrides and banner
   // dismissals are tab-scoped, so they are pruned as soon as a tab closes —
   // a closed-and-reopened document always returns to automatic mode.
@@ -148,9 +236,76 @@ export default function AppShell({
     };
     setForceFullTabs(prune);
     setDismissedPerfTabs(prune);
+    setOutlinesByTab((current) => pruneTabMap(current, open));
+    setCollapsedOutlineIdsByTab((current) => pruneTabMap(current, open));
     // Keyed on the open tab ids; the reducer's tab list is the source of truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabIdsKey]);
+  const activeOutline = active ? outlinesByTab.get(active.id) ?? null : null;
+  const activeCollapsedOutlineIds = active
+    ? collapsedOutlineIdsByTab.get(active.id) ?? EMPTY_OUTLINE_IDS
+    : EMPTY_OUTLINE_IDS;
+  const publishOutline = (
+    tabId: string,
+    headings: ReadonlyArray<OutlineHeading>,
+  ) => {
+    setOutlinesByTab((current) => {
+      const next = new Map(current);
+      next.set(tabId, headings);
+      return next;
+    });
+    // A collapse marker is only meaningful while the heading still owns
+    // children. Dropping leaf IDs prevents newly-added descendants from
+    // unexpectedly inheriting a stale collapsed state.
+    const validIds = collectOutlineParentIds(headings);
+    setCollapsedOutlineIdsByTab((current) => {
+      const existing = current.get(tabId) ?? EMPTY_OUTLINE_IDS;
+      const retained = new Set(
+        [...existing].filter((id) => validIds.has(id)),
+      );
+      if (
+        retained.size === existing.size &&
+        [...retained].every((id) => existing.has(id))
+      ) {
+        if (current.has(tabId)) return current;
+      }
+      const next = new Map(current);
+      next.set(tabId, retained);
+      return next;
+    });
+  };
+  const toggleOutlineBranch = (tabId: string, id: string) => {
+    setCollapsedOutlineIdsByTab((current) => {
+      const nextIds = new Set(current.get(tabId) ?? EMPTY_OUTLINE_IDS);
+      if (nextIds.has(id)) nextIds.delete(id);
+      else nextIds.add(id);
+      const next = new Map(current);
+      next.set(tabId, nextIds);
+      return next;
+    });
+  };
+  const collapseAllOutlineBranches = (
+    tabId: string,
+    headings: ReadonlyArray<OutlineHeading>,
+  ) => {
+    setCollapsedOutlineIdsByTab((current) => {
+      const next = new Map(current);
+      next.set(tabId, collectOutlineParentIds(headings));
+      return next;
+    });
+  };
+  const navigateToOutlineHeading = (
+    tabId: string,
+    heading: OutlineHeading,
+  ) => {
+    outlineSequenceRef.current += 1;
+    setOutlineNavigation({
+      tabId,
+      sequence: outlineSequenceRef.current,
+      from: heading.from,
+      textFrom: heading.textFrom,
+    });
+  };
   const activeText = active?.text ?? null;
   // Bounded per keystroke: O(1) for out-of-band documents, one synchronous
   // scan per tab switch, debounced re-evaluation for in-band edits.
@@ -454,16 +609,30 @@ export default function AppShell({
               </>
             )}
             {active && (
-              <button
-                type="button"
-                className="icon-button view-mode-toggle"
-                aria-pressed={viewMode === "reading"}
-                aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                onClick={() => controller.toggleReading(active.id)}
-              >
-                {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="icon-button view-mode-toggle"
+                  aria-pressed={viewMode === "reading"}
+                  aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                  title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                  onClick={() => controller.toggleReading(active.id)}
+                >
+                  {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button outline-toggle"
+                  aria-expanded={outlineOpen}
+                  aria-pressed={outlineOpen}
+                  aria-controls="app-outline"
+                  aria-label={outlineOpen ? "收起大纲" : "展开大纲"}
+                  title={outlineOpen ? "收起大纲" : "展开大纲"}
+                  onClick={() => setOutlineOpen((current) => !current)}
+                >
+                  <ListTreeIcon />
+                </button>
+              </>
             )}
           </>
         )}
@@ -620,6 +789,12 @@ export default function AppShell({
             saveClipboardImage={(input) => port.saveClipboardImage(input)}
             resolveImageUrl={tauriImagePreviewUrl}
             imageDrop={imageDrop}
+            onOutlineChange={(headings) => publishOutline(active.id, headings)}
+            outlineNavigation={
+              outlineNavigation?.tabId === active.id
+                ? outlineNavigation
+                : null
+            }
             performanceMode={lightMode ? "light" : "full"}
           />
         ) : (
@@ -652,6 +827,58 @@ export default function AppShell({
           </div>
         )}
         </div>
+        {active && (
+          <>
+            {outlineOpen && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整大纲宽度"
+                aria-valuenow={outline.width}
+                aria-valuemin={SIDEBAR_MIN_WIDTH}
+                aria-valuemax={SIDEBAR_MAX_WIDTH}
+                tabIndex={0}
+                className="outline-resizer"
+                onPointerDown={startOutlineResize}
+                onPointerMove={moveOutlineResize}
+                onPointerUp={endOutlineResize}
+                onPointerCancel={endOutlineResize}
+                onKeyDown={onOutlineResizerKeyDown}
+              />
+            )}
+            <div
+              className="outline-rail"
+              data-collapsed={!outlineOpen}
+              style={{
+                width: outlineOpen
+                  ? outlineDragWidth ?? outline.width
+                  : 0,
+              }}
+            >
+              <aside
+                id="app-outline"
+                aria-label="大纲侧栏"
+                aria-hidden={!outlineOpen ? true : undefined}
+                inert={!outlineOpen ? true : undefined}
+                className="outline-sidebar"
+                style={{ width: outlineDragWidth ?? outline.width }}
+              >
+                <OutlinePanel
+                  headings={activeOutline}
+                  collapsedIds={activeCollapsedOutlineIds}
+                  onToggle={(id) => toggleOutlineBranch(active.id, id)}
+                  onCollapseAll={() =>
+                    collapseAllOutlineBranches(active.id, activeOutline ?? [])
+                  }
+                  onNavigate={(heading) =>
+                    navigateToOutlineHeading(active.id, heading)
+                  }
+                  onClose={() => setOutlineOpen(false)}
+                />
+              </aside>
+            </div>
+          </>
+        )}
       </section>
       </div>
 

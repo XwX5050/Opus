@@ -93,6 +93,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "新建" })).toBeVisible();
     expect(screen.getByRole("button", { name: "打开文件" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开大纲" })).not.toBeInTheDocument();
   });
 
   it("inserts image files dropped on the window into the active editor", async () => {
@@ -161,6 +162,150 @@ describe("AppShell", () => {
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(editor()).toHaveAttribute("contenteditable", "true");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
+  });
+
+  it("places a launch-collapsed outline toggle after the view-mode control", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha\n## Child")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+          outline: { width: 340 },
+        },
+      },
+    );
+    render(<AppShell port={port} fileActionsInHeader={false} />);
+
+    const toggle = await screen.findByRole("button", { name: "展开大纲" });
+    const mode = screen.getByRole("button", { name: "编辑模式" });
+    expect(mode.nextElementSibling).toBe(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", "app-outline");
+
+    const outline = document.getElementById("app-outline");
+    expect(outline).not.toBeNull();
+    expect(outline).toHaveAttribute("aria-hidden", "true");
+    expect(outline).toHaveAttribute("inert");
+    expect(outline).toHaveStyle({ width: "340px" });
+    expect(outline?.parentElement).toHaveStyle({ width: "0px" });
+
+    await userEvent.click(toggle);
+    expect(screen.getByRole("complementary", { name: "大纲侧栏" })).toBeVisible();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(outline?.parentElement).toHaveStyle({ width: "340px" });
+
+    await userEvent.click(screen.getByRole("button", { name: "收起右侧栏" }));
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("app-outline")).toBe(outline);
+    expect(outline).toHaveAttribute("inert");
+  });
+
+  it("resizes the outline from its left edge and persists the clamped width", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await user.click(await screen.findByRole("button", { name: "展开大纲" }));
+    const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
+    expect(outline).toHaveStyle({ width: "300px" });
+
+    const resizer = screen.getByRole("separator", { name: "调整大纲宽度" });
+    fireEvent.pointerDown(resizer, { pointerId: 2, button: 0, clientX: 1000 });
+    expect(document.body).toHaveClass("outline-resizing");
+    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 950 });
+    expect(outline).toHaveStyle({ width: "350px" });
+    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 0 });
+    expect(outline).toHaveStyle({ width: "480px" });
+    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 2000 });
+    expect(outline).toHaveStyle({ width: "200px" });
+    fireEvent.pointerUp(resizer, { pointerId: 2 });
+    expect(document.body).not.toHaveClass("outline-resizing");
+
+    await waitFor(() => expect(port.session?.outline).toEqual({ width: 200 }));
+
+    fireEvent.keyDown(resizer, { key: "ArrowLeft" });
+    expect(outline).toHaveStyle({ width: "216px" });
+    await waitFor(() => expect(port.session?.outline).toEqual({ width: 216 }));
+
+    fireEvent.keyDown(resizer, { key: "ArrowRight" });
+    expect(outline).toHaveStyle({ width: "200px" });
+  });
+
+  it("keeps the outline open and branch state independent across tabs", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/a.md", file("/notes/a.md", "# Alpha\n## Alpha child")],
+        ["/notes/b.md", file("/notes/b.md", "# Beta\n## Beta child")],
+      ]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md", "/notes/b.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await user.click(await screen.findByRole("button", { name: "展开大纲" }));
+    await screen.findByRole("treeitem", { name: "Alpha child" });
+
+    await user.click(screen.getByRole("button", { name: "收起 Alpha" }));
+    expect(screen.queryByRole("treeitem", { name: "Alpha child" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /b\.md/ }));
+    expect(screen.getByRole("button", { name: "收起大纲" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await screen.findByRole("treeitem", { name: "Beta child" });
+
+    await user.click(screen.getByRole("tab", { name: /a\.md/ }));
+    await screen.findByRole("treeitem", { name: "Alpha" });
+    expect(screen.queryByRole("treeitem", { name: "Alpha child" })).not.toBeInTheDocument();
+  });
+
+  it("prunes collapsed heading IDs after live outline changes", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        port={
+          new InspectablePort([
+            file("/notes/a.md", "# Alpha\n## Child"),
+          ])
+        }
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开大纲" }));
+    await screen.findByRole("treeitem", { name: "Child" });
+    await user.click(screen.getByRole("button", { name: "收起 Alpha" }));
+
+    act(() => replaceEditorText("# Alpha"));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "全部折叠" })).toBeDisabled();
+      expect(
+        screen.queryByRole("button", { name: "展开 Alpha" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "收起 Alpha" }),
+      ).not.toBeInTheDocument();
+    });
+    act(() => replaceEditorText("# Alpha\n## Child"));
+    await screen.findByRole("treeitem", { name: "Child" });
   });
 
   it("reading mode renders fully without revealing markers and rejects edits", async () => {

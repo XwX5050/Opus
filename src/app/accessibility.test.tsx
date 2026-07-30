@@ -346,6 +346,45 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
+  it("mirrors the full-height animated sidebar treatment for the outline", () => {
+    expect(appCss).toMatch(
+      /\.outline-rail\s*\{[^}]*height:\s*100%;[^}]*transition:\s*width var\(--transition-sidebar\),\s*opacity var\(--transition-fast\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.outline-rail\[data-collapsed="true"\]\s*\{[^}]*opacity:\s*0;[^}]*visibility:\s*hidden;/s,
+    );
+    expect(appCss).toMatch(
+      /\.outline-sidebar\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;[^}]*border-left:\s*1px solid var\(--divider\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.outline-content\s*\{[^}]*flex:\s*1;[^}]*overflow-y:\s*auto;/s,
+    );
+  });
+
+  it("keeps outline controls compact, nested, and visibly animated", () => {
+    expect(appCss).toMatch(
+      /\.outline-icon-button\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;/s,
+    );
+    expect(appCss).toMatch(
+      /\.outline-tree-group\s*\{[^}]*padding-left:\s*var\(--space-4\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.outline-disclosure span\s*\{[^}]*transform:\s*rotate\(0deg\);[^}]*transition:\s*transform var\(--transition-fast\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.outline-disclosure span\[data-expanded="true"\]\s*\{[^}]*transform:\s*rotate\(90deg\);/s,
+    );
+  });
+
+  it("uses a mirrored left-edge resize target for the outline", () => {
+    expect(appCss).toMatch(
+      /\.outline-resizer\s*\{[^}]*width:\s*6px;[^}]*margin-left:\s*-3px;[^}]*margin-right:\s*-3px;[^}]*cursor:\s*col-resize;/s,
+    );
+    expect(appCss).toMatch(
+      /body\.outline-resizing \.outline-rail\s*\{[^}]*transition:\s*none;/s,
+    );
+  });
+
   it("uses the text-selection color to highlight reading mode", () => {
     expect(appCss).toMatch(
       /\.app-header \.view-mode-toggle\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,

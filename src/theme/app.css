@@ -410,6 +410,214 @@ body.sidebar-resizing * {
   cursor: col-resize !important;
 }
 
+/* ---------- Right outline sidebar ---------- */
+
+.outline-rail {
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+  opacity: 1;
+  transition: width var(--transition-sidebar), opacity var(--transition-fast);
+}
+
+.outline-rail[data-collapsed="true"] {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.outline-sidebar {
+  /* Width comes from inline style (draggable, clamped 200–480px). */
+  flex-shrink: 0;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--divider);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.outline-toolbar {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--divider);
+}
+
+.outline-toolbar h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-left: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size);
+  font-weight: 600;
+}
+
+.outline-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: var(--radius-medium);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.outline-icon-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.outline-icon-button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.outline-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+}
+
+.outline-message {
+  margin: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+}
+
+.outline-tree,
+.outline-tree-group {
+  list-style: none;
+  margin: 0;
+}
+
+.outline-tree {
+  padding: 0;
+}
+
+.outline-tree-group {
+  padding-left: var(--space-4);
+}
+
+.outline-tree-node {
+  min-width: 0;
+}
+
+.outline-tree-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-medium);
+}
+
+.outline-tree-row:hover {
+  background: var(--surface-hover);
+}
+
+.outline-disclosure,
+.outline-disclosure-spacer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 30px;
+}
+
+.outline-disclosure {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.outline-disclosure:hover:not(:disabled),
+.outline-disclosure:active:not(:disabled) {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.outline-disclosure span {
+  display: inline-flex;
+  transform: rotate(0deg);
+  transition: transform var(--transition-fast);
+}
+
+.outline-disclosure span[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.outline-heading-button {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--space-2) 0 0;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-heading-button:hover:not(:disabled),
+.outline-heading-button:active:not(:disabled) {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+/* Mirrored counterpart of .sidebar-resizer: it sits on the outline's
+   left edge, so dragging left increases the panel width. */
+.outline-resizer {
+  flex-shrink: 0;
+  width: 6px;
+  margin-left: -3px;
+  margin-right: -3px;
+  cursor: col-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 1;
+}
+
+.outline-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+
+.outline-resizer:hover::after,
+body.outline-resizing .outline-resizer::after {
+  background: var(--accent);
+}
+
+body.outline-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.outline-resizing .outline-rail {
+  transition: none;
+}
+
+body.outline-resizing * {
+  cursor: col-resize !important;
+}
+
 .editor-area {
   flex: 1;
   min-width: 0;
@@ -907,6 +1115,8 @@ body.sidebar-resizing * {
 .app-header button,
 .sidebar-section-header,
 .sidebar-header button,
+.outline-icon-button,
+.outline-heading-button,
 .recent-list button,
 .perf-banner button {
   transition: background var(--transition-fast), color var(--transition-fast);
