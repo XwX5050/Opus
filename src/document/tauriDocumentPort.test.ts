@@ -670,6 +670,41 @@ describe("tauri document port session, window geometry, and close requests", () 
     });
   });
 
+  it("normalizes the persisted outline width without accepting open state", async () => {
+    const base = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+    };
+    storeMocks.values.set("session", {
+      ...base,
+      outline: { width: 40, open: true },
+    });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      ...base,
+      outline: { width: 200 },
+    });
+
+    storeMocks.values.set("session", {
+      ...base,
+      outline: { width: 9999 },
+    });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      ...base,
+      outline: { width: 480 },
+    });
+
+    storeMocks.values.set("session", {
+      ...base,
+      outline: { width: "wide" },
+    });
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      ...base,
+      outline: { width: 300 },
+    });
+  });
+
   it("flushes on close request before destroying the window", async () => {
     const port = createTauriDocumentPort();
     const stop = await port.onCloseRequested(async () => {

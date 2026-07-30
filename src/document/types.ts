@@ -157,6 +157,30 @@ export const normalizeSidebarPreferences = (value: unknown): SidebarPreferences 
   };
 };
 
+/** Only the outline width survives a restart; visibility remains runtime-only. */
+export interface OutlinePreferences {
+  readonly width: number;
+}
+
+export const DEFAULT_OUTLINE_PREFERENCES: OutlinePreferences = {
+  width: 300,
+};
+
+export const normalizeOutlinePreferences = (
+  value: unknown,
+): OutlinePreferences => {
+  if (typeof value !== "object" || value === null) {
+    return { ...DEFAULT_OUTLINE_PREFERENCES };
+  }
+  const width = (value as Record<string, unknown>).width;
+  return {
+    width:
+      typeof width === "number" && Number.isFinite(width)
+        ? clampSidebarWidth(width)
+        : DEFAULT_OUTLINE_PREFERENCES.width,
+  };
+};
+
 /**
  * Session metadata persisted separately from recovery drafts: only paths,
  * ordering and UI preferences live here, never document content (dirty
@@ -171,4 +195,5 @@ export interface PersistedSession {
   readonly theme?: ThemePreference;
   readonly editorPreferences?: EditorPreferences;
   readonly sidebar?: SidebarPreferences;
+  readonly outline?: OutlinePreferences;
 }

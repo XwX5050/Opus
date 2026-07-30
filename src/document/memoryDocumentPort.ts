@@ -60,6 +60,7 @@ const cloneSession = (session: PersistedSession): PersistedSession => ({
     ? { editorPreferences: { ...session.editorPreferences } }
     : {}),
   ...(session.sidebar !== undefined ? { sidebar: { ...session.sidebar } } : {}),
+  ...(session.outline !== undefined ? { outline: { ...session.outline } } : {}),
 });
 const cloneImageSave = (save: MemoryClipboardImageSave): MemoryClipboardImageSave => ({
   bytes: new Uint8Array(save.bytes),

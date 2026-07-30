@@ -125,6 +125,7 @@ describe("MemoryDocumentPort session and close requests", () => {
       openPaths: ["/notes/a.md"],
       activePath: "/notes/a.md",
       workspacePath: null,
+      outline: { width: 336 },
     };
     await port.saveSession(session);
 
@@ -132,6 +133,7 @@ describe("MemoryDocumentPort session and close requests", () => {
     expect(loaded).toEqual(session);
     expect(loaded).not.toBe(session);
     expect(loaded?.recent).not.toBe(session.recent);
+    expect(loaded?.outline).not.toBe(session.outline);
   });
 
   it("serves a pre-seeded session as a restart leftover", async () => {

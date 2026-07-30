@@ -1235,6 +1235,31 @@ describe("useAppController sessions and recent items", () => {
     hook.unmount();
   });
 
+  it("restores and persists the outline width without an open-state preference", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      session: {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        outline: { width: 348 },
+      },
+    });
+    const hook = renderHook(() => useAppController(port));
+
+    await waitFor(() =>
+      expect(hook.result.current.outlinePreferences.width).toBe(348),
+    );
+    act(() => {
+      hook.result.current.setOutlinePreferences({ width: 372 });
+    });
+    await waitFor(() =>
+      expect(port.session?.outline).toEqual({ width: 372 }),
+    );
+    expect(Object.keys(port.session?.outline ?? {})).toEqual(["width"]);
+    hook.unmount();
+  });
+
   it("skips unrestorable session files with a non-blocking message", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),

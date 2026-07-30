@@ -8,12 +8,15 @@ import {
   type DocumentAction,
 } from "../document/documentReducer";
 import {
+  DEFAULT_OUTLINE_PREFERENCES,
   DEFAULT_SIDEBAR_PREFERENCES,
+  normalizeOutlinePreferences,
   normalizeSidebarPreferences,
   type DiskEvent,
   type DocumentSnapshot,
   type DocumentState,
   type OpenedFile,
+  type OutlinePreferences,
   type PersistedSession,
   type RecentItem,
   type RecoveryDraftInfo,
@@ -106,6 +109,8 @@ export function useAppController(
     useState<EditorPreferences>(DEFAULT_EDITOR_PREFERENCES);
   const [sidebarPreferences, setSidebarPreferences] =
     useState<SidebarPreferences>(DEFAULT_SIDEBAR_PREFERENCES);
+  const [outlinePreferences, setOutlinePreferences] =
+    useState<OutlinePreferences>(DEFAULT_OUTLINE_PREFERENCES);
   // Per-tab view-mode memory: only non-default modes are stored, so a tab
   // without an entry (including every new tab) is in "editing". Entries are
   // pruned as soon as their tab closes — a closed-and-reopened document
@@ -794,6 +799,7 @@ export function useAppController(
           normalizeEditorPreferences(session.editorPreferences),
         );
         setSidebarPreferences(normalizeSidebarPreferences(session.sidebar));
+        setOutlinePreferences(normalizeOutlinePreferences(session.outline));
       }
 
       let drafts: ReadonlyArray<RecoveryDraftInfo> = [];
@@ -855,6 +861,7 @@ export function useAppController(
       theme,
       editorPreferences,
       sidebar: sidebarPreferences,
+      outline: outlinePreferences,
     }).catch(() => {
       // Session persistence is best-effort.
     });
@@ -867,6 +874,7 @@ export function useAppController(
     theme,
     editorPreferences,
     sidebarPreferences,
+    outlinePreferences,
   ]);
 
   const dismissSaveError = useCallback(() => setSaveError(null), []);
@@ -977,6 +985,8 @@ export function useAppController(
     setEditorPreferences,
     sidebarPreferences,
     setSidebarPreferences,
+    outlinePreferences,
+    setOutlinePreferences,
     viewModes,
     viewModeOf,
     setViewMode,
