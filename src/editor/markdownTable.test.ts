@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   decodeTableCell,
   extractMarkdownTables,
+  findCurrentTable,
   serializeTableCell,
+  tableCells,
 } from "./markdownTable";
 
 const parse = (doc: string) =>
@@ -199,5 +201,50 @@ describe("markdownTable", () => {
       to: doc.indexOf("| \t |") + "| \t ".length,
       source: "",
     });
+  });
+
+  it("finds a table only while its exact source snapshot is current", () => {
+    const source = ["A | B", "--- | ---", "one | two"].join("\n");
+    const state = parse(`before\n\n${source}\n\nafter`);
+    const table = extractMarkdownTables(state)[0];
+
+    expect(findCurrentTable(state, table.from, table.source)).toEqual(table);
+    expect(findCurrentTable(state, table.from, `${table.source} `)).toBeNull();
+
+    const changed = state.update({
+      changes: {
+        from: table.from + table.source.indexOf("one"),
+        to: table.from + table.source.indexOf("one") + 3,
+        insert: "three",
+      },
+    }).state;
+    expect(findCurrentTable(changed, table.from, table.source)).toBeNull();
+  });
+
+  it("rejects an unchanged table snapshot at a stale position", () => {
+    const source = ["A | B", "--- | ---", "one | two"].join("\n");
+    const state = parse(source);
+    const moved = parse(`prefix\n${source}`);
+
+    expect(findCurrentTable(moved, 0, source)).toBeNull();
+    expect(findCurrentTable(state, 1, source)).toBeNull();
+  });
+
+  it("returns header then body cells in DOM index order", () => {
+    const table = extractMarkdownTables(parse([
+      "| A | B |",
+      "| --- | --- |",
+      "| one | two |",
+      "| three | four |",
+    ].join("\n")))[0];
+
+    expect(tableCells(table).map((cell) => cell.displayText)).toEqual([
+      "A",
+      "B",
+      "one",
+      "two",
+      "three",
+      "four",
+    ]);
   });
 });

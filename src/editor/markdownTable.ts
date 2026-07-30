@@ -185,3 +185,31 @@ export const extractMarkdownTables = (
   }
   return tables;
 };
+
+export const findCurrentTable = (
+  state: EditorState,
+  tableFrom: number,
+  expectedSource: string,
+): MarkdownTable | null => {
+  const tableTo = tableFrom + expectedSource.length;
+  if (
+    expectedSource.length === 0 ||
+    tableFrom < 0 ||
+    tableTo > state.doc.length ||
+    state.sliceDoc(tableFrom, tableTo) !== expectedSource
+  ) {
+    return null;
+  }
+
+  return extractMarkdownTables(state, [{ from: tableFrom, to: tableTo }])
+    .find((table) =>
+      table.from === tableFrom &&
+      table.to === tableTo &&
+      table.source === expectedSource
+    ) ?? null;
+};
+
+export const tableCells = (table: MarkdownTable): MarkdownTableCell[] => [
+  ...table.header,
+  ...table.rows.flat(),
+];

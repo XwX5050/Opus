@@ -1,6 +1,6 @@
-import { history } from "@codemirror/commands";
+import { history, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, WidgetType } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { afterEach, describe, expect, it } from "vitest";
@@ -45,6 +45,52 @@ const atomicRanges = (view: EditorView) => {
     });
   }
   return ranges;
+};
+
+const tableCell = (view: EditorView, index: number) => {
+  const cell = view.dom.querySelector<HTMLElement>(
+    `[data-cell-index="${index}"]`,
+  );
+  if (!cell) throw new Error(`Missing table cell ${index}`);
+  return cell;
+};
+
+const dispatchInput = (cell: HTMLElement) => {
+  cell.dispatchEvent(new InputEvent("input", {
+    bubbles: true,
+    inputType: "insertText",
+  }));
+};
+
+const selectCellContents = (cell: HTMLElement, collapseToEnd = false) => {
+  const selection = document.getSelection()!;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  if (collapseToEnd) range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
+const dispatchPaste = (
+  cell: HTMLElement,
+  plainText: string,
+  html: string,
+) => {
+  const event = new Event("paste", {
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      getData: (type: string) => {
+        if (type === "text/plain") return plainText;
+        if (type === "text/html") return html;
+        return "";
+      },
+    },
+  });
+  cell.dispatchEvent(event);
+  return event;
 };
 
 afterEach(() => {
@@ -304,6 +350,257 @@ describe("tableWidgetsExtension", () => {
     expect(view.dom.querySelector("table.md-table")?.textContent)
       .toBe("CDthreefour");
     expect(view.state.doc.toString()).toBe(updated);
+  });
+
+  it("edits only one body cell source range and preserves surrounding whitespace", () => {
+    const doc = [
+      "| Left | Right |",
+      "| --- | --- |",
+      "|  old \t| \tkeep  |",
+    ].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+
+    cell.textContent = "new|value";
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(doc.replace(
+      "old",
+      String.raw`new\|value`,
+    ));
+  });
+
+  it("inserts edited text into an empty zero-width cell", () => {
+    const doc = ["| A | B |", "| --- | --- |", "|  | two |"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+
+    cell.textContent = "one";
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(
+      ["| A | B |", "| --- | --- |", "|  one| two |"].join("\n"),
+    );
+  });
+
+  it("records a direct cell edit as one undoable transaction", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+
+    cell.textContent = "new";
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toContain("new | keep");
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undo(view)).toBe(false);
+  });
+
+  it("rejects an event from a detached stale widget after an external change", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const staleCell = tableCell(view, 2);
+    const replacement = [
+      "C | D | E",
+      "--- | --- | ---",
+      "fresh | value | third",
+    ].join("\n");
+
+    view.dispatch({
+      changes: { from: 0, to: doc.length, insert: replacement },
+    });
+    staleCell.textContent = "must-not-land";
+    dispatchInput(staleCell);
+
+    expect(staleCell.isConnected).toBe(false);
+    expect(view.state.doc.toString()).toBe(replacement);
+  });
+
+  it("pastes text/plain as literal single-line text without creating elements", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    selectCellContents(cell);
+
+    const event = dispatchPaste(
+      cell,
+      "<b>x|y</b>\r\nnext",
+      "<img src=x onerror=alert(1)>",
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(cell.textContent).toBe("<b>x|y</b> next");
+    expect(cell.querySelector("*")).toBeNull();
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", String.raw`<b>x\|y</b> next | keep`].join("\n"),
+    );
+  });
+
+  it("commits Chinese composition exactly once at compositionend", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    let docChanges = 0;
+    const view = createView(doc, true, EditorView.updateListener.of((update) => {
+      if (update.docChanged) docChanges += 1;
+    }));
+    const cell = tableCell(view, 2);
+
+    cell.dispatchEvent(new CompositionEvent("compositionstart", {
+      bubbles: true,
+    }));
+    cell.textContent = "中";
+    dispatchInput(cell);
+    expect(view.state.doc.toString()).toBe(doc);
+
+    cell.textContent = "中文";
+    cell.dispatchEvent(new CompositionEvent("compositionend", {
+      bubbles: true,
+      data: "中文",
+    }));
+
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "中文 | keep"].join("\n"),
+    );
+    expect(tableCell(view, 2).textContent).toBe("中文");
+    expect(docChanges).toBe(1);
+  });
+
+  it("preserves an active composition across an unrelated table edit", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    cell.dispatchEvent(new CompositionEvent("compositionstart", {
+      bubbles: true,
+    }));
+    cell.textContent = "中";
+
+    const keepFrom = view.state.doc.toString().indexOf("keep");
+    view.dispatch({
+      changes: {
+        from: keepFrom,
+        to: keepFrom + "keep".length,
+        insert: "other",
+      },
+    });
+
+    expect(tableCell(view, 2)).toBe(cell);
+    expect(cell.textContent).toBe("中");
+    cell.textContent = "中文";
+    cell.dispatchEvent(new CompositionEvent("compositionend", {
+      bubbles: true,
+      data: "中文",
+    }));
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "中文 | other"].join("\n"),
+    );
+  });
+
+  it("normalizes a fallback DOM newline without leaving a multiline cell", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    cell.textContent = "new\nline";
+    const selection = document.getSelection()!;
+    const range = document.createRange();
+    range.setStart(cell.firstChild!, "new\nline".length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "new line | keep"].join("\n"),
+    );
+    expect(cell.textContent).toBe("new line");
+    expect(cell.textContent).not.toContain("\n");
+    expect(selection.anchorOffset).toBe("new line".length);
+  });
+
+  it("keeps the active cell node, focus, and caret after committing", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    cell.textContent = "new";
+    const text = cell.firstChild!;
+    const selection = document.getSelection()!;
+    const range = document.createRange();
+    range.setStart(text, 2);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    dispatchInput(cell);
+
+    expect(tableCell(view, 2)).toBe(cell);
+    expect(document.activeElement).toBe(cell);
+    expect(selection.anchorNode).toBe(text);
+    expect(selection.anchorOffset).toBe(2);
+  });
+
+  it("turns beforeinput line breaks into a single committed space", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    const selection = document.getSelection()!;
+    const range = document.createRange();
+    range.setStart(cell.firstChild!, 1);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const event = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+    });
+
+    cell.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(cell.textContent).toBe("o ld");
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "o ld | keep"].join("\n"),
+    );
+  });
+
+  it("never mutates when the widget option or editor state is read-only", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const optionReadOnly = createView(doc, false);
+    const stateReadOnly = createView(doc, true, EditorState.readOnly.of(true));
+
+    for (const view of [optionReadOnly, stateReadOnly]) {
+      const cell = tableCell(view, 2);
+      cell.textContent = "new";
+      dispatchInput(cell);
+      expect(view.state.doc.toString()).toBe(doc);
+    }
+  });
+
+  it("removes editability when the editor becomes read-only dynamically", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const readOnly = new Compartment();
+    const view = createView(
+      doc,
+      true,
+      readOnly.of([]),
+    );
+
+    expect(view.state.readOnly).toBe(false);
+    expect(tableCell(view, 2).contentEditable).toBe("true");
+    view.dispatch({
+      effects: readOnly.reconfigure(EditorState.readOnly.of(true)),
+    });
+
+    const cell = tableCell(view, 2);
+    expect(cell).not.toHaveAttribute("contenteditable");
+    expect(cell.contentEditable).not.toBe("true");
+    expect(cell).not.toHaveAttribute("role");
+    expect(cell.tabIndex).toBe(-1);
+    expect(view.dom.querySelector("table")).not.toHaveAttribute("role");
   });
 
   it("does not rebuild a table widget for selection-only updates", () => {
