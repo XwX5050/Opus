@@ -15,6 +15,15 @@ const parse = (doc: string) =>
     extensions: [markdown({ extensions: [GFM] })],
   });
 
+const expectLosslessCellRanges = (state: EditorState) => {
+  for (const table of extractMarkdownTables(state)) {
+    for (const cell of [...table.header, ...table.rows.flat()]) {
+      expect(cell.from).toBeLessThanOrEqual(cell.to);
+      expect(state.sliceDoc(cell.from, cell.to)).toBe(cell.source);
+    }
+  }
+};
+
 describe("markdownTable", () => {
   it("extracts an outer-pipe GFM table losslessly", () => {
     const doc = [
@@ -82,6 +91,24 @@ describe("markdownTable", () => {
       { from: 10, to: 10, source: "" },
     ]);
     expect(table.rows[0].map((cell) => cell.displayText)).toEqual(["", "two", ""]);
+  });
+
+  it("falls back for a lone-pipe body row that the GFM parser accepts", () => {
+    expect(extractMarkdownTables(parse(["| A |", "| --- |", "|"].join("\n")))).toEqual([]);
+  });
+
+  it.each(["||", "| |"])("keeps %s as a valid one-empty-cell body row", (body) => {
+    const state = parse(["| A |", "| --- |", body].join("\n"));
+    const cell = extractMarkdownTables(state)[0].rows[0][0];
+
+    expect(cell).toMatchObject({ source: "", displayText: "" });
+    expect(cell.from).toBeLessThanOrEqual(cell.to);
+    expect(state.sliceDoc(cell.from, cell.to)).toBe("");
+  });
+
+  it("keeps every emitted cell range ordered and lossless", () => {
+    expectLosslessCellRanges(parse(["| A | B |", "| --- | --- |", "| one | |"].join("\n")));
+    expectLosslessCellRanges(parse(["> A | B", "> --- | ---", "> one | two"].join("\n")));
   });
 
   it("round-trips backslash runs before literal pipes", () => {

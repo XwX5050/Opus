@@ -98,23 +98,25 @@ const cellsForLine = (state: EditorState, from: number, to: number): MarkdownTab
   const hasTrailingPipe = lastContent > 0 && pipes.includes(lastContent - 1);
   const start = hasLeadingPipe ? firstContent + 1 : 0;
   const end = hasTrailingPipe ? lastContent - 1 : line.length;
+  if (start > end) return [];
   const separators = pipes.filter((pipe) => pipe >= start && pipe < end);
   const boundaries = [start, ...separators.map((pipe) => pipe + 1)];
   const ends = [...separators, end];
 
-  return boundaries.map((cellStart, index) => {
+  return boundaries.flatMap((cellStart, index) => {
     const cellEnd = ends[index];
+    if (cellStart > cellEnd) return [];
     let trimmedStart = cellStart;
     let trimmedEnd = cellEnd;
     while (trimmedStart < trimmedEnd && whitespace(line[trimmedStart])) trimmedStart += 1;
     while (trimmedEnd > trimmedStart && whitespace(line[trimmedEnd - 1])) trimmedEnd -= 1;
     const source = line.slice(trimmedStart, trimmedEnd);
-    return {
+    return [{
       from: from + trimmedStart,
       to: from + trimmedEnd,
       source,
       displayText: decodeTableCell(source),
-    };
+    }];
   });
 };
 
