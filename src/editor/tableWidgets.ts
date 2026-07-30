@@ -25,12 +25,19 @@ interface TableWidgetContext {
   readonly view: EditorView;
   table: MarkdownTable;
   editable: boolean;
-  readonly composing: WeakSet<HTMLElement>;
+  ownedCells: readonly HTMLElement[];
+  readonly composing: Map<HTMLElement, CompositionSnapshot>;
+}
+
+interface CompositionSnapshot {
+  readonly index: number;
+  readonly source: string;
 }
 
 interface ResolvedCell {
   readonly context: TableWidgetContext;
   readonly element: HTMLElement;
+  readonly index: number;
   readonly model: MarkdownTableCell;
 }
 
@@ -39,62 +46,143 @@ const widgetContexts = new WeakMap<HTMLElement, TableWidgetContext>();
 const normalizeLineBreaks = (text: string) =>
   text.replace(/\r\n|\r|\n/g, " ");
 
-const textOffsetWithin = (
+const blockElements = new Set([
+  "ADDRESS",
+  "ARTICLE",
+  "ASIDE",
+  "BLOCKQUOTE",
+  "DIV",
+  "DL",
+  "FIELDSET",
+  "FIGCAPTION",
+  "FIGURE",
+  "FOOTER",
+  "FORM",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "HEADER",
+  "HR",
+  "LI",
+  "MAIN",
+  "NAV",
+  "OL",
+  "P",
+  "PRE",
+  "SECTION",
+  "UL",
+]);
+
+interface DOMPoint {
+  readonly node: Node;
+  readonly offset: number;
+}
+
+const plainCellText = (
   cell: HTMLElement,
-  node: Node,
-  offset: number,
+  points: readonly DOMPoint[] = [],
 ) => {
-  const prefix = document.createRange();
-  prefix.selectNodeContents(cell);
-  prefix.setEnd(node, offset);
-  return prefix.toString().length;
+  let text = "";
+  const pointOffsets = points.map<number | null>(() => null);
+
+  const recordPoint = (node: Node, offset: number) => {
+    points.forEach((point, index) => {
+      if (
+        pointOffsets[index] === null &&
+        point.node === node &&
+        point.offset === offset
+      ) {
+        pointOffsets[index] = text.length;
+      }
+    });
+  };
+
+  const walkChildren = (parent: Node) => {
+    let previousWasBlock = false;
+    [...parent.childNodes].forEach((child, index) => {
+      recordPoint(parent, index);
+      const currentIsBlock = child instanceof Element &&
+        blockElements.has(child.tagName);
+      if (
+        (previousWasBlock || currentIsBlock) &&
+        text.length > 0 &&
+        !/\s$/.test(text)
+      ) {
+        text += " ";
+      }
+      walkNode(child);
+      previousWasBlock = currentIsBlock;
+    });
+    recordPoint(parent, parent.childNodes.length);
+  };
+
+  const walkNode = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const data = node.nodeValue ?? "";
+      points.forEach((point, index) => {
+        if (pointOffsets[index] === null && point.node === node) {
+          pointOffsets[index] = text.length +
+            normalizeLineBreaks(data.slice(0, point.offset)).length;
+        }
+      });
+      text += normalizeLineBreaks(data);
+    } else if (node instanceof HTMLBRElement) {
+      text += " ";
+    } else {
+      walkChildren(node);
+    }
+  };
+
+  walkChildren(cell);
+  return { text, pointOffsets };
 };
 
-const normalizeCellLineBreaks = (cell: HTMLElement) => {
-  const text = cell.textContent ?? "";
-  const normalized = normalizeLineBreaks(text);
-  if (normalized === text) return normalized;
-
+const normalizeCellContent = (cell: HTMLElement) => {
   const selection = document.getSelection();
   const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
   const selectionInsideCell = selectedRange !== null &&
     cell.contains(selectedRange.startContainer) &&
     cell.contains(selectedRange.endContainer);
-  const startOffset = selectionInsideCell
-    ? textOffsetWithin(
-        cell,
-        selectedRange.startContainer,
-        selectedRange.startOffset,
-      )
-    : null;
-  const endOffset = selectionInsideCell
-    ? textOffsetWithin(
-        cell,
-        selectedRange.endContainer,
-        selectedRange.endOffset,
-      )
-    : null;
+  const points = selectionInsideCell
+    ? [
+        {
+          node: selectedRange.startContainer,
+          offset: selectedRange.startOffset,
+        },
+        {
+          node: selectedRange.endContainer,
+          offset: selectedRange.endOffset,
+        },
+      ]
+    : [];
+  const { text, pointOffsets } = plainCellText(cell, points);
+  if (
+    cell.childNodes.length === 1 &&
+    cell.firstChild?.nodeType === Node.TEXT_NODE &&
+    cell.firstChild.nodeValue === text
+  ) {
+    return text;
+  }
 
-  const textNode = document.createTextNode(normalized);
+  const textNode = document.createTextNode(text);
   cell.replaceChildren(textNode);
   if (
     selection &&
-    startOffset !== null &&
-    endOffset !== null
+    pointOffsets[0] !== null &&
+    pointOffsets[0] !== undefined &&
+    pointOffsets[1] !== null &&
+    pointOffsets[1] !== undefined
   ) {
     const range = document.createRange();
-    range.setStart(
-      textNode,
-      normalizeLineBreaks(text.slice(0, startOffset)).length,
-    );
-    range.setEnd(
-      textNode,
-      normalizeLineBreaks(text.slice(0, endOffset)).length,
-    );
+    range.setStart(textNode, Math.min(pointOffsets[0], text.length));
+    range.setEnd(textNode, Math.min(pointOffsets[1], text.length));
     selection.removeAllRanges();
     selection.addRange(range);
   }
-  return normalized;
+  return text;
 };
 
 const cellElementForEvent = (
@@ -110,7 +198,11 @@ const cellElementForEvent = (
   const cell = element?.closest<HTMLElement>(
     "th[data-cell-index], td[data-cell-index]",
   ) ?? null;
-  return cell && cell.closest(".md-table-scroll") === root ? cell : null;
+  return (
+    cell &&
+    event.target === cell &&
+    cell.closest(".md-table-scroll") === root
+  ) ? cell : null;
 };
 
 const resolveCurrentCell = (
@@ -120,6 +212,7 @@ const resolveCurrentCell = (
   const context = widgetContexts.get(root);
   const element = cellElementForEvent(root, event);
   if (!context || !element) return null;
+  const ownedIndex = context.ownedCells.indexOf(element);
 
   const currentTable = findCurrentTable(
     context.view.state,
@@ -131,28 +224,29 @@ const resolveCurrentCell = (
     !context.editable ||
     context.view.state.readOnly ||
     !context.view.dom.contains(root) ||
+    ownedIndex < 0 ||
+    element.dataset.cellIndex !== String(ownedIndex) ||
     element.dataset.tableFrom !== String(currentTable.from)
   ) {
     return null;
   }
 
-  const indexSource = element.dataset.cellIndex;
-  const index = indexSource === undefined ? Number.NaN : Number(indexSource);
   const cells = tableCells(currentTable);
-  if (!Number.isInteger(index) || index < 0 || index >= cells.length) {
+  if (ownedIndex >= cells.length) {
     return null;
   }
 
   return {
     context,
     element,
-    model: cells[index],
+    index: ownedIndex,
+    model: cells[ownedIndex],
   };
 };
 
 const commitCell = (resolved: ResolvedCell) => {
   const insert = serializeTableCell(
-    normalizeCellLineBreaks(resolved.element),
+    normalizeCellContent(resolved.element),
   );
   if (insert === resolved.model.source) return;
   resolved.context.view.dispatch({
@@ -222,13 +316,33 @@ const handlePaste = (root: HTMLElement, event: ClipboardEvent) => {
 
 const handleCompositionStart = (root: HTMLElement, event: CompositionEvent) => {
   const resolved = resolveCurrentCell(root, event);
-  if (resolved) resolved.context.composing.add(resolved.element);
+  if (resolved) {
+    resolved.context.composing.set(resolved.element, {
+      index: resolved.index,
+      source: resolved.model.source,
+    });
+  }
 };
 
 const handleCompositionEnd = (root: HTMLElement, event: CompositionEvent) => {
+  const context = widgetContexts.get(root);
+  const element = cellElementForEvent(root, event);
+  if (!context || !element) return;
+  const snapshot = context.composing.get(element);
+  if (!snapshot) return;
+  context.composing.delete(element);
+
   const resolved = resolveCurrentCell(root, event);
-  if (!resolved || !resolved.context.composing.has(resolved.element)) return;
-  resolved.context.composing.delete(resolved.element);
+  if (!resolved) return;
+  if (
+    resolved.index !== snapshot.index ||
+    resolved.model.source !== snapshot.source
+  ) {
+    resolved.element.replaceChildren(
+      document.createTextNode(resolved.model.displayText),
+    );
+    return;
+  }
   commitCell(resolved);
 };
 
@@ -253,9 +367,10 @@ const addDelegatedListeners = (root: HTMLElement) => {
 const setCellEditability = (
   element: HTMLElement,
   tagName: "th" | "td",
-  editable: boolean,
+  editableOption: boolean,
+  readOnly: boolean,
 ) => {
-  if (editable) {
+  if (editableOption && !readOnly) {
     element.setAttribute(
       "role",
       tagName === "th" ? "columnheader" : "gridcell",
@@ -265,11 +380,16 @@ const setCellEditability = (
     element.tabIndex = 0;
   } else {
     element.removeAttribute("role");
-    element.contentEditable = "inherit";
     element.spellcheck = false;
-    element.removeAttribute("contenteditable");
     element.removeAttribute("spellcheck");
     element.removeAttribute("tabindex");
+    if (editableOption) {
+      element.contentEditable = "false";
+      element.setAttribute("contenteditable", "false");
+    } else {
+      element.contentEditable = "inherit";
+      element.removeAttribute("contenteditable");
+    }
   }
 };
 
@@ -299,13 +419,14 @@ export class MarkdownTableWidget extends WidgetType {
     const tableElement = document.createElement("table");
     tableElement.className = "md-table";
     tableElement.setAttribute("aria-label", "Markdown 表格");
-    const editable = this.editable && !this.readOnly && !view?.state.readOnly;
-    if (editable) tableElement.setAttribute("role", "grid");
+    const readOnly = this.readOnly || view?.state.readOnly === true;
+    if (this.editable && !readOnly) tableElement.setAttribute("role", "grid");
     if (this.table.rows.length === 0) {
       tableElement.classList.add("md-table-no-body");
     }
 
     let cellIndex = 0;
+    const ownedCells: HTMLElement[] = [];
     const appendCell = (
       row: HTMLTableRowElement,
       tagName: "th" | "td",
@@ -316,9 +437,10 @@ export class MarkdownTableWidget extends WidgetType {
       element.dataset.tableFrom = String(this.table.from);
       element.dataset.cellIndex = String(cellIndex);
       element.dataset.alignment = this.table.columns[columnIndex].alignment;
-      setCellEditability(element, tagName, editable);
+      setCellEditability(element, tagName, this.editable, readOnly);
       element.textContent = cell.displayText;
       row.append(element);
+      ownedCells.push(element);
       cellIndex += 1;
     };
 
@@ -345,7 +467,8 @@ export class MarkdownTableWidget extends WidgetType {
         view,
         table: this.table,
         editable: this.editable,
-        composing: new WeakSet(),
+        ownedCells,
+        composing: new Map(),
       });
       addDelegatedListeners(scroll);
     }
@@ -393,15 +516,19 @@ export class MarkdownTableWidget extends WidgetType {
     }
 
     const previous = widgetContexts.get(dom);
-    const previousCells = previous ? tableCells(previous.table) : [];
+    const readOnly = this.readOnly || view.state.readOnly;
+    const editable = this.editable && !readOnly;
+    const composing = editable
+      ? previous?.composing ?? new Map()
+      : new Map<HTMLElement, CompositionSnapshot>();
     widgetContexts.set(dom, {
       view,
       table: this.table,
       editable: this.editable,
-      composing: previous?.composing ?? new WeakSet(),
+      ownedCells: elements,
+      composing,
     });
 
-    const editable = this.editable && !this.readOnly && !view.state.readOnly;
     tableElement.setAttribute("aria-label", "Markdown 表格");
     tableElement.classList.toggle(
       "md-table-no-body",
@@ -419,14 +546,12 @@ export class MarkdownTableWidget extends WidgetType {
       element.dataset.tableFrom = String(this.table.from);
       element.dataset.cellIndex = String(index);
       element.dataset.alignment = this.table.columns[columnIndex].alignment;
-      setCellEditability(element, tagName, editable);
+      setCellEditability(element, tagName, this.editable, readOnly);
 
       const activeCellMatchesSource = document.activeElement === element &&
         element.textContent === cell.displayText;
-      const composingCellSourceIsUnchanged =
-        previous?.composing.has(element) === true &&
-        previousCells[index]?.source === cell.source;
-      if (!activeCellMatchesSource && !composingCellSourceIsUnchanged) {
+      const isComposing = composing.has(element);
+      if (!activeCellMatchesSource && !isComposing) {
         element.textContent = cell.displayText;
       }
     });

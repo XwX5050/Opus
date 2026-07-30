@@ -417,6 +417,18 @@ describe("tableWidgetsExtension", () => {
     expect(view.state.doc.toString()).toBe(replacement);
   });
 
+  it("rejects a valid-looking cell index tampered onto another owned cell", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.dataset.cellIndex = "3";
+    cell.textContent = "must-not-land";
+
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
   it("pastes text/plain as literal single-line text without creating elements", () => {
     const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
     const view = createView(doc);
@@ -496,6 +508,38 @@ describe("tableWidgetsExtension", () => {
     );
   });
 
+  it("rejects a composition when the same source cell changed externally", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    cell.dispatchEvent(new CompositionEvent("compositionstart", {
+      bubbles: true,
+    }));
+    cell.textContent = "候选";
+
+    const oldFrom = view.state.doc.toString().indexOf("old");
+    view.dispatch({
+      changes: {
+        from: oldFrom,
+        to: oldFrom + "old".length,
+        insert: "external",
+      },
+    });
+
+    expect(tableCell(view, 2)).toBe(cell);
+    expect(cell.textContent).toBe("候选");
+    cell.dispatchEvent(new CompositionEvent("compositionend", {
+      bubbles: true,
+      data: "候选",
+    }));
+
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "external | keep"].join("\n"),
+    );
+    expect(cell.textContent).toBe("external");
+  });
+
   it("normalizes a fallback DOM newline without leaving a multiline cell", () => {
     const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
     const view = createView(doc);
@@ -517,6 +561,43 @@ describe("tableWidgetsExtension", () => {
     expect(cell.textContent).toBe("new line");
     expect(cell.textContent).not.toContain("\n");
     expect(selection.anchorOffset).toBe("new line".length);
+  });
+
+  it("normalizes a visual BR to one plain-text space", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.replaceChildren(
+      document.createTextNode("new"),
+      document.createElement("br"),
+      document.createTextNode("line"),
+    );
+
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "new line | keep"].join("\n"),
+    );
+    expect(cell.childNodes).toHaveLength(1);
+    expect(cell.firstChild).toBeInstanceOf(Text);
+    expect(cell.textContent).toBe("new line");
+  });
+
+  it("preserves a space boundary around block children", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    const block = document.createElement("div");
+    block.textContent = "line";
+    cell.replaceChildren(document.createTextNode("new"), block);
+
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "new line | keep"].join("\n"),
+    );
+    expect(cell.childNodes).toHaveLength(1);
+    expect(cell.textContent).toBe("new line");
   });
 
   it("keeps the active cell node, focus, and caret after committing", () => {
@@ -596,11 +677,16 @@ describe("tableWidgetsExtension", () => {
     });
 
     const cell = tableCell(view, 2);
-    expect(cell).not.toHaveAttribute("contenteditable");
-    expect(cell.contentEditable).not.toBe("true");
+    expect(cell).toHaveAttribute("contenteditable", "false");
+    expect(cell.contentEditable).toBe("false");
+    expect(cell.isContentEditable).not.toBe(true);
     expect(cell).not.toHaveAttribute("role");
     expect(cell.tabIndex).toBe(-1);
     expect(view.dom.querySelector("table")).not.toHaveAttribute("role");
+
+    cell.textContent = "must-not-land";
+    dispatchInput(cell);
+    expect(view.state.doc.toString()).toBe(doc);
   });
 
   it("does not rebuild a table widget for selection-only updates", () => {
