@@ -26,8 +26,9 @@ export class MarkdownTableWidget extends WidgetType {
     super();
   }
 
-  eq(other: MarkdownTableWidget) {
+  eq(other: WidgetType) {
     return (
+      other instanceof MarkdownTableWidget &&
       other.table.from === this.table.from &&
       other.table.source === this.table.source &&
       other.editable === this.editable
@@ -40,8 +41,11 @@ export class MarkdownTableWidget extends WidgetType {
 
     const tableElement = document.createElement("table");
     tableElement.className = "md-table";
-    tableElement.setAttribute("role", "grid");
     tableElement.setAttribute("aria-label", "Markdown 表格");
+    if (this.editable) tableElement.setAttribute("role", "grid");
+    if (this.table.rows.length === 0) {
+      tableElement.classList.add("md-table-no-body");
+    }
 
     let cellIndex = 0;
     const appendCell = (
@@ -54,8 +58,11 @@ export class MarkdownTableWidget extends WidgetType {
       element.dataset.tableFrom = String(this.table.from);
       element.dataset.cellIndex = String(cellIndex);
       element.dataset.alignment = this.table.columns[columnIndex].alignment;
-      element.setAttribute("role", "gridcell");
       if (this.editable) {
+        element.setAttribute(
+          "role",
+          tagName === "th" ? "columnheader" : "gridcell",
+        );
         element.contentEditable = "true";
         element.spellcheck = true;
         element.tabIndex = 0;
@@ -180,7 +187,21 @@ export const tableWidgetsExtension = (
       minHeight: "0",
       lineHeight: "0",
       overflow: "hidden",
-      padding: "0 !important",
+      padding: "0",
+    },
+    ".cm-table-continuation.cm-live-preview-quote-line-last": {
+      height: "auto",
+      minHeight: "0",
+      lineHeight: "0",
+      overflow: "hidden",
+      paddingTop: "0 !important",
+      paddingRight: "var(--space-5) !important",
+      paddingBottom: "var(--space-3) !important",
+      paddingLeft: "var(--space-5) !important",
+      borderRadius: "0 0 var(--radius-medium) var(--radius-medium)",
+    },
+    ".md-table-no-body thead tr:last-child > *": {
+      borderBottom: "0",
     },
   });
   return [plugin, continuationTheme];

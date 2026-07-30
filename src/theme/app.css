@@ -1163,6 +1163,10 @@ body.outline-resizing * {
   border-bottom: 0;
 }
 
+.md-table-no-body thead tr:last-child > * {
+  border-bottom: 0;
+}
+
 .md-table thead:first-child tr:first-child > :first-child {
   border-top-left-radius: var(--radius-medium);
 }
@@ -1185,6 +1189,19 @@ body.outline-resizing * {
   padding: 0 !important;
   line-height: 0;
   overflow: hidden;
+}
+
+.markdown-editor
+  .cm-line.cm-table-continuation.cm-live-preview-quote-line-last {
+  height: auto;
+  min-height: 0;
+  padding-top: 0 !important;
+  padding-right: var(--space-5) !important;
+  padding-bottom: var(--space-3) !important;
+  padding-left: var(--space-5) !important;
+  line-height: 0;
+  overflow: hidden;
+  border-radius: 0 0 var(--radius-medium) var(--radius-medium);
 }
 
 /* ---------- Motion ---------- */

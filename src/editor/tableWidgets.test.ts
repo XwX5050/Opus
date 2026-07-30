@@ -1,7 +1,7 @@
 import { history } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, WidgetType } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { afterEach, describe, expect, it } from "vitest";
 import "../theme/app.css";
@@ -102,8 +102,14 @@ describe("tableWidgetsExtension", () => {
       "4",
       "5",
     ]);
-    expect(cells.every((cell) => cell.getAttribute("role") === "gridcell"))
-      .toBe(true);
+    expect(
+      [...view.dom.querySelectorAll("th")]
+        .map((cell) => cell.getAttribute("role")),
+    ).toEqual(["columnheader", "columnheader"]);
+    expect(
+      [...view.dom.querySelectorAll("td")]
+        .map((cell) => cell.getAttribute("role")),
+    ).toEqual(["gridcell", "gridcell", "gridcell", "gridcell"]);
     expect(cells.every((cell) => cell.contentEditable === "true")).toBe(true);
     expect(cells.every((cell) => cell.spellcheck)).toBe(true);
     expect(cells.every((cell) => cell.tabIndex === 0)).toBe(true);
@@ -179,6 +185,12 @@ describe("tableWidgetsExtension", () => {
     expect(cells.every((cell) => !cell.hasAttribute("contenteditable"))).toBe(true);
     expect(cells.every((cell) => !cell.hasAttribute("spellcheck"))).toBe(true);
     expect(cells.every((cell) => cell.tabIndex === -1)).toBe(true);
+    expect(view.dom.querySelector("table")?.hasAttribute("role")).toBe(false);
+    expect(view.dom.querySelector("table")).toHaveAttribute(
+      "aria-label",
+      "Markdown 表格",
+    );
+    expect(cells.every((cell) => !cell.hasAttribute("role"))).toBe(true);
   });
 
   it("renders multiple non-overlapping tables in source order", () => {
@@ -220,6 +232,51 @@ describe("tableWidgetsExtension", () => {
     }).not.toThrow();
   });
 
+  it("preserves a blockquote shell around a nested table", () => {
+    const view = createView([
+      "> A | B",
+      "> --- | ---",
+      "> one | two",
+    ].join("\n"), true, livePreviewExtension({ revealSelection: false }));
+    const finalLine = view.dom.querySelector<HTMLElement>(
+      ".cm-table-continuation.cm-live-preview-quote-line-last",
+    );
+
+    expect(view.dom.querySelector("table.md-table")).not.toBeNull();
+    expect(finalLine).not.toBeNull();
+    expect(finalLine).toHaveClass(
+      "cm-table-continuation",
+      "cm-live-preview-quote-line",
+      "cm-live-preview-quote-line-last",
+    );
+    expect(getComputedStyle(finalLine!).lineHeight).toBe("0");
+    expect(getComputedStyle(finalLine!).height).toBe("auto");
+    expect(getComputedStyle(finalLine!).paddingBottom).toBe("var(--space-3)");
+    const quoteShellRule = [...document.styleSheets]
+      .flatMap((sheet) => [...sheet.cssRules])
+      .find((rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule &&
+        rule.selectorText.endsWith(
+          ".cm-table-continuation.cm-live-preview-quote-line-last",
+        ),
+    );
+    expect(quoteShellRule?.style.paddingBottom).toBe("var(--space-3)");
+  });
+
+  it("renders a list-contained table without overlapping line decorations", () => {
+    const view = createView([
+      "- A | B",
+      "  --- | ---",
+      "  one | two",
+    ].join("\n"), true, livePreviewExtension({ revealSelection: false }));
+    const firstLine = view.dom.querySelector(".cm-line");
+
+    expect(view.dom.querySelector("table.md-table")).not.toBeNull();
+    expect(firstLine?.querySelector(".cm-live-preview-list-marker")).not.toBeNull();
+    expect(firstLine?.querySelector(".md-table-scroll")).not.toBeNull();
+    expect(view.dom.querySelectorAll(".cm-table-continuation")).toHaveLength(2);
+  });
+
   it("collapses continuation source lines without cross-line replacements", () => {
     const view = createView([
       "| A | B |",
@@ -259,6 +316,16 @@ describe("tableWidgetsExtension", () => {
 
     expect(provider(view)).toBe(originalAtomicRanges);
   });
+
+  it("removes the inner header border when the table has no body rows", () => {
+    const view = createView(["A | B", "--- | ---"].join("\n"));
+    const table = view.dom.querySelector<HTMLTableElement>("table.md-table");
+    const header = table?.querySelector<HTMLElement>("th");
+
+    expect(table).toHaveClass("md-table-no-body");
+    expect(table?.querySelectorAll("tbody tr")).toHaveLength(0);
+    expect(getComputedStyle(header!).borderBottomWidth).toBe("0px");
+  });
 });
 
 describe("MarkdownTableWidget", () => {
@@ -285,6 +352,17 @@ describe("MarkdownTableWidget", () => {
       new MarkdownTableWidget(sameSourceElsewhere, true),
     )).toBe(false);
     expect(new MarkdownTableWidget(table, true).ignoreEvent()).toBe(false);
+  });
+
+  it("returns false when compared with another WidgetType", () => {
+    class OtherWidget extends WidgetType {
+      toDOM() {
+        return document.createElement("span");
+      }
+    }
+    const table = tableFor(["A | B", "--- | ---"].join("\n"));
+
+    expect(new MarkdownTableWidget(table, true).eq(new OtherWidget())).toBe(false);
   });
 
   it("inserts cell content as text rather than HTML", () => {
