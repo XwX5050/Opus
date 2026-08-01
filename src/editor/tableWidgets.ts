@@ -308,10 +308,45 @@ const handleClick = (root: HTMLElement, event: MouseEvent) => {
   });
 };
 
-const commitCell = (resolved: ResolvedCell) => {
-  const insert = serializeTableCell(
-    normalizeCellContent(resolved.element),
+const hasTrailingStructuralPipe = (text: string) => {
+  const trimmed = text.trimEnd();
+  if (!trimmed.endsWith("|")) return false;
+
+  let backslashes = 0;
+  for (let index = trimmed.length - 2; index >= 0 && trimmed[index] === "\\"; index -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 0;
+};
+
+const preserveOuterlessEmptyCellBoundaries = (
+  resolved: ResolvedCell,
+  serialized: string,
+) => {
+  if (serialized.trim().length > 0) return serialized;
+
+  const line = resolved.context.view.state.doc.lineAt(resolved.model.from);
+  const beforeCell = resolved.context.view.state.sliceDoc(
+    line.from,
+    resolved.model.from,
   );
+  const afterCell = resolved.context.view.state.sliceDoc(
+    resolved.model.to,
+    line.to,
+  );
+  const cellIndex = resolved.index % resolved.table.columns.length;
+  const isFirstCell = cellIndex === 0;
+  const isLastCell = cellIndex === resolved.table.columns.length - 1;
+
+  return `${isFirstCell && !hasTrailingStructuralPipe(beforeCell) ? "| " : ""}${serialized}${
+    isLastCell && !afterCell.trimStart().startsWith("|") ? " |" : ""
+  }`;
+};
+
+const commitCell = (resolved: ResolvedCell) => {
+  const insert = preserveOuterlessEmptyCellBoundaries(resolved, serializeTableCell(
+    normalizeCellContent(resolved.element),
+  ));
   if (insert === resolved.model.source) return;
   resolved.context.view.dispatch({
     changes: {
