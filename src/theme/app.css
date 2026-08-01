@@ -1142,6 +1142,10 @@ body.outline-resizing * {
   background: var(--surface-hover);
 }
 
+.md-table [contenteditable="true"]:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
 .md-table [data-alignment="default"],
 .md-table [data-alignment="left"] {
   text-align: left;

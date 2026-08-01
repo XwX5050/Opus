@@ -46,7 +46,184 @@ const atomicRanges = (view: EditorView) => {
   return ranges;
 };
 
+const tableSource = [
+  "before",
+  "",
+  "| Name | Note |",
+  "| --- | --- |",
+  "| Ada | old |",
+  "",
+  "after",
+].join("\n");
+
+const tableCell = (index: number) => {
+  const cell = document.querySelector<HTMLElement>(
+    `.md-table [data-cell-index="${index}"]`,
+  );
+  if (!cell) throw new Error(`Missing table cell ${index}`);
+  return cell;
+};
+
+const dispatchCellInput = (cell: HTMLElement) => {
+  cell.dispatchEvent(new InputEvent("input", {
+    bubbles: true,
+    inputType: "insertText",
+  }));
+};
+
 describe("MarkdownEditor", () => {
+  describe("interactive Markdown tables", () => {
+    it("renders a valid table with editable semantic cells", () => {
+      const rendered = renderEditor({ value: tableSource });
+      const table = rendered.container.querySelector("table.md-table");
+      const cells = [...rendered.container.querySelectorAll<HTMLElement>(
+        ".md-table th, .md-table td",
+      )];
+
+      expect(table).toHaveAttribute("role", "grid");
+      expect(table).toHaveAccessibleName("Markdown 表格");
+      expect(cells.map((cell) => cell.getAttribute("role"))).toEqual([
+        "columnheader",
+        "columnheader",
+        "gridcell",
+        "gridcell",
+      ]);
+      expect(cells.every((cell) => cell.contentEditable === "true")).toBe(true);
+      expect(cells.every((cell) => cell.tabIndex === 0)).toBe(true);
+    });
+
+    it("routes a real cell input event through the controlled onChange path", () => {
+      const onChange = vi.fn();
+      renderEditor({ value: tableSource, onChange });
+      const cell = tableCell(2);
+
+      cell.textContent = "Ada | 林";
+      dispatchCellInput(cell);
+
+      const expected = tableSource.replace("Ada", String.raw`Ada \| 林`);
+      expect(editorView().state.doc.toString()).toBe(expected);
+      expect(onChange).toHaveBeenCalledOnce();
+      expect(onChange).toHaveBeenLastCalledWith(expected);
+    });
+
+    it("reconfigures one EditorView between editable and native read-only table semantics", () => {
+      const onChange = vi.fn();
+      const rendered = renderEditor({
+        value: tableSource,
+        viewMode: "editing",
+        onChange,
+      });
+      const view = editorView();
+      const root = rendered.container.querySelector(".cm-editor");
+      const cell = tableCell(2);
+      cell.textContent = "Grace";
+      dispatchCellInput(cell);
+      const edited = tableSource.replace("Ada", "Grace");
+      expect(undoDepth(view.state)).toBeGreaterThan(0);
+      onChange.mockClear();
+      view.dispatch({ selection: { anchor: edited.length } });
+      const selection = view.state.selection;
+      const history = undoDepth(view.state);
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} value={edited} viewMode="reading" />,
+      );
+
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(view.state.doc.toString()).toBe(edited);
+      expect(view.state.selection.eq(selection)).toBe(true);
+      expect(undoDepth(view.state)).toBe(history);
+      expect(content()).toHaveAttribute("contenteditable", "false");
+      const readingTable = rendered.container.querySelector("table.md-table");
+      const readingCells = [...rendered.container.querySelectorAll<HTMLElement>(
+        ".md-table th, .md-table td",
+      )];
+      expect(readingTable).not.toHaveAttribute("role");
+      expect(readingTable).toHaveAccessibleName("Markdown 表格");
+      expect(readingCells.every((cell) => !cell.hasAttribute("role"))).toBe(true);
+      expect(
+        readingCells.every((cell) => !cell.hasAttribute("contenteditable")),
+      ).toBe(true);
+      expect(readingCells.every((cell) => cell.tabIndex === -1)).toBe(true);
+      expect(onChange).not.toHaveBeenCalled();
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} value={edited} viewMode="editing" />,
+      );
+
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(view.state.doc.toString()).toBe(edited);
+      expect(view.state.selection.eq(selection)).toBe(true);
+      expect(undoDepth(view.state)).toBe(history);
+      expect(tableCell(2)).toHaveAttribute("contenteditable", "true");
+      expect(tableCell(2)).toHaveAttribute("role", "gridcell");
+      expect(tableCell(2).tabIndex).toBe(0);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("rejects table typing and input events in reading mode", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderEditor({ value: tableSource, viewMode: "reading", onChange });
+      const cell = tableCell(2);
+
+      cell.focus();
+      await user.keyboard("x");
+      dispatchCellInput(cell);
+
+      expect(editorView().state.doc.toString()).toBe(tableSource);
+      expect(cell).toHaveTextContent("Ada");
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("keeps tables editable and atomic in light mode while optional widgets stay disabled", () => {
+      const rich = `${tableSource}\n\n$x$\n\n![img](/p/pic.png)`;
+      const onChange = vi.fn();
+      const rendered = renderEditor({
+        value: rich,
+        performanceMode: "light",
+        onChange,
+      });
+      const view = editorView();
+      const root = rendered.container.querySelector(".cm-editor");
+      const tableFrom = rich.indexOf("| Name");
+      const tableTo = rich.indexOf("\n\nafter");
+
+      expect(rendered.container.querySelector(".md-table")).not.toBeNull();
+      expect(tableCell(2)).toHaveAttribute("contenteditable", "true");
+      expect(rendered.container.querySelector(".md-math")).toBeNull();
+      expect(rendered.container.querySelector(".md-image-widget")).toBeNull();
+      expect(atomicRanges(view)).toContainEqual({ from: tableFrom, to: tableTo });
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} performanceMode="full" />,
+      );
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(rendered.container.querySelector(".md-table")).not.toBeNull();
+      expect(rendered.container.querySelector(".md-math")).not.toBeNull();
+      expect(rendered.container.querySelector(".md-image-widget")).not.toBeNull();
+      expect(view.state.doc.toString()).toBe(rich);
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} performanceMode="light" />,
+      );
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".md-table")).not.toBeNull();
+      expect(view.state.doc.toString()).toBe(rich);
+      expect(onChange).not.toHaveBeenCalled();
+
+      const cell = tableCell(2);
+      cell.textContent = "Grace";
+      dispatchCellInput(cell);
+      const expected = rich.replace("Ada", "Grace");
+      expect(view.state.doc.toString()).toBe(expected);
+      expect(onChange).toHaveBeenLastCalledWith(expected);
+    });
+  });
+
   it.each([
     ["- item", "- item\n- "],
     ["> quote", "> quote\n> "],

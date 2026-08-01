@@ -33,6 +33,8 @@ Covered flows (real CodeMirror interactions, no reducer calls):
 - open two files, switch tabs, edit, save with ⌘S;
 - dirty close → cancel keeps the tab and edits;
 - reading ↔ editing view toggle (marker hiding; reading is read-only);
+- interactive Markdown tables: native cell typing, plain-text paste,
+  Tab navigation/row append, isolated undo, save fidelity, and read-only mode;
 - LaTeX success renders KaTeX, invalid formula shows a non-blocking error
   and never blocks editing;
 - find/replace (⌘F panel, replace all) in the current document;
@@ -87,6 +89,39 @@ build SHA, chip, and macOS version with the results.
    button with unsaved changes.
 9. **Recently closed**: close a tab, press ⌘⇧T; the tab reopens with its
    content.
+
+### Markdown tables
+
+- **Cell editing**: edit header cells, body cells, and empty cells. Enter
+  Chinese text and a literal `|`; the visible cell shows the pipe while the
+  saved Markdown escapes it as `\|`. Adjacent cells and surrounding text do
+  not change.
+- **Keyboard navigation**: press Tab and Shift+Tab across header/body
+  boundaries. Tab from the final cell appends exactly one correctly indented
+  row and focuses its first cell; Shift+Tab from the first cell stays safely
+  within the table.
+- **History**: undo/redo a direct cell edit, then separately undo/redo a row
+  appended by final-cell Tab. One undo of the append removes only that row;
+  the preceding cell edit remains until its own undo.
+- **Chinese system IME**: with the macOS Chinese input method, compose in a
+  header, populated body cell, and empty body cell. Candidate selection must
+  remain focused in that cell, intermediate composition text must not commit
+  to Markdown, and the final candidate must commit exactly once.
+- **Nested tables**: repeat final-cell Tab for a table inside a blockquote and
+  inside a list. The new row keeps the original quote/list prefix and the
+  surrounding block structure remains intact.
+- **Layout and focus**: in a narrow window, verify wide tables scroll
+  horizontally without clipping or moving borders. In both Light and Dark
+  themes, header/body borders, alignment, rounded corners, and the keyboard
+  focus ring remain clearly visible without shifting cell layout.
+- **Save/reopen fidelity**: save and reopen a table containing empty cells,
+  Chinese text, and escaped pipes; source spelling and outside text remain
+  exact. Repeat with a CRLF file through the native backend and verify its
+  original newline style is preserved.
+- **Reading mode**: switch while a table cell is focused. The semantic table
+  remains visible with native table/header/cell semantics, no cell is a tab
+  stop or editing host, typing/paste cannot dirty or change the document, and
+  switching back restores cell editing.
 
 ### Images
 

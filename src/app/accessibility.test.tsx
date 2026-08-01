@@ -145,6 +145,39 @@ describe("accessibility: roles and names", () => {
     expect(panel?.querySelector('input[name="replace"]')).toHaveAccessibleName();
     expect(document.activeElement).toBe(panel?.querySelector('input[name="search"]'));
   });
+
+  it("exposes editable table grid roles and native reading-mode semantics", async () => {
+    const user = userEvent.setup();
+    const tableText = [
+      "| Name | Note |",
+      "| --- | --- |",
+      "| Ada | first |",
+    ].join("\n");
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/table.md", file("/notes/table.md", tableText)]]),
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    const grid = screen.getByRole("grid", { name: "Markdown 表格" });
+    expect(within(grid).getAllByRole("columnheader")).toHaveLength(2);
+    expect(within(grid).getAllByRole("gridcell")).toHaveLength(2);
+    for (const cell of grid.querySelectorAll<HTMLElement>("th, td")) {
+      expect(cell).toHaveAttribute("contenteditable", "true");
+      expect(cell.tabIndex).toBe(0);
+    }
+
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+
+    expect(screen.queryByRole("grid", { name: "Markdown 表格" })).toBeNull();
+    const table = screen.getByRole("table", { name: "Markdown 表格" });
+    expect(table).toHaveAccessibleName("Markdown 表格");
+    for (const cell of table.querySelectorAll<HTMLElement>("th, td")) {
+      expect(cell).not.toHaveAttribute("role");
+      expect(cell).not.toHaveAttribute("contenteditable");
+      expect(cell.tabIndex).toBe(-1);
+    }
+  });
 });
 
 describe("product identity", () => {
@@ -248,6 +281,12 @@ describe("accessibility: stylesheet guarantees", () => {
   it("declares a visible keyboard focus style", () => {
     expect(appCss).toMatch(/:focus-visible\s*\{/);
     expect(appCss).toMatch(/--focus-ring/);
+  });
+
+  it("uses a tokenized layout-stable focus ring for editable table cells", () => {
+    expect(appCss).toMatch(
+      /\.md-table \[contenteditable="true"\]:focus-visible\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\);/s,
+    );
   });
 
   it("honors prefers-reduced-motion", () => {

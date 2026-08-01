@@ -16,6 +16,7 @@ import { mathWidgetsExtension } from "./mathWidgets";
 import type { OutlineHeading } from "./outline";
 import { outlinePublisherExtension } from "./outlineExtension";
 import type { PerformanceMode } from "./performanceMode";
+import { tableWidgetsExtension } from "./tableWidgets";
 import type { EditorViewMode } from "./viewMode";
 
 const externalValueSync = Annotation.define<boolean>();
@@ -107,6 +108,7 @@ export default function MarkdownEditor({
       ...readOnly,
       // Reading mode never reveals source markers, wherever the cursor sits.
       livePreviewExtension({ revealSelection: mode !== "reading" }),
+      tableWidgetsExtension({ editable: mode === "editing" }),
       // Light mode pauses offscreen image creation and nonessential block
       // widgets; visible-range text styling (live preview) stays on.
       ...(perf === "light"

@@ -133,6 +133,126 @@ test("cancelling a dirty close keeps the tab and the edits", async ({
   await expect(content).toContainText("未保存的修改");
 });
 
+test("edits, pastes, navigates, undoes, saves, and reads a Markdown table", async ({
+  page,
+  context,
+}) => {
+  const source = [
+    "Before untouched",
+    "",
+    "| Name | Note |",
+    "| --- | --- |",
+    "| Ada | old |",
+    "",
+    "After untouched",
+    "",
+  ].join("\n");
+  await seed(page, {
+    files: [{ path: "/docs/table.md", text: source }],
+    session: sessionWith("/docs/table.md"),
+  });
+
+  const content = editorContent(page);
+  const table = page.locator("table.md-table");
+  const cell = (index: number) =>
+    table.locator(`[data-cell-index="${index}"]`);
+  await expect(table).toBeVisible();
+  await expect(table).toHaveAttribute("role", "grid");
+  await expect(table).toHaveAttribute("aria-label", "Markdown 表格");
+  await expect(content).not.toContainText("| --- | --- |");
+
+  await cell(2).click();
+  await cell(2).evaluate((element) => {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
+  await page.keyboard.type("|中文");
+  await expect(cell(2)).toHaveText("Ada|中文");
+  await expect(page.locator(".tab-dirty")).toHaveCount(1);
+
+  await page.keyboard.press("Tab");
+  await expect(cell(3)).toBeFocused();
+  expect(await cell(3).evaluate((element) => element.matches(":focus-visible")))
+    .toBe(true);
+  expect(await cell(3).evaluate((element) => getComputedStyle(element).boxShadow))
+    .not.toBe("none");
+
+  await context.grantPermissions(
+    ["clipboard-read", "clipboard-write"],
+    { origin: "http://localhost:1421" },
+  );
+  await page.evaluate(() =>
+    navigator.clipboard.writeText("<b>x|y</b>\n下一行"),
+  );
+  await cell(3).evaluate((element) => {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
+  await page.keyboard.press("Meta+v");
+  await expect(cell(3)).toHaveText("old<b>x|y</b> 下一行");
+  await expect(cell(3).locator("*")).toHaveCount(0);
+
+  await page.keyboard.press("Tab");
+  await expect(table.locator("tbody tr")).toHaveCount(2);
+  await expect(table.locator("th, td")).toHaveCount(6);
+  await expect(cell(4)).toBeFocused();
+
+  await page.keyboard.press("Meta+z");
+  await expect(table.locator("tbody tr")).toHaveCount(1);
+  await expect(table.locator("th, td")).toHaveCount(4);
+  await expect(cell(2)).toHaveText("Ada|中文");
+  await expect(cell(3)).toHaveText("old<b>x|y</b> 下一行");
+
+  await cell(3).press("Meta+s");
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+  const expected = [
+    "Before untouched",
+    "",
+    "| Name | Note |",
+    "| --- | --- |",
+    String.raw`| Ada\|中文 | old<b>x\|y</b> 下一行 |`,
+    "",
+    "After untouched",
+    "",
+  ].join("\n");
+  const writes = await page.evaluate(() =>
+    (window.__E2E_PORT__?.writes ?? []).map((write) => write.text),
+  );
+  expect(writes).toEqual([expected]);
+
+  await page.getByRole("button", { name: "编辑模式" }).click();
+  await expect(table).toBeVisible();
+  await expect(page.getByRole("table", { name: "Markdown 表格" })).toBeVisible();
+  await expect(table).not.toHaveAttribute("role");
+  await expect(table).toHaveAttribute("aria-label", "Markdown 表格");
+  await expect(cell(2)).not.toHaveAttribute("role");
+  await expect(cell(2)).not.toHaveAttribute("contenteditable");
+  expect(await cell(2).evaluate((element) => (element as HTMLElement).tabIndex))
+    .toBe(-1);
+  const textBeforeReadingInput = await table.textContent();
+  await cell(2).click();
+  await page.keyboard.type("must-not-land");
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+  await expect(table).toHaveText(textBeforeReadingInput!);
+  expect(await page.evaluate(() => window.__E2E_PORT__?.writes.length ?? 0))
+    .toBe(1);
+
+  await page.getByRole("button", { name: "阅读模式" }).click();
+  await expect(table).toHaveAttribute("role", "grid");
+  await expect(cell(2)).toHaveAttribute("role", "gridcell");
+  await expect(cell(2)).toHaveAttribute("contenteditable", "true");
+  expect(await cell(2).evaluate((element) => (element as HTMLElement).tabIndex))
+    .toBe(0);
+});
+
 test("switches between editing and reading modes", async ({
   page,
 }) => {
