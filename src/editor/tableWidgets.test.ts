@@ -1056,6 +1056,22 @@ describe("tableWidgetsExtension", () => {
     expect(cell.textContent).toBe("new line");
   });
 
+  it("normalizes a lone visual BR from native deletion to an empty table cell", () => {
+    const doc = ["| A | B |", "| --- | --- |", "| old | keep |"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.replaceChildren(document.createElement("br"));
+
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(
+      ["| A | B |", "| --- | --- |", "|  | keep |"].join("\n"),
+    );
+    expect(cell.childNodes).toHaveLength(1);
+    expect(cell.firstChild).toBeInstanceOf(Text);
+    expect(cell.textContent).toBe("");
+  });
+
   it("preserves a space boundary around block children", () => {
     const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
     const view = createView(doc);
