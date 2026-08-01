@@ -194,6 +194,61 @@ describe("MarkdownEditor", () => {
       expect(onChange).not.toHaveBeenCalled();
     });
 
+    it("hands a reading table click into the requested editing cell", async () => {
+      const onChange = vi.fn();
+      const onRequestTableEdit = vi.fn();
+      const rendered = renderEditor({
+        value: tableSource,
+        viewMode: "reading",
+        onChange,
+        onRequestTableEdit,
+      });
+      const request = {
+        tableFrom: tableSource.indexOf("| Name"),
+        cellIndex: 3,
+        clientX: 140,
+        clientY: 220,
+      };
+      const view = editorView();
+      const historyBefore = undoDepth(view.state);
+
+      tableCell(3).dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        button: 0,
+        clientX: request.clientX,
+        clientY: request.clientY,
+      }));
+
+      expect(onRequestTableEdit).toHaveBeenCalledOnce();
+      expect(onRequestTableEdit).toHaveBeenCalledWith(request);
+
+      rendered.rerender(
+        <MarkdownEditor
+          {...rendered.props}
+          viewMode="editing"
+          tableFocusRequest={{ ...request, sequence: 1 }}
+        />,
+      );
+
+      await waitFor(() => expect(tableCell(3)).toHaveFocus());
+      expect(view.state.doc.toString()).toBe(tableSource);
+      expect(undoDepth(view.state)).toBe(historyBefore);
+      expect(onChange).not.toHaveBeenCalled();
+
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      outside.focus();
+      rendered.rerender(
+        <MarkdownEditor
+          {...rendered.props}
+          viewMode="editing"
+          tableFocusRequest={{ ...request, sequence: 1 }}
+        />,
+      );
+      expect(outside).toHaveFocus();
+      outside.remove();
+    });
+
     it("keeps tables editable and atomic in light mode while optional widgets stay disabled", () => {
       const rich = `${tableSource}\n\n$x$\n\n![img](/p/pic.png)`;
       const onChange = vi.fn();

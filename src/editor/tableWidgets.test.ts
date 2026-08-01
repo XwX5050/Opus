@@ -14,12 +14,14 @@ import {
 } from "@codemirror/state";
 import { EditorView, WidgetType } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../theme/app.css";
 import { livePreviewExtension } from "./livePreview";
 import { extractMarkdownTables } from "./markdownTable";
 import {
+  focusMarkdownTableCell,
   MarkdownTableWidget,
+  type TableWidgetsOptions,
   tableWidgetsExtension,
 } from "./tableWidgets";
 
@@ -30,6 +32,7 @@ const createView = (
   editable = true,
   extraExtensions: Extension = [],
   maxRenderedCells?: number,
+  options: Partial<TableWidgetsOptions> = {},
 ) => {
   const parent = document.createElement("div");
   document.body.append(parent);
@@ -40,7 +43,7 @@ const createView = (
       extensions: [
         markdown({ extensions: [GFM] }),
         history(),
-        tableWidgetsExtension({ editable, maxRenderedCells }),
+        tableWidgetsExtension({ editable, maxRenderedCells, ...options }),
         extraExtensions,
       ],
     }),
@@ -1160,6 +1163,103 @@ describe("tableWidgetsExtension", () => {
     cell.textContent = "must-not-land";
     dispatchInput(cell);
     expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("requests editing from a static table cell without changing Markdown", () => {
+    const doc = ["| Name | Note |", "| --- | --- |", "| Ada | old |"].join("\n");
+    const onRequestEdit = vi.fn();
+    const view = createView(doc, false, [], undefined, { onRequestEdit });
+    const cell = tableCell(view, 3);
+    const historyBefore = undoDepth(view.state);
+
+    cell.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      button: 0,
+      clientX: 140,
+      clientY: 220,
+    }));
+
+    expect(onRequestEdit).toHaveBeenCalledOnce();
+    expect(onRequestEdit).toHaveBeenCalledWith({
+      tableFrom: doc.indexOf("| Name"),
+      cellIndex: 3,
+      clientX: 140,
+      clientY: 220,
+    });
+    cell.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      button: 2,
+    }));
+    expect(onRequestEdit).toHaveBeenCalledOnce();
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undoDepth(view.state)).toBe(historyBefore);
+  });
+
+  it("does not request editing from a static table without an owner callback", () => {
+    const view = createView(
+      ["| Name | Note |", "| --- | --- |", "| Ada | old |"].join("\n"),
+      false,
+    );
+    const cell = tableCell(view, 3);
+
+    cell.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      button: 0,
+    }));
+
+    expect(document.activeElement).not.toBe(cell);
+  });
+
+  it("focuses only a current requested table cell without changing Markdown", () => {
+    const doc = ["| Name | Note |", "| --- | --- |", "| Ada | old |"].join("\n");
+    const tables = new Compartment();
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        extensions: [
+          markdown({ extensions: [GFM] }),
+          history(),
+          tables.of(tableWidgetsExtension({ editable: false })),
+        ],
+      }),
+    });
+    views.push(view);
+    const request = {
+      tableFrom: doc.indexOf("| Name"),
+      cellIndex: 3,
+      clientX: 140,
+      clientY: 220,
+    };
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    const historyBefore = undoDepth(view.state);
+
+    view.dispatch({
+      effects: tables.reconfigure(tableWidgetsExtension({ editable: true })),
+    });
+
+    expect(focusMarkdownTableCell(view, request)).toBe(true);
+    expect(document.activeElement).toBe(tableCell(view, 3));
+    expect(document.getSelection()?.getRangeAt(0).startContainer)
+      .toBe(tableCell(view, 3));
+    expect(document.getSelection()?.getRangeAt(0).startOffset).toBe(
+      tableCell(view, 3).childNodes.length,
+    );
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undoDepth(view.state)).toBe(historyBefore);
+
+    outside.focus();
+    expect(focusMarkdownTableCell(view, { ...request, tableFrom: 1 })).toBe(false);
+    expect(document.activeElement).toBe(outside);
+    expect(focusMarkdownTableCell(view, { ...request, cellIndex: 99 })).toBe(false);
+    expect(document.activeElement).toBe(outside);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undoDepth(view.state)).toBe(historyBefore);
+    outside.remove();
   });
 
   it("does not rebuild a table widget for selection-only updates", () => {

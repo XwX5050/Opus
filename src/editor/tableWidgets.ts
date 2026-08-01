@@ -23,12 +23,21 @@ export interface TableWidgetsOptions {
   readonly editable: boolean;
   /** Undefined is unlimited; invalid/nonpositive limits render no tables. */
   readonly maxRenderedCells?: number;
+  readonly onRequestEdit?: (request: TableCellEditRequest) => void;
+}
+
+export interface TableCellEditRequest {
+  readonly tableFrom: number;
+  readonly cellIndex: number;
+  readonly clientX: number;
+  readonly clientY: number;
 }
 
 interface TableWidgetContext {
   readonly view: EditorView;
   table: MarkdownTable;
   editable: boolean;
+  onRequestEdit?: (request: TableCellEditRequest) => void;
   ownedCells: readonly HTMLElement[];
   readonly composing: Map<HTMLElement, CompositionSnapshot>;
 }
@@ -225,6 +234,22 @@ const resolveCurrentCell = (
   const context = widgetContexts.get(root);
   const element = cellElementForEvent(root, event);
   if (!context || !element) return null;
+  const resolved = resolveCurrentOwnedCell(root, context, element);
+  if (
+    !resolved ||
+    !context.editable ||
+    context.view.state.readOnly
+  ) {
+    return null;
+  }
+  return resolved;
+};
+
+const resolveCurrentOwnedCell = (
+  root: HTMLElement,
+  context: TableWidgetContext,
+  element: HTMLElement,
+): ResolvedCell | null => {
   const ownedIndex = context.ownedCells.indexOf(element);
 
   const currentTable = findCurrentTable(
@@ -234,8 +259,6 @@ const resolveCurrentCell = (
   );
   if (
     !currentTable ||
-    !context.editable ||
-    context.view.state.readOnly ||
     !context.view.dom.contains(root) ||
     ownedIndex < 0 ||
     element.dataset.cellIndex !== String(ownedIndex) ||
@@ -256,6 +279,21 @@ const resolveCurrentCell = (
     model: cells[ownedIndex],
     table: currentTable,
   };
+};
+
+const handleClick = (root: HTMLElement, event: MouseEvent) => {
+  if (event.button !== 0) return;
+  const context = widgetContexts.get(root);
+  const element = cellElementForEvent(root, event);
+  if (!context || !element || context.editable || !context.onRequestEdit) return;
+  const resolved = resolveCurrentOwnedCell(root, context, element);
+  if (!resolved) return;
+  context.onRequestEdit({
+    tableFrom: resolved.table.from,
+    cellIndex: resolved.index,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  });
 };
 
 const commitCell = (resolved: ResolvedCell) => {
@@ -379,6 +417,76 @@ const ownedCellAt = (
   return element;
 };
 
+const placeCaretInCell = (
+  cell: HTMLElement,
+  clientX: number,
+  clientY: number,
+) => {
+  const selection = document.getSelection();
+  if (!selection) return;
+  const caretDocument = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => {
+      offsetNode: Node;
+      offset: number;
+    } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  let range: Range | null = null;
+  const caretPosition = caretDocument.caretPositionFromPoint?.(clientX, clientY);
+  if (caretPosition && cell.contains(caretPosition.offsetNode)) {
+    range = document.createRange();
+    try {
+      range.setStart(caretPosition.offsetNode, caretPosition.offset);
+      range.collapse(true);
+    } catch {
+      range = null;
+    }
+  }
+  if (!range) {
+    const caretRange = caretDocument.caretRangeFromPoint?.(clientX, clientY);
+    if (caretRange && cell.contains(caretRange.startContainer)) {
+      range = caretRange.cloneRange();
+      range.collapse(true);
+    }
+  }
+  if (!range) {
+    range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(false);
+  }
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
+/**
+ * Focuses a rendered editing cell after resolving its table identity against
+ * the current document. Requests are transient: this never dispatches a
+ * CodeMirror transaction or restores a stale document offset.
+ */
+export const focusMarkdownTableCell = (
+  view: EditorView,
+  request: TableCellEditRequest,
+): boolean => {
+  if (view.state.readOnly || !view.dom.isConnected) return false;
+  const roots = view.dom.querySelectorAll<HTMLElement>(".md-table-scroll");
+  for (const root of roots) {
+    const context = widgetContexts.get(root);
+    if (!context || context.view !== view || !context.editable) continue;
+    const currentTable = findCurrentTable(
+      view.state,
+      context.table.from,
+      context.table.source,
+    );
+    if (!currentTable || currentTable.from !== request.tableFrom) continue;
+    const cell = ownedCellAt(root, context, currentTable, request.cellIndex);
+    if (!cell) continue;
+    cell.focus();
+    placeCaretInCell(cell, request.clientX, request.clientY);
+    return true;
+  }
+  return false;
+};
+
 const queueCellFocus = (
   view: EditorView,
   tableFrom: number,
@@ -490,6 +598,9 @@ const handleKeyDown = (root: HTMLElement, event: KeyboardEvent) => {
 };
 
 const addDelegatedListeners = (root: HTMLElement) => {
+  root.addEventListener("click", (event) => {
+    handleClick(root, event as MouseEvent);
+  });
   root.addEventListener("keydown", (event) => {
     handleKeyDown(root, event);
   });
@@ -545,6 +656,7 @@ export class MarkdownTableWidget extends WidgetType {
     readonly table: MarkdownTable,
     readonly editable: boolean,
     readonly readOnly = false,
+    readonly onRequestEdit?: (request: TableCellEditRequest) => void,
   ) {
     super();
   }
@@ -555,7 +667,8 @@ export class MarkdownTableWidget extends WidgetType {
       other.table.from === this.table.from &&
       other.table.source === this.table.source &&
       other.editable === this.editable &&
-      other.readOnly === this.readOnly
+      other.readOnly === this.readOnly &&
+      other.onRequestEdit === this.onRequestEdit
     );
   }
 
@@ -616,6 +729,7 @@ export class MarkdownTableWidget extends WidgetType {
         view,
         table: this.table,
         editable: this.editable,
+        onRequestEdit: this.onRequestEdit,
         ownedCells,
         composing: new Map(),
       });
@@ -676,6 +790,7 @@ export class MarkdownTableWidget extends WidgetType {
       view,
       table: this.table,
       editable: this.editable,
+      onRequestEdit: this.onRequestEdit,
       ownedCells: elements,
       composing,
     });
@@ -747,6 +862,7 @@ const decorationSetsFor = (
                   table,
                   options.editable,
                   state.readOnly,
+                  options.onRequestEdit,
                 )
               : undefined,
           }).range(segmentFrom, segmentTo),

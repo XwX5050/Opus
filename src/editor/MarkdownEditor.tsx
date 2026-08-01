@@ -16,7 +16,11 @@ import { mathWidgetsExtension } from "./mathWidgets";
 import type { OutlineHeading } from "./outline";
 import { outlinePublisherExtension } from "./outlineExtension";
 import type { PerformanceMode } from "./performanceMode";
-import { tableWidgetsExtension } from "./tableWidgets";
+import {
+  focusMarkdownTableCell,
+  tableWidgetsExtension,
+  type TableCellEditRequest,
+} from "./tableWidgets";
 import type { EditorViewMode } from "./viewMode";
 
 const externalValueSync = Annotation.define<boolean>();
@@ -38,6 +42,10 @@ export interface OutlineNavigationRequest {
   readonly textFrom: number;
 }
 
+export interface TableFocusRequest extends TableCellEditRequest {
+  readonly sequence: number;
+}
+
 export interface MarkdownEditorProps {
   value: string;
   onChange(value: string): void;
@@ -51,6 +59,8 @@ export interface MarkdownEditorProps {
   imageDrop?: EditorImageDrop | null;
   onOutlineChange?(headings: ReadonlyArray<OutlineHeading>): void;
   outlineNavigation?: OutlineNavigationRequest | null;
+  onRequestTableEdit?(request: TableCellEditRequest): void;
+  tableFocusRequest?: TableFocusRequest | null;
   /**
    * Large documents open in "light" mode: Markdown parsing, selection,
    * search and visible-range text styling stay active, while offscreen
@@ -74,6 +84,8 @@ export default function MarkdownEditor({
   imageDrop = null,
   onOutlineChange,
   outlineNavigation = null,
+  onRequestTableEdit,
+  tableFocusRequest = null,
   performanceMode = "full",
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -88,6 +100,7 @@ export default function MarkdownEditor({
     onReopenClosed,
     onToggleReading,
     onOutlineChange,
+    onRequestTableEdit,
   });
   callbacksRef.current = {
     onChange,
@@ -95,7 +108,11 @@ export default function MarkdownEditor({
     onReopenClosed,
     onToggleReading,
     onOutlineChange,
+    onRequestTableEdit,
   };
+  const tableEditRequestHandlerRef = useRef<
+    (request: TableCellEditRequest) => void
+  >((request) => callbacksRef.current.onRequestTableEdit?.(request));
   const imageSupportRef = useRef({ saveClipboardImage, resolveImageUrl });
   imageSupportRef.current = { saveClipboardImage, resolveImageUrl };
   // Identity of the last value this editor emitted or adopted. Comparing
@@ -115,6 +132,7 @@ export default function MarkdownEditor({
       livePreviewExtension({ revealSelection: mode !== "reading" }),
       tableWidgetsExtension({
         editable: mode === "editing",
+        onRequestEdit: tableEditRequestHandlerRef.current,
         ...(perf === "light"
           ? { maxRenderedCells: LIGHT_MODE_TABLE_CELL_LIMIT }
           : {}),
@@ -233,6 +251,22 @@ export default function MarkdownEditor({
   }, [viewMode, performanceMode]);
 
   const consumedOutlineNavigationRef = useRef(0);
+
+  const consumedTableFocusRef = useRef(0);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (
+      !view ||
+      viewMode !== "editing" ||
+      !tableFocusRequest ||
+      tableFocusRequest.sequence <= consumedTableFocusRef.current
+    ) {
+      return;
+    }
+    consumedTableFocusRef.current = tableFocusRequest.sequence;
+    focusMarkdownTableCell(view, tableFocusRequest);
+  }, [tableFocusRequest, viewMode]);
 
   useEffect(() => {
     const view = viewRef.current;

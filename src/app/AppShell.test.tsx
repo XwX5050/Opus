@@ -80,6 +80,13 @@ class InspectablePort implements DocumentPort {
 }
 
 const editor = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
+const tableCell = (index: number) => {
+  const cell = document.querySelector<HTMLElement>(
+    `.md-table [data-cell-index="${index}"]`,
+  );
+  if (!cell) throw new Error(`Missing table cell ${index}`);
+  return cell;
+};
 const replaceEditorText = (text: string) => {
   const view = EditorView.findFromDOM(editor());
   if (!view) throw new Error("EditorView not found");
@@ -162,6 +169,30 @@ describe("AppShell", () => {
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(editor()).toHaveAttribute("contenteditable", "true");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
+  });
+
+  it("enters editing and focuses a clicked reading-mode table cell without writing", async () => {
+    const user = userEvent.setup();
+    const source = [
+      "| Name | Note |",
+      "| --- | --- |",
+      "| Ada | old |",
+    ].join("\n");
+    const port = new InspectablePort([file("/notes/table.md", source)]);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+
+    await user.click(tableCell(3));
+
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "编辑模式" }),
+    ).toHaveAttribute("aria-pressed", "false"));
+    expect(tableCell(3)).toHaveFocus();
+    expect(EditorView.findFromDOM(editor())?.state.doc.toString()).toBe(source);
+    expect(port.writes).toHaveLength(0);
+    expect(screen.getByRole("tab", { name: /table\.md/ }))
+      .not.toHaveAccessibleName(/未保存/);
   });
 
   it("places a launch-collapsed outline toggle after the view-mode control", async () => {

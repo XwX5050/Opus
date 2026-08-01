@@ -11,6 +11,7 @@ import ConflictDialog from "../conflict/ConflictDialog";
 import MarkdownEditor, {
   type EditorImageDrop,
   type OutlineNavigationRequest,
+  type TableFocusRequest,
 } from "../editor/MarkdownEditor";
 import OutlinePanel from "../editor/OutlinePanel";
 import {
@@ -30,6 +31,7 @@ import {
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
 import { type EventSubscriber, useAppController } from "./useAppController";
+import type { TableCellEditRequest } from "../editor/tableWidgets";
 
 export type ImageDropSubscriber = (
   onImages: (drop: ImageDrop) => void,
@@ -57,6 +59,10 @@ export interface AppShellProps {
 }
 
 const EMPTY_OUTLINE_IDS: ReadonlySet<string> = new Set();
+
+interface PendingTableFocus extends TableFocusRequest {
+  readonly tabId: string;
+}
 
 const pruneTabMap = <T,>(
   current: ReadonlyMap<string, T>,
@@ -222,6 +228,10 @@ export default function AppShell({
     (OutlineNavigationRequest & { readonly tabId: string }) | null
   >(null);
   const outlineSequenceRef = useRef(0);
+  const [tableFocusRequest, setTableFocusRequest] = useState<
+    PendingTableFocus | null
+  >(null);
+  const tableFocusSequenceRef = useRef(0);
   // Per-tab light-mode UI state: "继续完整渲染" overrides and banner
   // dismissals are tab-scoped, so they are pruned as soon as a tab closes —
   // a closed-and-reopened document always returns to automatic mode.
@@ -238,6 +248,9 @@ export default function AppShell({
     setDismissedPerfTabs(prune);
     setOutlinesByTab((current) => pruneTabMap(current, open));
     setCollapsedOutlineIdsByTab((current) => pruneTabMap(current, open));
+    setTableFocusRequest((current) =>
+      current && !open.has(current.tabId) ? null : current
+    );
     // Keyed on the open tab ids; the reducer's tab list is the source of truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabIdsKey]);
@@ -305,6 +318,17 @@ export default function AppShell({
       from: heading.from,
       textFrom: heading.textFrom,
     });
+  };
+  const requestTableEdit = (request: TableCellEditRequest) => {
+    if (!active) return;
+    const tabId = active.id;
+    tableFocusSequenceRef.current += 1;
+    setTableFocusRequest({
+      ...request,
+      tabId,
+      sequence: tableFocusSequenceRef.current,
+    });
+    controller.setViewMode(tabId, "editing");
   };
   const activeText = active?.text ?? null;
   // Bounded per keystroke: O(1) for out-of-band documents, one synchronous
@@ -793,6 +817,12 @@ export default function AppShell({
             outlineNavigation={
               outlineNavigation?.tabId === active.id
                 ? outlineNavigation
+                : null
+            }
+            onRequestTableEdit={requestTableEdit}
+            tableFocusRequest={
+              tableFocusRequest?.tabId === active.id
+                ? tableFocusRequest
                 : null
             }
             performanceMode={lightMode ? "light" : "full"}
