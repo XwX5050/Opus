@@ -1,3 +1,4 @@
+import { isolateHistory } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Extension } from "@codemirror/state";
 import {
@@ -9,6 +10,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import {
+  appendedTableRow,
   extractMarkdownTables,
   findCurrentTable,
   serializeTableCell,
@@ -39,6 +41,7 @@ interface ResolvedCell {
   readonly element: HTMLElement;
   readonly index: number;
   readonly model: MarkdownTableCell;
+  readonly table: MarkdownTable;
 }
 
 const widgetContexts = new WeakMap<HTMLElement, TableWidgetContext>();
@@ -241,6 +244,7 @@ const resolveCurrentCell = (
     element,
     index: ownedIndex,
     model: cells[ownedIndex],
+    table: currentTable,
   };
 };
 
@@ -346,7 +350,139 @@ const handleCompositionEnd = (root: HTMLElement, event: CompositionEvent) => {
   commitCell(resolved);
 };
 
+const ownedCellAt = (
+  root: HTMLElement,
+  context: TableWidgetContext,
+  table: MarkdownTable,
+  index: number,
+) => {
+  const element = context.ownedCells[index];
+  if (
+    !element ||
+    !context.view.dom.contains(root) ||
+    element.closest(".md-table-scroll") !== root ||
+    element.dataset.tableFrom !== String(table.from) ||
+    element.dataset.cellIndex !== String(index)
+  ) {
+    return null;
+  }
+  return element;
+};
+
+const queueCellFocus = (
+  view: EditorView,
+  tableFrom: number,
+  index: number,
+  expectedSource: string,
+) => {
+  queueMicrotask(() => {
+    if (!view.dom.isConnected) return;
+    const roots = view.dom.querySelectorAll<HTMLElement>(".md-table-scroll");
+    for (const root of roots) {
+      const context = widgetContexts.get(root);
+      if (!context || context.view !== view) continue;
+      const currentTable = findCurrentTable(
+        view.state,
+        context.table.from,
+        context.table.source,
+      );
+      if (
+        !currentTable ||
+        currentTable.from !== tableFrom ||
+        currentTable.source !== expectedSource
+      ) {
+        continue;
+      }
+      const element = ownedCellAt(root, context, currentTable, index);
+      if (element) {
+        element.focus();
+        return;
+      }
+    }
+  });
+};
+
+const handleKeyDown = (root: HTMLElement, event: KeyboardEvent) => {
+  const isTab = event.key === "Tab";
+  const isEscape = event.key === "Escape";
+  if (
+    (!isTab && !isEscape) ||
+    event.repeat ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    (isEscape && event.shiftKey)
+  ) {
+    return;
+  }
+
+  const resolved = resolveCurrentCell(root, event);
+  if (
+    !resolved ||
+    event.isComposing ||
+    resolved.context.composing.has(resolved.element)
+  ) {
+    return;
+  }
+
+  const cells = tableCells(resolved.table);
+  let targetCell: HTMLElement | null = null;
+  if (isTab && (event.shiftKey || resolved.index < cells.length - 1)) {
+    const targetIndex = event.shiftKey
+      ? Math.max(0, resolved.index - 1)
+      : resolved.index + 1;
+    targetCell = ownedCellAt(
+      root,
+      resolved.context,
+      resolved.table,
+      targetIndex,
+    );
+    if (!targetCell) return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (isEscape) {
+    const tableEnd = Math.min(
+      resolved.context.view.state.doc.length,
+      resolved.table.to,
+    );
+    resolved.context.view.focus();
+    resolved.context.view.dispatch({
+      selection: { anchor: tableEnd },
+    });
+    return;
+  }
+
+  if (targetCell) {
+    targetCell.focus();
+    return;
+  }
+
+  const firstNewCellIndex = cells.length;
+  const tableFrom = resolved.table.from;
+  const appendedRow = appendedTableRow(resolved.table);
+  resolved.context.view.dispatch({
+    changes: {
+      from: resolved.table.to,
+      insert: appendedRow,
+    },
+    annotations: isolateHistory.of("full"),
+    userEvent: "input.type",
+  });
+  queueCellFocus(
+    resolved.context.view,
+    tableFrom,
+    firstNewCellIndex,
+    `${resolved.table.source}${appendedRow}`,
+  );
+};
+
 const addDelegatedListeners = (root: HTMLElement) => {
+  root.addEventListener("keydown", (event) => {
+    handleKeyDown(root, event);
+  });
   root.addEventListener("beforeinput", (event) => {
     handleBeforeInput(root, event as InputEvent);
   });

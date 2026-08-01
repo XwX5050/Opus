@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
 import {
+  appendedTableRow,
   decodeTableCell,
   extractMarkdownTables,
   findCurrentTable,
@@ -39,6 +40,7 @@ describe("markdownTable", () => {
         from: 0,
         to: doc.length,
         source: doc,
+        continuationPrefix: "",
         columns: [
           { alignment: "left" },
           { alignment: "center" },
@@ -246,5 +248,67 @@ describe("markdownTable", () => {
       "three",
       "four",
     ]);
+  });
+
+  it.each([
+    {
+      columns: 1,
+      doc: ["| A |", "| --- |"].join("\n"),
+      row: "\n|  |",
+    },
+    {
+      columns: 2,
+      doc: ["| A | B |", "| --- | --- |"].join("\n"),
+      row: "\n|  |  |",
+    },
+    {
+      columns: 4,
+      doc: [
+        "| A | B | C | D |",
+        "| --- | --- | --- | --- |",
+      ].join("\n"),
+      row: "\n|  |  |  |  |",
+    },
+  ])("creates a normalized LF row for a $columns-column table", ({
+    doc,
+    row,
+  }) => {
+    const table = extractMarkdownTables(parse(doc))[0];
+
+    expect(appendedTableRow(table)).toBe(row);
+  });
+
+  it.each([
+    {
+      container: "blockquote",
+      doc: ["> A | B", "> --- | ---", "> one | two"].join("\n"),
+      prefix: "> ",
+      row: "\n> |  |  |",
+    },
+    {
+      container: "list",
+      doc: ["- A | B", "  --- | ---", "  one | two"].join("\n"),
+      prefix: "  ",
+      row: "\n  |  |  |",
+    },
+    {
+      container: "nested blockquote list",
+      doc: [
+        "> - A | B",
+        ">   --- | ---",
+        ">   one | two",
+      ].join("\n"),
+      prefix: ">   ",
+      row: "\n>   |  |  |",
+    },
+  ])("extracts the exact $container continuation prefix", ({
+    doc,
+    prefix,
+    row,
+  }) => {
+    const table = extractMarkdownTables(parse(doc))[0];
+
+    expect(table.continuationPrefix).toBe(prefix);
+    expect(appendedTableRow(table)).toBe(row);
   });
 });

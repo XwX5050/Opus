@@ -1,6 +1,17 @@
-import { history, undo } from "@codemirror/commands";
+import {
+  history,
+  redo,
+  redoDepth,
+  undo,
+  undoDepth,
+} from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import {
+  Compartment,
+  EditorState,
+  Transaction,
+  type Extension,
+} from "@codemirror/state";
 import { EditorView, WidgetType } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { afterEach, describe, expect, it } from "vitest";
@@ -91,6 +102,25 @@ const dispatchPaste = (
   });
   cell.dispatchEvent(event);
   return event;
+};
+
+const dispatchKeyDown = (
+  cell: HTMLElement,
+  key: string,
+  init: KeyboardEventInit = {},
+) => {
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key,
+    ...init,
+  });
+  cell.dispatchEvent(event);
+  return event;
+};
+
+const flushQueuedFocus = async () => {
+  await Promise.resolve();
 };
 
 afterEach(() => {
@@ -368,6 +398,338 @@ describe("tableWidgetsExtension", () => {
     expect(view.dom.querySelector("table.md-table")?.textContent)
       .toBe("CDthreefour");
     expect(view.state.doc.toString()).toBe(updated);
+  });
+
+  it("moves Tab from the header across the header-body boundary", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const first = tableCell(view, 0);
+    const second = tableCell(view, 1);
+    const firstBody = tableCell(view, 2);
+    first.focus();
+
+    const firstEvent = dispatchKeyDown(first, "Tab");
+    expect(firstEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(second);
+
+    const boundaryEvent = dispatchKeyDown(second, "Tab");
+    expect(boundaryEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(firstBody);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("moves Shift+Tab backward and traps it on the first cell", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const first = tableCell(view, 0);
+    const second = tableCell(view, 1);
+    second.focus();
+
+    const previousEvent = dispatchKeyDown(second, "Tab", { shiftKey: true });
+    expect(previousEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+
+    const trappedEvent = dispatchKeyDown(first, "Tab", { shiftKey: true });
+    expect(trappedEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("appends one row from the final body cell and focuses its first cell", async () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const finalCell = tableCell(view, 3);
+    finalCell.focus();
+
+    const event = dispatchKeyDown(finalCell, "Tab");
+    await flushQueuedFocus();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe(`${doc}\n|  |  |`);
+    expect(tableCell(view, 4)).toBe(document.activeElement);
+    expect(tableCell(view, 4).textContent).toBe("");
+    expect(view.dom.querySelectorAll("tbody tr")).toHaveLength(2);
+  });
+
+  it("appends the first body row from a header-only table", async () => {
+    const doc = ["| A | B |", "| --- | --- |"].join("\n");
+    const view = createView(doc);
+    const finalHeader = tableCell(view, 1);
+    finalHeader.focus();
+
+    dispatchKeyDown(finalHeader, "Tab");
+    await flushQueuedFocus();
+
+    expect(view.state.doc.toString()).toBe(`${doc}\n|  |  |`);
+    expect(view.dom.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(tableCell(view, 2)).toBe(document.activeElement);
+  });
+
+  it.each([
+    {
+      container: "blockquote",
+      doc: ["> A | B", "> --- | ---", "> one | two"].join("\n"),
+      appended: "\n> |  |  |",
+    },
+    {
+      container: "list",
+      doc: ["- A | B", "  --- | ---", "  one | two"].join("\n"),
+      appended: "\n  |  |  |",
+    },
+  ])("appends and focuses a row inside a $container table", async ({
+    doc,
+    appended,
+  }) => {
+    const view = createView(doc);
+    const originalTable = extractMarkdownTables(view.state)[0];
+    const finalIndex = originalTable.header.length +
+      originalTable.rows.flat().length - 1;
+
+    dispatchKeyDown(tableCell(view, finalIndex), "Tab");
+    await flushQueuedFocus();
+
+    const [refreshedTable] = extractMarkdownTables(view.state);
+    expect(view.state.doc.toString()).toBe(`${doc}${appended}`);
+    expect(refreshedTable.from).toBe(originalTable.from);
+    expect(refreshedTable.rows).toHaveLength(2);
+    expect(tableCell(view, finalIndex + 1)).toBe(document.activeElement);
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undo(view)).toBe(false);
+  });
+
+  it("inserts an appended row in one input.type transaction undone once", async () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const docTransactions: {
+      readonly userEvent: string | undefined;
+      readonly changeCount: number;
+    }[] = [];
+    const view = createView(doc, true, EditorView.updateListener.of((update) => {
+      for (const transaction of update.transactions) {
+        if (!transaction.docChanged) continue;
+        let changeCount = 0;
+        transaction.changes.iterChanges(() => {
+          changeCount += 1;
+        });
+        docTransactions.push({
+          userEvent: transaction.annotation(Transaction.userEvent),
+          changeCount,
+        });
+      }
+    }));
+
+    dispatchKeyDown(tableCell(view, 3), "Tab");
+    await flushQueuedFocus();
+
+    expect(docTransactions).toEqual([{
+      userEvent: "input.type",
+      changeCount: 1,
+    }]);
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undo(view)).toBe(false);
+  });
+
+  it("keeps a final-cell edit separate from the appended-row history event", async () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const edited = ["A | B", "--- | ---", "one | changed"].join("\n");
+    const appended = `${edited}\n|  |  |`;
+    const view = createView(doc);
+    const finalCell = tableCell(view, 3);
+    finalCell.textContent = "changed";
+
+    dispatchInput(finalCell);
+    dispatchKeyDown(tableCell(view, 3), "Tab");
+    await flushQueuedFocus();
+
+    expect(view.state.doc.toString()).toBe(appended);
+    expect(undoDepth(view.state)).toBe(2);
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(edited);
+    expect(undoDepth(view.state)).toBe(1);
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(undoDepth(view.state)).toBe(0);
+    expect(redoDepth(view.state)).toBe(2);
+
+    expect(redo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(edited);
+    expect(redo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(appended);
+    expect(redo(view)).toBe(false);
+  });
+
+  it("preserves surrounding Markdown and existing table spelling when appending", async () => {
+    const tableSource = [
+      "  Left\t |Right",
+      "  :--- | ---:",
+      "  old\t | keep  ",
+    ].join("\n");
+    const doc = `before **untouched**\n\n${tableSource}\n\nafter _untouched_`;
+    const view = createView(doc);
+    const originalTable = extractMarkdownTables(view.state)[0];
+    const finalIndex = originalTable.header.length +
+      originalTable.rows.flat().length - 1;
+
+    dispatchKeyDown(tableCell(view, finalIndex), "Tab");
+    await flushQueuedFocus();
+
+    expect(view.state.doc.toString()).toBe(
+      `before **untouched**\n\n${tableSource}\n  |  |  |\n\nafter _untouched_`,
+    );
+  });
+
+  it("ignores modified Tab keydowns", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const finalCell = tableCell(view, 3);
+    finalCell.focus();
+
+    for (const modifiers of [
+      { metaKey: true },
+      { ctrlKey: true },
+      { altKey: true },
+    ]) {
+      const event = dispatchKeyDown(finalCell, "Tab", modifiers);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(finalCell);
+      expect(view.state.doc.toString()).toBe(doc);
+    }
+  });
+
+  it("does not navigate or insert for read-only widget options or state", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const optionReadOnly = createView(doc, false);
+    const stateReadOnly = createView(
+      doc,
+      true,
+      EditorState.readOnly.of(true),
+    );
+
+    for (const view of [optionReadOnly, stateReadOnly]) {
+      const event = dispatchKeyDown(tableCell(view, 3), "Tab");
+      expect(event.defaultPrevented).toBe(false);
+      expect(view.state.doc.toString()).toBe(doc);
+    }
+  });
+
+  it("rejects navigation from detached stale and tampered cells", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const staleView = createView(doc);
+    const staleCell = tableCell(staleView, 3);
+    const replacement = [
+      "C | D | E",
+      "--- | --- | ---",
+      "three | four | five",
+    ].join("\n");
+    staleView.dispatch({
+      changes: { from: 0, to: doc.length, insert: replacement },
+    });
+    const staleEvent = dispatchKeyDown(staleCell, "Tab");
+
+    expect(staleEvent.defaultPrevented).toBe(false);
+    expect(staleCell.isConnected).toBe(false);
+    expect(staleView.state.doc.toString()).toBe(replacement);
+
+    const tamperedView = createView(doc);
+    const tamperedCell = tableCell(tamperedView, 1);
+    tamperedCell.focus();
+    tamperedCell.dataset.cellIndex = "2";
+    const tamperedEvent = dispatchKeyDown(tamperedCell, "Tab");
+
+    expect(tamperedEvent.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(tamperedCell);
+    expect(tamperedView.state.doc.toString()).toBe(doc);
+  });
+
+  it("ignores Tab when the adjacent destination cell is tampered", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const origin = tableCell(view, 0);
+    const destination = tableCell(view, 1);
+    origin.focus();
+    destination.dataset.cellIndex = "99";
+
+    const event = dispatchKeyDown(origin, "Tab");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(origin);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("ignores Tab while a cell composition is active", () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const finalCell = tableCell(view, 3);
+    finalCell.focus();
+    finalCell.dispatchEvent(new CompositionEvent("compositionstart", {
+      bubbles: true,
+    }));
+
+    const event = dispatchKeyDown(finalCell, "Tab", { isComposing: true });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(finalCell);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("focuses CodeMirror at the table end on Escape without changing history", () => {
+    const tableSource = ["A | B", "--- | ---", "one | two"].join("\n");
+    const doc = `before\n\n${tableSource}\n\nafter`;
+    const view = createView(doc);
+    const table = extractMarkdownTables(view.state)[0];
+
+    for (const index of [0, 3]) {
+      const cell = tableCell(view, index);
+      cell.focus();
+      const event = dispatchKeyDown(cell, "Escape");
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(view.contentDOM);
+      expect(view.state.selection.main.anchor).toBe(table.to);
+      expect(view.state.doc.toString()).toBe(doc);
+      expect(undo(view)).toBe(false);
+    }
+  });
+
+  it("does not append another row for a repeated final-cell Tab", async () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const view = createView(doc);
+    const finalCell = tableCell(view, 3);
+
+    const repeated = dispatchKeyDown(finalCell, "Tab", { repeat: true });
+    await flushQueuedFocus();
+
+    expect(repeated.defaultPrevented).toBe(false);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.dom.querySelectorAll("tbody tr")).toHaveLength(1);
+  });
+
+  it("does not move queued focus into a replacement table at the same position", async () => {
+    const doc = ["A | B", "--- | ---", "one | two"].join("\n");
+    const replacement = [
+      "C | D",
+      "--- | ---",
+      "three | four",
+      "five | six",
+    ].join("\n");
+    const view = createView(doc);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+
+    dispatchKeyDown(tableCell(view, 3), "Tab");
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: replacement,
+      },
+    });
+    outside.focus();
+    await flushQueuedFocus();
+
+    expect(view.state.doc.toString()).toBe(replacement);
+    expect(document.activeElement).toBe(outside);
   });
 
   it("edits only one body cell source range and preserves surrounding whitespace", () => {

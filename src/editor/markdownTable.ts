@@ -19,6 +19,7 @@ export interface MarkdownTable {
   readonly from: number;
   readonly to: number;
   readonly source: string;
+  readonly continuationPrefix: string;
   readonly columns: readonly MarkdownTableColumn[];
   readonly header: readonly MarkdownTableCell[];
   readonly rows: readonly (readonly MarkdownTableCell[])[];
@@ -151,10 +152,15 @@ const tableForNode = (state: EditorState, table: SyntaxNode): MarkdownTable | nu
   const rows = rowNodes.map((row) => cellsForLine(state, row.from, row.to));
   if (rows.some((row) => row.length !== header.length)) return null;
 
+  const delimiterLine = state.doc.lineAt(delimiterNode.from);
   return {
     from: table.from,
     to: table.to,
     source: state.sliceDoc(table.from, table.to),
+    continuationPrefix: state.sliceDoc(
+      delimiterLine.from,
+      delimiterNode.from,
+    ),
     columns: alignments.map((alignment) => ({ alignment: alignment! })),
     header,
     rows,
@@ -213,3 +219,8 @@ export const tableCells = (table: MarkdownTable): MarkdownTableCell[] => [
   ...table.header,
   ...table.rows.flat(),
 ];
+
+export const appendedTableRow = (table: MarkdownTable): string =>
+  `\n${table.continuationPrefix}| ${
+    table.columns.map(() => "").join(" | ")
+  } |`;
