@@ -71,7 +71,7 @@ Vite, Tauri 2.
   git commit -m "test: cover native table cell deletion events"
   ```
 
-### Task 2: Reproduce all six deletion variants through the browser shell
+### Task 2: Reproduce Chromium-supported deletion variants through the browser shell
 
 **Files:**
 - Modify: `tests/e2e/notepad.spec.ts:88-95, after the existing table typing test`
@@ -101,7 +101,7 @@ Vite, Tauri 2.
 
 - [ ] **Step 2: Add the failing end-to-end regression**
 
-  Add a test named `"deletes table-cell text with native macOS shortcuts and saves exact source"`.
+  Add a test named `"deletes table-cell text with browser-supported native shortcuts and saves exact source"`.
   Seed this exact document, click each body cell with `clickEditableTableCell`,
   place its caret at the stated offset, then press the stated key:
 
@@ -118,7 +118,8 @@ Vite, Tauri 2.
   ].join("\\n");
   ```
 
-  Use body-cell indices `6` through `11` and verify each result immediately:
+  Use body-cell indices `6` through `10` and verify each Chromium-supported
+  transformation immediately:
 
   ```ts
   await clickEditableTableCell(markdownTableCell(page, 6));
@@ -146,21 +147,22 @@ Vite, Tauri 2.
   await page.keyboard.press("Meta+Backspace");
   await expect(markdownTableCell(page, 10)).toHaveText("");
 
-  await clickEditableTableCell(markdownTableCell(page, 11));
-  await placeTableCaret(markdownTableCell(page, 11), 0);
-  await page.keyboard.press("Meta+Delete");
-  await expect(markdownTableCell(page, 11)).toHaveText("");
   ```
+
+  Chromium does not natively mutate plain `contenteditable` text for
+  `Meta+Delete`. The Task 1 widget event-policy unit test covers this sixth
+  event variant, and Task 4's packaged macOS WKWebView acceptance must verify
+  its text mutation manually.
 
   Press `Meta+s`, assert the dirty indicator clears, and assert the only write
   equals the source above with the body row replaced by
-  `"| ab | ef |  |  |  |  |"`. This verifies native events reached the cell,
+  `"| ab | ef |  |  |  | delta |"`. This verifies native events reached the cell,
   the existing input listener committed changes, and table delimiters plus
   surrounding text remained intact.
 
 - [ ] **Step 3: Run the focused browser regression and confirm it fails**
 
-  Run: `npm run test:e2e -- --grep "native macOS shortcuts"`
+  Run: `npm run test:e2e -- --grep "browser-supported native shortcuts"`
 
   Expected: the first Backspace assertion fails because CodeMirror prevents
   the native deletion action while the table remains atomic.
@@ -169,7 +171,7 @@ Vite, Tauri 2.
 
   ```bash
   git add tests/e2e/notepad.spec.ts
-  git commit -m "test: cover native table cell deletion shortcuts"
+  git commit -m "test: limit browser deletion coverage to supported shortcuts"
   ```
 
 ### Task 3: Give editable cells ownership of deletion keys
@@ -209,7 +211,7 @@ Vite, Tauri 2.
 
   Expected: PASS, including normal, Option, and Command deletion-event policy.
 
-  Run: `npm run test:e2e -- --grep "native macOS shortcuts"`
+  Run: `npm run test:e2e -- --grep "browser-supported native shortcuts"`
 
   Expected: PASS, with one saved write that preserves the Markdown table and
   surrounding text.
@@ -250,7 +252,9 @@ Vite, Tauri 2.
 
   Expected: an ARM64 ad-hoc-signed `Opus.app` passes structural verification and
   is reported as non-release. Copy it to `/Applications/Opus.app` only after
-  making a timestamped rollback copy of the existing app; do not launch it.
+  making a timestamped rollback copy of the existing app. Before install
+  handoff, manually verify Cmd+Delete mutates text in an editable table cell in
+  the packaged WKWebView app; do not launch the replacement automatically.
 
 - [ ] **Step 3: Inspect the final changes and commit any verification-only adjustment**
 

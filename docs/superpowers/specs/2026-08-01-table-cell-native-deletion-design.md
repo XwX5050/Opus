@@ -50,11 +50,11 @@ deletion predicate.
 
 ## Verification
 
-Add a widget event-policy unit test for normal, Option, and Command variants
-of Backspace/Delete, plus non-editable/read-only rejection. Extend the real
-browser workflow to click a table cell, use each native deletion shortcut, and
-save the resulting Markdown. The test must show the exact source preserves the
-table structure and surrounding document text.
+The widget event-policy unit test covers all six normal, Option, and Command
+Backspace/Delete variants, plus non-editable/read-only rejection. Chromium E2E
+executes its five supported native transformations and saves exact Markdown
+while preserving table structure and surrounding document text. Manual packaged
+macOS WKWebView acceptance verifies the Meta+Delete text mutation.
 
 Run focused tests, the full Vitest suite, frontend build, Playwright workflow,
 and relevant packaging checks. Before installing a replacement `/Applications/Opus.app`,
