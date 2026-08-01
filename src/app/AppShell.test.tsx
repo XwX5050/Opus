@@ -195,6 +195,70 @@ describe("AppShell", () => {
       .not.toHaveAccessibleName(/未保存/);
   });
 
+  it("does not replay a consumed table-focus request after switching away and back", async () => {
+    const user = userEvent.setup();
+    const source = [
+      "| Name | Note |",
+      "| --- | --- |",
+      "| Ada | old |",
+    ].join("\n");
+    const port = new InspectablePort([
+      file("/notes/a.md", source),
+      file("/notes/b.md", "other document"),
+    ]);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("tab", { name: /a\.md/ }));
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    await user.click(tableCell(3));
+    await waitFor(() => expect(tableCell(3)).toHaveFocus());
+
+    await user.click(screen.getByRole("tab", { name: /b\.md/ }));
+    const activeA = screen.getByRole("tab", { name: /a\.md/ });
+    await user.click(activeA);
+
+    await waitFor(() => expect(activeA).toHaveAttribute("aria-selected", "true"));
+    expect(tableCell(3)).not.toHaveFocus();
+    expect(activeA).toHaveFocus();
+    expect(EditorView.findFromDOM(editor())?.state.doc.toString()).toBe(source);
+    expect(port.writes).toHaveLength(0);
+  });
+
+  it("does not replay a consumed table-focus request when closing the other tab returns to it", async () => {
+    const user = userEvent.setup();
+    const source = [
+      "| Name | Note |",
+      "| --- | --- |",
+      "| Ada | old |",
+    ].join("\n");
+    const port = new InspectablePort([
+      file("/notes/a.md", source),
+      file("/notes/b.md", "other document"),
+    ]);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("tab", { name: /a\.md/ }));
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    await user.click(tableCell(3));
+    await waitFor(() => expect(tableCell(3)).toHaveFocus());
+
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    focus.mockClear();
+    try {
+      await user.click(screen.getByRole("tab", { name: /b\.md/ }));
+      await user.click(screen.getByRole("button", { name: "关闭 b.md" }));
+
+      const activeA = screen.getByRole("tab", { name: /a\.md/ });
+      await waitFor(() => expect(activeA).toHaveAttribute("aria-selected", "true"));
+      expect(focus.mock.instances).not.toContain(tableCell(3));
+      expect(activeA).toHaveFocus();
+      expect(EditorView.findFromDOM(editor())?.state.doc.toString()).toBe(source);
+      expect(port.writes).toHaveLength(0);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
   it("places a launch-collapsed outline toggle after the view-mode control", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", file("/notes/a.md", "# Alpha\n## Child")]]),

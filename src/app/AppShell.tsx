@@ -330,6 +330,16 @@ export default function AppShell({
     });
     controller.setViewMode(tabId, "editing");
   };
+  const consumeTableFocus = (
+    tabId: string,
+    request: TableFocusRequest,
+  ) => {
+    setTableFocusRequest((current) =>
+      current?.tabId === tabId && current.sequence === request.sequence
+        ? null
+        : current
+    );
+  };
   const activeText = active?.text ?? null;
   // Bounded per keystroke: O(1) for out-of-band documents, one synchronous
   // scan per tab switch, debounced re-evaluation for in-band edits.
@@ -824,6 +834,9 @@ export default function AppShell({
               tableFocusRequest?.tabId === active.id
                 ? tableFocusRequest
                 : null
+            }
+            onTableFocusConsumed={(request) =>
+              consumeTableFocus(active.id, request)
             }
             performanceMode={lightMode ? "light" : "full"}
           />

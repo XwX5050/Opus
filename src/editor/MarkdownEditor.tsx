@@ -61,6 +61,7 @@ export interface MarkdownEditorProps {
   outlineNavigation?: OutlineNavigationRequest | null;
   onRequestTableEdit?(request: TableCellEditRequest): void;
   tableFocusRequest?: TableFocusRequest | null;
+  onTableFocusConsumed?(request: TableFocusRequest): void;
   /**
    * Large documents open in "light" mode: Markdown parsing, selection,
    * search and visible-range text styling stay active, while offscreen
@@ -86,6 +87,7 @@ export default function MarkdownEditor({
   outlineNavigation = null,
   onRequestTableEdit,
   tableFocusRequest = null,
+  onTableFocusConsumed,
   performanceMode = "full",
 }: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -101,6 +103,7 @@ export default function MarkdownEditor({
     onToggleReading,
     onOutlineChange,
     onRequestTableEdit,
+    onTableFocusConsumed,
   });
   callbacksRef.current = {
     onChange,
@@ -109,6 +112,7 @@ export default function MarkdownEditor({
     onToggleReading,
     onOutlineChange,
     onRequestTableEdit,
+    onTableFocusConsumed,
   };
   const tableEditRequestHandlerRef = useRef<
     (request: TableCellEditRequest) => void
@@ -266,6 +270,7 @@ export default function MarkdownEditor({
     }
     consumedTableFocusRef.current = tableFocusRequest.sequence;
     focusMarkdownTableCell(view, tableFocusRequest);
+    callbacksRef.current.onTableFocusConsumed?.(tableFocusRequest);
   }, [tableFocusRequest, viewMode]);
 
   useEffect(() => {
