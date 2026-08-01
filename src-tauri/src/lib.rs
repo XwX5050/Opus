@@ -6,6 +6,7 @@ pub mod open_events;
 pub mod perf_mark;
 pub mod recovery;
 pub mod watch;
+pub mod window_background;
 pub mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -38,9 +39,23 @@ pub fn run() {
             document_commands::list_recovery_drafts,
             document_commands::read_recovery_draft,
             document_commands::discard_recovery_draft,
-            perf_mark::perf_mark_editor_editable
+            perf_mark::perf_mark_editor_editable,
+            #[cfg(target_os = "macos")]
+            window_background::set_window_background
         ])
         .setup(move |app| {
+            // Seed the native window with the dark default canvas before the
+            // webview renders: WKWebView repaints lag behind live resizes, so
+            // a mismatched NSWindow background would flash along the resized
+            // edge. useTheme keeps it in sync with the resolved theme via
+            // set_window_background.
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_background_color(Some(
+                    window_background::parse_hex_color(window_background::DEFAULT_CANVAS)
+                        .expect("default canvas is a valid hex color"),
+                ));
+            }
             app.set_menu(menu::build_menu(app.handle())?)?;
             app.on_menu_event(move |app_handle, event| {
                 let id: &str = event.id().as_ref();
