@@ -98,7 +98,27 @@ const normalizeCellLimit = (maxCells: number | undefined) =>
 
 export type MarkdownTableLineCells =
   | { readonly overflow: false; readonly cells: MarkdownTableCell[] }
-  | { readonly overflow: true };
+  | { readonly overflow: true; readonly reason: "maxCells" | "expectedCells" };
+
+export interface MarkdownTableLineLimits {
+  /** Global extraction budget remaining for content cells. */
+  readonly maxCells?: number;
+  /** Structural column count required for a valid table row. */
+  readonly expectedCells?: number;
+}
+
+const overflowReasonFor = (
+  projectedCells: number,
+  maxCells: number | undefined,
+  expectedCells: number | undefined,
+): "maxCells" | "expectedCells" | undefined => {
+  if (expectedCells !== undefined && projectedCells > expectedCells) {
+    return "expectedCells";
+  }
+  return maxCells !== undefined && projectedCells > maxCells
+    ? "maxCells"
+    : undefined;
+};
 
 const isStructuralPipeAt = (line: string, index: number): boolean => {
   if (line[index] !== "|") return false;
@@ -117,12 +137,13 @@ export const cellsForLine = (
   state: EditorState,
   from: number,
   to: number,
-  maxCells?: number,
+  limits: MarkdownTableLineLimits = {},
 ): MarkdownTableLineCells => {
   // EditorState exposes range text as a string, so one line slice is unavoidable.
-  // Separator and cell arrays are only created within the normalized cell limit.
+  // Separator and cell arrays are only created within the narrowest row limit.
   const line = state.sliceDoc(from, to);
-  const cellLimit = normalizeCellLimit(maxCells);
+  const maxCellLimit = normalizeCellLimit(limits.maxCells);
+  const expectedCellLimit = normalizeCellLimit(limits.expectedCells);
   let firstContent = 0;
   while (firstContent < line.length && whitespace(line[firstContent])) firstContent += 1;
   let lastContent = line.length;
@@ -144,15 +165,25 @@ export const cellsForLine = (
       continue;
     }
     if (character === "|" && backslashRun % 2 === 0) {
-      if (cellLimit !== undefined && separators.length + 2 > cellLimit) {
-        return { overflow: true };
+      const reason = overflowReasonFor(
+        separators.length + 2,
+        maxCellLimit,
+        expectedCellLimit,
+      );
+      if (reason) {
+        return { overflow: true, reason };
       }
       separators.push(index);
     }
     backslashRun = 0;
   }
-  if (cellLimit !== undefined && separators.length + 1 > cellLimit) {
-    return { overflow: true };
+  const reason = overflowReasonFor(
+    separators.length + 1,
+    maxCellLimit,
+    expectedCellLimit,
+  );
+  if (reason) {
+    return { overflow: true, reason };
   }
 
   const cells: MarkdownTableCell[] = [];
@@ -207,10 +238,12 @@ const tableForNode = (
     state,
     headerNode.from,
     headerNode.to,
-    maxCells,
+    { maxCells },
   );
   if (headerResult.overflow) {
-    if (diagnostics) diagnostics.skippedForCellLimit += 1;
+    if (diagnostics && headerResult.reason === "maxCells") {
+      diagnostics.skippedForCellLimit += 1;
+    }
     return null;
   }
   const header = headerResult.cells;
@@ -221,10 +254,9 @@ const tableForNode = (
     state,
     delimiterNode.from,
     delimiterNode.to,
-    header.length,
+    { expectedCells: header.length },
   );
   if (delimiterResult.overflow) {
-    if (diagnostics) diagnostics.skippedForCellLimit += 1;
     return null;
   }
   const delimiter = delimiterResult.cells;
@@ -246,16 +278,21 @@ const tableForNode = (
       return null;
     }
     const remainingCells = maxCells === undefined
-      ? header.length
-      : Math.min(header.length, maxCells - materializedTableCells);
+      ? undefined
+      : maxCells - materializedTableCells;
     const rowResult = cellsForLine(
       state,
       child.from,
       child.to,
-      remainingCells,
+      {
+        maxCells: remainingCells,
+        expectedCells: header.length,
+      },
     );
     if (rowResult.overflow) {
-      if (diagnostics) diagnostics.skippedForCellLimit += 1;
+      if (diagnostics && rowResult.reason === "maxCells") {
+        diagnostics.skippedForCellLimit += 1;
+      }
       return null;
     }
     const row = rowResult.cells;

@@ -214,10 +214,12 @@ describe("markdownTable", () => {
     const line = `| ${Array.from({ length: 5_000 }, () => "---").join(" | ")} |`;
     const state = parse(line);
 
-    expect(cellsForLine(state, 0, line.length, 2)).toEqual({ overflow: true });
+    expect(cellsForLine(state, 0, line.length, {
+      expectedCells: 2,
+    })).toEqual({ overflow: true, reason: "expectedCells" });
   });
 
-  it("rejects an over-wide parser-accepted body row without materializing it", () => {
+  it("treats an over-wide body row as malformed rather than over budget", () => {
     const diagnostics = extractionDiagnostics();
     const doc = [
       generatedOuterPipeRow(2, "header"),
@@ -232,7 +234,25 @@ describe("markdownTable", () => {
     expect(diagnostics).toEqual({
       materializedRows: 0,
       materializedCells: 2,
-      skippedForCellLimit: 1,
+      skippedForCellLimit: 0,
+    });
+  });
+
+  it("does not report an unlimited malformed body row as a cell-limit skip", () => {
+    const diagnostics = extractionDiagnostics();
+    const doc = [
+      generatedOuterPipeRow(2, "header"),
+      "| --- | --- |",
+      generatedOuterPipeRow(5_000, "body"),
+    ].join("\n");
+
+    expect(extractMarkdownTables(parse(doc), undefined, {
+      diagnostics,
+    })).toEqual([]);
+    expect(diagnostics).toEqual({
+      materializedRows: 0,
+      materializedCells: 2,
+      skippedForCellLimit: 0,
     });
   });
 
