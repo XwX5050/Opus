@@ -205,6 +205,50 @@ test("types and pastes plain text into a Markdown table and saves exact source",
   expect(writes).toEqual([expected]);
 });
 
+test("clicking a reading-mode table body cell enters editing and saves exact source", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [{ path: "/docs/table.md", text: tableDocumentSource }],
+    session: sessionWith("/docs/table.md"),
+  });
+
+  const host = page.locator(".markdown-editor");
+  const table = markdownTable(page);
+  const bodyCell = markdownTableCell(page, 2);
+  await expect(table).toBeVisible();
+
+  await page.getByRole("button", { name: "编辑模式" }).click();
+  await expect(host).toHaveAttribute("data-view-mode", "reading");
+  await expect(bodyCell).not.toHaveAttribute("contenteditable");
+
+  await bodyCell.click();
+  await expect(host).toHaveAttribute("data-view-mode", "editing");
+  await expect(bodyCell).toBeFocused();
+
+  await page.keyboard.type(" updated");
+  await expect(bodyCell).toHaveText("Ada updated");
+  await page.keyboard.press("Tab");
+  await expect(markdownTableCell(page, 3)).toBeFocused();
+
+  await page.keyboard.press("Meta+s");
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+  const expected = [
+    "Before untouched",
+    "",
+    "| Name | Note |",
+    "| --- | --- |",
+    "| Ada updated | old |",
+    "",
+    "After untouched",
+    "",
+  ].join("\n");
+  const writes = await page.evaluate(() =>
+    (window.__E2E_PORT__?.writes ?? []).map((write) => write.text),
+  );
+  expect(writes).toEqual([expected]);
+});
+
 test("navigates, appends, undoes, redoes, saves, and reads a Markdown table", async ({
   page,
 }) => {
@@ -282,7 +326,9 @@ test("navigates, appends, undoes, redoes, saves, and reads a Markdown table", as
     ),
   ).toBe(-1);
   const textBeforeReadingInput = await table.textContent();
-  await markdownTableCell(page, 2).click();
+  // Reading mode intentionally hands primary table-cell clicks back to
+  // editing; keep this check outside a cell. The focused view-mode button
+  // must not turn ordinary keyboard input into a document change.
   await page.keyboard.type("must-not-land");
   await expect(page.locator(".tab-dirty")).toHaveCount(0);
   await expect(table).toHaveText(textBeforeReadingInput!);

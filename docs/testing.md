@@ -35,7 +35,7 @@ Covered flows (real CodeMirror interactions, no reducer calls):
 - reading ↔ editing view toggle (marker hiding; reading is read-only);
 - interactive Markdown tables: native cell typing, plain-text paste,
   Tab navigation/row append, isolated undo/redo, exact save fidelity, and
-  read-only mode;
+  reading-mode click-to-edit handoff;
 - LaTeX success renders KaTeX, invalid formula shows a non-blocking error
   and never blocks editing;
 - find/replace (⌘F panel, replace all) in the current document;
@@ -93,6 +93,18 @@ build SHA, chip, and macOS version with the results.
 
 ### Markdown tables
 
+- **Native click-to-edit lifecycle (WKWebView)**: run this in the packaged
+  Opus app, not the Chromium E2E shell. In 阅读模式, left-click a header cell,
+  then return to 阅读模式 and left-click a populated body cell. Each click must
+  immediately return to 编辑模式 with a visible caret in the clicked cell at
+  the pointer position. In 编辑模式, click the first character, the middle,
+  and the end of populated cell text and type a different marker at each
+  position; all three markers must land at their clicked positions, with no
+  change to adjacent cells or surrounding Markdown. Repeat a header and body
+  edit with the macOS Chinese IME, use Tab and Shift+Tab to move between
+  cells, undo and redo each edit, then ⌘S. Fully quit with ⌘Q, reopen the
+  same file in Opus, and verify the saved Markdown contains exactly those
+  edits and no transient click/selection changes.
 - **Cell editing**: edit header cells, body cells, and empty cells. Enter
   Chinese text and a literal `|`; the visible cell shows the pipe while the
   saved Markdown escapes it as `\|`. Adjacent cells and surrounding text do
