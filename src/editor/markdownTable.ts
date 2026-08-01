@@ -30,6 +30,21 @@ export interface TableRange {
   readonly to: number;
 }
 
+export interface MarkdownTableExtractionDiagnostics {
+  /** Body rows parsed into cell models. */
+  materializedRows: number;
+  /** Header and body cells parsed into cell models; delimiter cells are excluded. */
+  materializedCells: number;
+  /** Tables rejected before extraction because they exceeded maxCells. */
+  skippedForCellLimit: number;
+}
+
+export interface MarkdownTableExtractionOptions {
+  /** Undefined is unlimited; invalid/nonpositive values extract no tables. */
+  readonly maxCells?: number;
+  readonly diagnostics?: MarkdownTableExtractionDiagnostics;
+}
+
 const whitespace = (character: string) => character === " " || character === "\t";
 
 export const decodeTableCell = (source: string): string =>
@@ -73,6 +88,13 @@ const normalizeRanges = (
   }
   return merged;
 };
+
+const normalizeCellLimit = (maxCells: number | undefined) =>
+  maxCells === undefined
+    ? undefined
+    : Number.isFinite(maxCells) && maxCells > 0
+      ? Math.floor(maxCells)
+      : 0;
 
 const structuralPipes = (line: string): number[] => {
   const pipes: number[] = [];
@@ -129,19 +151,29 @@ const alignmentFor = (cell: MarkdownTableCell): TableAlignment | null => {
   return cell.source.endsWith(":") ? "right" : "default";
 };
 
-const tableForNode = (state: EditorState, table: SyntaxNode): MarkdownTable | null => {
+const tableForNode = (
+  state: EditorState,
+  table: SyntaxNode,
+  maxCells: number | undefined,
+  diagnostics: MarkdownTableExtractionDiagnostics | undefined,
+): MarkdownTable | null => {
+  if (maxCells === 0) {
+    if (diagnostics) diagnostics.skippedForCellLimit += 1;
+    return null;
+  }
+
   let headerNode: SyntaxNode | null = null;
   let delimiterNode: SyntaxNode | null = null;
-  const rowNodes: SyntaxNode[] = [];
   for (let child = table.firstChild; child; child = child.nextSibling) {
     if (child.name === "TableHeader") headerNode = child;
     else if (child.name === "TableDelimiter") delimiterNode = child;
-    else if (child.name === "TableRow") rowNodes.push(child);
+    if (headerNode && delimiterNode) break;
   }
   if (!headerNode || !delimiterNode) return null;
 
   const header = cellsForLine(state, headerNode.from, headerNode.to);
   const delimiter = cellsForLine(state, delimiterNode.from, delimiterNode.to);
+  if (diagnostics) diagnostics.materializedCells += header.length;
   const alignments = delimiter.map(alignmentFor);
   if (
     header.length === 0 ||
@@ -149,8 +181,31 @@ const tableForNode = (state: EditorState, table: SyntaxNode): MarkdownTable | nu
     alignments.some((alignment) => alignment === null)
   ) return null;
 
-  const rows = rowNodes.map((row) => cellsForLine(state, row.from, row.to));
-  if (rows.some((row) => row.length !== header.length)) return null;
+  if (maxCells !== undefined && header.length > maxCells) {
+    if (diagnostics) diagnostics.skippedForCellLimit += 1;
+    return null;
+  }
+
+  const rows: MarkdownTableCell[][] = [];
+  let materializedTableCells = header.length;
+  for (let child = table.firstChild; child; child = child.nextSibling) {
+    if (child.name !== "TableRow") continue;
+    if (
+      maxCells !== undefined &&
+      materializedTableCells + header.length > maxCells
+    ) {
+      if (diagnostics) diagnostics.skippedForCellLimit += 1;
+      return null;
+    }
+    const row = cellsForLine(state, child.from, child.to);
+    if (diagnostics) {
+      diagnostics.materializedRows += 1;
+      diagnostics.materializedCells += row.length;
+    }
+    if (row.length !== header.length) return null;
+    rows.push(row);
+    materializedTableCells += row.length;
+  }
 
   const delimiterLine = state.doc.lineAt(delimiterNode.from);
   return {
@@ -170,10 +225,12 @@ const tableForNode = (state: EditorState, table: SyntaxNode): MarkdownTable | nu
 export const extractMarkdownTables = (
   state: EditorState,
   ranges?: readonly TableRange[],
+  options: MarkdownTableExtractionOptions = {},
 ): MarkdownTable[] => {
   const tables: MarkdownTable[] = [];
   const seen = new Set<string>();
   const tree = syntaxTree(state);
+  const maxCells = normalizeCellLimit(options.maxCells);
   for (const range of normalizeRanges(state.doc.length, ranges)) {
     tree.iterate({
       from: range.from,
@@ -182,10 +239,16 @@ export const extractMarkdownTables = (
         if (node.name !== "Table") return;
         if (node.from >= range.to || node.to <= range.from) return;
         const key = `${node.from}:${node.to}`;
-        if (seen.has(key)) return;
+        if (seen.has(key)) return false;
         seen.add(key);
-        const table = tableForNode(state, node.node);
+        const table = tableForNode(
+          state,
+          node.node,
+          maxCells,
+          options.diagnostics,
+        );
         if (table) tables.push(table);
+        return false;
       },
     });
   }

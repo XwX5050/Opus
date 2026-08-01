@@ -310,6 +310,39 @@ describe("tableWidgetsExtension", () => {
     expect(atomicRanges(view)).toEqual([{ from: 0, to: small.length }]);
   });
 
+  it("keeps an edited pressure-sized table raw while extraction stays bounded", () => {
+    const doc = generatedTable(2, 10_001, "pressure");
+    const view = createView(doc, true, [], 1_000);
+    const editFrom = view.state.doc.toString().indexOf("pressure-row-9000-0");
+
+    expect(view.dom.querySelector("table.md-table")).toBeNull();
+    expect(atomicRanges(view)).toEqual([]);
+    view.dispatch({
+      changes: {
+        from: editFrom,
+        to: editFrom + "pressure".length,
+        insert: "updated",
+      },
+    });
+
+    const diagnostics = {
+      materializedRows: 0,
+      materializedCells: 0,
+      skippedForCellLimit: 0,
+    };
+    expect(view.dom.querySelector("table.md-table")).toBeNull();
+    expect(atomicRanges(view)).toEqual([]);
+    expect(extractMarkdownTables(view.state, undefined, {
+      maxCells: 1_000,
+      diagnostics,
+    })).toEqual([]);
+    expect(diagnostics).toEqual({
+      materializedRows: 499,
+      materializedCells: 1_000,
+      skippedForCellLimit: 1,
+    });
+  });
+
   it("does not make read-only table cells editable or tabbable", () => {
     const view = createView(["A | B", "--- | ---", "one | two"].join("\n"), false);
     const cells = [...view.dom.querySelectorAll<HTMLElement>("th, td")];

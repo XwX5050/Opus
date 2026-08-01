@@ -1,6 +1,7 @@
 import { markdown } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import { forceParsing, syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
 import {
@@ -17,6 +18,31 @@ const parse = (doc: string) =>
     doc,
     extensions: [markdown({ extensions: [GFM] })],
   });
+
+const generatedTable = (
+  columns: number,
+  bodyRows: number,
+  prefix = "row",
+) => {
+  const row = (label: string) =>
+    `| ${Array.from({ length: columns }, (_, index) => `${label}-${index}`).join(" | ")} |`;
+  return [
+    row(`${prefix}-header`),
+    `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
+    ...Array.from({ length: bodyRows }, (_, index) =>
+      row(`${prefix}-${index}`)
+    ),
+  ].join("\n");
+};
+
+const generatedTwoColumnTable = (bodyRows: number, prefix = "row") =>
+  generatedTable(2, bodyRows, prefix);
+
+const extractionDiagnostics = () => ({
+  materializedRows: 0,
+  materializedCells: 0,
+  skippedForCellLimit: 0,
+});
 
 const expectLosslessCellRanges = (state: EditorState) => {
   for (const table of extractMarkdownTables(state)) {
@@ -150,6 +176,81 @@ describe("markdownTable", () => {
       { from: secondFrom + 1, to: secondFrom + 2 },
       { from: secondFrom, to: secondFrom + 3 },
     ]).map((table) => table.source)).toEqual([second]);
+  });
+
+  it("short-circuits a pressure-sized table before materializing over the cell budget", () => {
+    const doc = generatedTwoColumnTable(10_001, "huge");
+    const diagnostics = extractionDiagnostics();
+
+    expect(extractMarkdownTables(parse(doc), undefined, {
+      maxCells: 1_000,
+      diagnostics,
+    })).toEqual([]);
+    expect(diagnostics).toEqual({
+      materializedRows: 499,
+      materializedCells: 1_000,
+      skippedForCellLimit: 1,
+    });
+  });
+
+  it("extracts a table whose header and body exactly meet the cell budget", () => {
+    const doc = generatedTwoColumnTable(499, "exact");
+    const diagnostics = extractionDiagnostics();
+    const tables = extractMarkdownTables(parse(doc), undefined, {
+      maxCells: 1_000,
+      diagnostics,
+    });
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].rows).toHaveLength(499);
+    expect(diagnostics).toEqual({
+      materializedRows: 499,
+      materializedCells: 1_000,
+      skippedForCellLimit: 0,
+    });
+  });
+
+  it("continues scanning after a huge skipped table and extracts a later small table", () => {
+    const huge = generatedTable(100, 10, "huge");
+    const small = generatedTwoColumnTable(1, "small");
+    const doc = `${huge}\n\noutside\n\n${small}`;
+    const diagnostics = extractionDiagnostics();
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({ parent, state: parse(doc) });
+    try {
+      expect(forceParsing(view, doc.length, 5_000)).toBe(true);
+      const tables = extractMarkdownTables(
+        view.state,
+        undefined,
+        { maxCells: 1_000, diagnostics },
+      );
+
+      expect(tables.map((table) => table.source)).toEqual([small]);
+      expect(diagnostics.skippedForCellLimit).toBe(1);
+      expect(diagnostics.materializedRows).toBe(10);
+      expect(diagnostics.materializedCells).toBe(1_004);
+    } finally {
+      view.destroy();
+      parent.remove();
+    }
+  });
+
+  it("fully extracts the same pressure-sized table without a limit", () => {
+    const doc = generatedTwoColumnTable(10_001, "unlimited");
+    const diagnostics = extractionDiagnostics();
+    const tables = extractMarkdownTables(parse(doc), undefined, {
+      diagnostics,
+    });
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].rows).toHaveLength(10_001);
+    expect(tables[0].source).toBe(doc);
+    expect(diagnostics).toEqual({
+      materializedRows: 10_001,
+      materializedCells: 20_004,
+      skippedForCellLimit: 0,
+    });
   });
 
   it("does not emit a table for a range that only touches its boundary", () => {

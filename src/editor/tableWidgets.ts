@@ -713,19 +713,12 @@ const decorationSetsFor = (
 ): { decorations: DecorationSet; atomicRanges: DecorationSet } => {
   const replacements: ReturnType<Decoration["range"]>[] = [];
   const atomicRanges: ReturnType<Decoration["range"]>[] = [];
-  const maxRenderedCells = options.maxRenderedCells === undefined
-    ? undefined
-    : Number.isFinite(options.maxRenderedCells) && options.maxRenderedCells > 0
-      ? Math.floor(options.maxRenderedCells)
-      : 0;
 
-  for (const table of extractMarkdownTables(state, view.visibleRanges)) {
-    if (
-      maxRenderedCells !== undefined &&
-      tableCells(table).length > maxRenderedCells
-    ) {
-      continue;
-    }
+  for (const table of extractMarkdownTables(
+    state,
+    view.visibleRanges,
+    { maxCells: options.maxRenderedCells },
+  )) {
     let segmentFrom = table.from;
     let firstLine = true;
     while (segmentFrom < table.to) {
