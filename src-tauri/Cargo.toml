@@ -34,3 +34,12 @@ tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 trash = "5.2.3"
 notify = "8.2.0"
+
+# macOS-only bindings for the WKWebView under-page background (see
+# window_background.rs). Pinned to the exact versions wry already locks so
+# the types line up with the webview handles tauri hands over in
+# `with_webview`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "NSColor"] }
+objc2-foundation = { version = "0.3.2", features = ["std", "objc2-core-foundation"] }
+objc2-web-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "objc2-app-kit", "WKWebView"] }

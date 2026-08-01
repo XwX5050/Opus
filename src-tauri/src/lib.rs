@@ -44,17 +44,18 @@ pub fn run() {
             window_background::set_window_background
         ])
         .setup(move |app| {
-            // Seed the native window with the dark default canvas before the
-            // webview renders: WKWebView repaints lag behind live resizes, so
-            // a mismatched NSWindow background would flash along the resized
-            // edge. useTheme keeps it in sync with the resolved theme via
-            // set_window_background.
+            // Seed the native window and WKWebView under-page layer with the
+            // dark default canvas before the webview renders: both default to
+            // white and flash along the resized edge while WKWebView repaints
+            // lag behind live resizes. useTheme keeps them in sync with the
+            // resolved theme via set_window_background.
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_background_color(Some(
+                let _ = window_background::apply_background(
+                    &window,
                     window_background::parse_hex_color(window_background::DEFAULT_CANVAS)
                         .expect("default canvas is a valid hex color"),
-                ));
+                );
             }
             app.set_menu(menu::build_menu(app.handle())?)?;
             app.on_menu_event(move |app_handle, event| {

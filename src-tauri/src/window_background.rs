@@ -1,11 +1,17 @@
 //! Native window background sync (src/theme/useTheme.ts).
 //!
 //! During live window resizes the WKWebView repaints a step behind the drag,
-//! so the native NSWindow background (white by default) flashes along the
-//! resized edge. The frontend reports the resolved canvas color (`--canvas`
-//! in src/theme/tokens.css) whenever the theme changes, and this command
-//! paints the native window layer to match. `lib.rs` also seeds the initial
-//! background with the dark default canvas before the first frame.
+//! so white flashes along the resized edge. Two layers need the canvas color:
+//!
+//! - the native NSWindow background (white by default) — `set_background_color`;
+//! - the WKWebView's under-page background (`underPageBackgroundColor`, white
+//!   by default) — the surface AppKit paints into newly exposed regions while
+//!   the webview lags behind the drag. wry only sets it under its
+//!   `transparent` feature, so an opaque app must set it explicitly.
+//!
+//! The frontend reports the resolved canvas color (`--canvas` in
+//! src/theme/tokens.css) whenever the theme changes; `lib.rs` also seeds the
+//! initial background with the dark default canvas before the first frame.
 
 use tauri::window::Color;
 
@@ -33,13 +39,41 @@ pub fn parse_hex_color(input: &str) -> Result<Color, String> {
     ))
 }
 
-/// Sets the calling window's native background to the given opaque hex color.
+/// Paints the window's native background and its WKWebView under-page
+/// background with the given opaque color. The under-page layer is what
+/// flashes during live resizes: AppKit paints it into newly exposed regions
+/// before the webview reflows and repaints.
+#[cfg(target_os = "macos")]
+pub(crate) fn apply_background(window: &tauri::WebviewWindow, color: Color) -> Result<(), String> {
+    window
+        .set_background_color(Some(color))
+        .map_err(|error| error.to_string())?;
+    window
+        .with_webview(move |webview| {
+            // SAFETY: `inner()` returns this webview's live WKWebView, and
+            // `with_webview` runs the closure on the main thread, where the
+            // webview is guaranteed to be alive.
+            let view = unsafe { &*webview.inner().cast::<objc2_web_kit::WKWebView>() };
+            let ns_color = objc2_app_kit::NSColor::colorWithSRGBRed_green_blue_alpha(
+                f64::from(color.0) / 255.0,
+                f64::from(color.1) / 255.0,
+                f64::from(color.2) / 255.0,
+                f64::from(color.3) / 255.0,
+            );
+            // SAFETY: `setUnderPageBackgroundColor:` is a plain property setter.
+            unsafe {
+                view.setUnderPageBackgroundColor(Some(&ns_color));
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Sets the calling window's native background and its WKWebView under-page
+/// background to the given opaque hex color.
 #[tauri::command]
 #[cfg(target_os = "macos")]
 pub fn set_window_background(window: tauri::WebviewWindow, color: String) -> Result<(), String> {
-    window
-        .set_background_color(Some(parse_hex_color(&color)?))
-        .map_err(|error| error.to_string())
+    apply_background(&window, parse_hex_color(&color)?)
 }
 
 #[cfg(test)]
