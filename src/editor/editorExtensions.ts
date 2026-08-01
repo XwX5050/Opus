@@ -47,6 +47,9 @@ const editorHighlightStyle = HighlightStyle.define([
   { tag: [tags.number, tags.bool, tags.null], color: "var(--syntax-number)" },
   { tag: [tags.typeName, tags.className, tags.tagName], color: "var(--syntax-type)" },
   { tag: [tags.processingInstruction, tags.meta], color: "var(--syntax-meta)" },
+  { tag: tags.function(tags.variableName), color: "var(--syntax-function)" },
+  { tag: tags.propertyName, color: "var(--syntax-property)" },
+  { tag: tags.operator, color: "var(--syntax-operator)" },
 ]);
 
 // Open the search panel and move focus into its replace field.

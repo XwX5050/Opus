@@ -75,6 +75,9 @@
   --syntax-number: #e0a06a;
   --syntax-type: #7dc4e4;
   --syntax-meta: #8b8d96;
+  --syntax-function: #f2a7c3;
+  --syntax-property: #84d2c5;
+  --syntax-operator: #9ea2b0;
 }
 
 :root[data-theme="light"] {
@@ -107,4 +110,7 @@
   --syntax-number: #b45309;
   --syntax-type: #0369a1;
   --syntax-meta: #6b6d76;
+  --syntax-function: #d6336c;
+  --syntax-property: #0f766e;
+  --syntax-operator: #6b6d76;
 }
