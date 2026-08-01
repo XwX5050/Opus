@@ -205,6 +205,11 @@ describe("MarkdownEditor", () => {
       });
       const request = {
         tableFrom: tableSource.indexOf("| Name"),
+        expectedSource: [
+          "| Name | Note |",
+          "| --- | --- |",
+          "| Ada | old |",
+        ].join("\n"),
         cellIndex: 3,
         clientX: 140,
         clientY: 220,
@@ -245,6 +250,73 @@ describe("MarkdownEditor", () => {
           tableFocusRequest={{ ...request, sequence: 1 }}
         />,
       );
+      expect(outside).toHaveFocus();
+      outside.remove();
+    });
+
+    it("acknowledges a replaced table request once without focusing the new table", async () => {
+      const onChange = vi.fn();
+      const onRequestTableEdit = vi.fn();
+      const onTableFocusConsumed = vi.fn();
+      const originalTable = [
+        "| Name | Note |",
+        "| --- | --- |",
+        "| Ada | old |",
+      ].join("\n");
+      const replacementTable = [
+        "| Name | Note |",
+        "| --- | --- |",
+        "| Grace | new |",
+      ].join("\n");
+      const replacement = tableSource.replace(originalTable, replacementTable);
+      const rendered = renderEditor({
+        value: tableSource,
+        viewMode: "reading",
+        onChange,
+        onRequestTableEdit,
+        onTableFocusConsumed,
+      });
+      tableCell(3).dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        button: 0,
+        clientX: 140,
+        clientY: 220,
+      }));
+      const request = {
+        ...onRequestTableEdit.mock.calls[0][0],
+        expectedSource: originalTable,
+        sequence: 1,
+      };
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      outside.focus();
+      const view = editorView();
+      const historyBefore = undoDepth(view.state);
+
+      rendered.rerender(
+        <MarkdownEditor
+          {...rendered.props}
+          value={replacement}
+          viewMode="editing"
+          tableFocusRequest={request}
+        />,
+      );
+
+      await waitFor(() => expect(onTableFocusConsumed).toHaveBeenCalledWith(request));
+      expect(outside).toHaveFocus();
+      expect(view.state.doc.toString()).toBe(replacement);
+      expect(undoDepth(view.state)).toBe(historyBefore);
+      expect(onChange).not.toHaveBeenCalled();
+
+      rendered.rerender(
+        <MarkdownEditor
+          {...rendered.props}
+          value={replacement}
+          viewMode="editing"
+          tableFocusRequest={{ ...request }}
+        />,
+      );
+      expect(onTableFocusConsumed).toHaveBeenCalledOnce();
       expect(outside).toHaveFocus();
       outside.remove();
     });

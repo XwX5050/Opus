@@ -28,6 +28,8 @@ export interface TableWidgetsOptions {
 
 export interface TableCellEditRequest {
   readonly tableFrom: number;
+  /** Immutable source snapshot used to reject a replacement at the same offset. */
+  readonly expectedSource: string;
   readonly cellIndex: number;
   readonly clientX: number;
   readonly clientY: number;
@@ -290,6 +292,7 @@ const handleClick = (root: HTMLElement, event: MouseEvent) => {
   if (!resolved) return;
   context.onRequestEdit({
     tableFrom: resolved.table.from,
+    expectedSource: resolved.table.source,
     cellIndex: resolved.index,
     clientX: event.clientX,
     clientY: event.clientY,
@@ -477,7 +480,13 @@ export const focusMarkdownTableCell = (
       context.table.from,
       context.table.source,
     );
-    if (!currentTable || currentTable.from !== request.tableFrom) continue;
+    if (
+      !currentTable ||
+      currentTable.from !== request.tableFrom ||
+      currentTable.source !== request.expectedSource
+    ) {
+      continue;
+    }
     const cell = ownedCellAt(root, context, currentTable, request.cellIndex);
     if (!cell) continue;
     cell.focus();

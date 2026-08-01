@@ -1182,6 +1182,7 @@ describe("tableWidgetsExtension", () => {
     expect(onRequestEdit).toHaveBeenCalledOnce();
     expect(onRequestEdit).toHaveBeenCalledWith({
       tableFrom: doc.indexOf("| Name"),
+      expectedSource: doc,
       cellIndex: 3,
       clientX: 140,
       clientY: 220,
@@ -1229,6 +1230,7 @@ describe("tableWidgetsExtension", () => {
     views.push(view);
     const request = {
       tableFrom: doc.indexOf("| Name"),
+      expectedSource: doc,
       cellIndex: 3,
       clientX: 140,
       clientY: 220,
@@ -1258,6 +1260,56 @@ describe("tableWidgetsExtension", () => {
     expect(focusMarkdownTableCell(view, { ...request, cellIndex: 99 })).toBe(false);
     expect(document.activeElement).toBe(outside);
     expect(view.state.doc.toString()).toBe(doc);
+    expect(undoDepth(view.state)).toBe(historyBefore);
+    outside.remove();
+  });
+
+  it("rejects a request when a different table replaces its source at the same position", () => {
+    const original = ["| Name | Note |", "| --- | --- |", "| Ada | old |"].join("\n");
+    const replacement = ["| Name | Note |", "| --- | --- |", "| Grace | new |"].join("\n");
+    const onRequestEdit = vi.fn();
+    const tables = new Compartment();
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: original,
+        extensions: [
+          markdown({ extensions: [GFM] }),
+          history(),
+          tables.of(tableWidgetsExtension({ editable: false, onRequestEdit })),
+        ],
+      }),
+    });
+    views.push(view);
+    const cell = tableCell(view, 3);
+    cell.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      button: 0,
+      clientX: 140,
+      clientY: 220,
+    }));
+    const request = {
+      ...onRequestEdit.mock.calls[0][0],
+      expectedSource: original,
+    };
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    const historyBefore = undoDepth(view.state);
+
+    view.dispatch({
+      changes: { from: 0, to: original.length, insert: replacement },
+      annotations: Transaction.addToHistory.of(false),
+    });
+    view.dispatch({
+      effects: tables.reconfigure(tableWidgetsExtension({ editable: true })),
+    });
+
+    expect(focusMarkdownTableCell(view, request)).toBe(false);
+    expect(document.activeElement).toBe(outside);
+    expect(view.state.doc.toString()).toBe(replacement);
     expect(undoDepth(view.state)).toBe(historyBefore);
     outside.remove();
   });
