@@ -6,6 +6,7 @@ import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
 import {
   appendedTableRow,
+  cellsForLine,
   decodeTableCell,
   extractMarkdownTables,
   findCurrentTable,
@@ -19,18 +20,19 @@ const parse = (doc: string) =>
     extensions: [markdown({ extensions: [GFM] })],
   });
 
+const generatedOuterPipeRow = (columns: number, label: string) =>
+  `| ${Array.from({ length: columns }, (_, index) => `${label}-${index}`).join(" | ")} |`;
+
 const generatedTable = (
   columns: number,
   bodyRows: number,
   prefix = "row",
 ) => {
-  const row = (label: string) =>
-    `| ${Array.from({ length: columns }, (_, index) => `${label}-${index}`).join(" | ")} |`;
   return [
-    row(`${prefix}-header`),
+    generatedOuterPipeRow(columns, `${prefix}-header`),
     `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
     ...Array.from({ length: bodyRows }, (_, index) =>
-      row(`${prefix}-${index}`)
+      generatedOuterPipeRow(columns, `${prefix}-${index}`)
     ),
   ].join("\n");
 };
@@ -190,6 +192,64 @@ describe("markdownTable", () => {
       materializedRows: 499,
       materializedCells: 1_000,
       skippedForCellLimit: 1,
+    });
+  });
+
+  it("rejects an over-wide header before materializing any cells", () => {
+    const diagnostics = extractionDiagnostics();
+    const doc = generatedTable(5_000, 0, "wide-header");
+
+    expect(extractMarkdownTables(parse(doc), undefined, {
+      maxCells: 1_000,
+      diagnostics,
+    })).toEqual([]);
+    expect(diagnostics).toEqual({
+      materializedRows: 0,
+      materializedCells: 0,
+      skippedForCellLimit: 1,
+    });
+  });
+
+  it("bounds an over-wide delimiter row before cell materialization", () => {
+    const line = `| ${Array.from({ length: 5_000 }, () => "---").join(" | ")} |`;
+    const state = parse(line);
+
+    expect(cellsForLine(state, 0, line.length, 2)).toEqual({ overflow: true });
+  });
+
+  it("rejects an over-wide parser-accepted body row without materializing it", () => {
+    const diagnostics = extractionDiagnostics();
+    const doc = [
+      generatedOuterPipeRow(2, "header"),
+      "| --- | --- |",
+      generatedOuterPipeRow(5_000, "body"),
+    ].join("\n");
+
+    expect(extractMarkdownTables(parse(doc), undefined, {
+      maxCells: 1_000,
+      diagnostics,
+    })).toEqual([]);
+    expect(diagnostics).toEqual({
+      materializedRows: 0,
+      materializedCells: 2,
+      skippedForCellLimit: 1,
+    });
+  });
+
+  it("does not count outer pipes against an exact 1,000-cell row limit", () => {
+    const diagnostics = extractionDiagnostics();
+    const doc = generatedTable(1_000, 0, "exact-width");
+    const tables = extractMarkdownTables(parse(doc), undefined, {
+      maxCells: 1_000,
+      diagnostics,
+    });
+
+    expect(tables).toHaveLength(1);
+    expect(tables[0].header).toHaveLength(1_000);
+    expect(diagnostics).toEqual({
+      materializedRows: 0,
+      materializedCells: 1_000,
+      skippedForCellLimit: 0,
     });
   });
 

@@ -96,51 +96,83 @@ const normalizeCellLimit = (maxCells: number | undefined) =>
       ? Math.floor(maxCells)
       : 0;
 
-const structuralPipes = (line: string): number[] => {
-  const pipes: number[] = [];
-  for (let index = 0; index < line.length; index += 1) {
-    if (line[index] !== "|") continue;
-    let backslashes = 0;
-    for (let previous = index - 1; previous >= 0 && line[previous] === "\\"; previous -= 1) {
-      backslashes += 1;
-    }
-    if (backslashes % 2 === 0) pipes.push(index);
+export type MarkdownTableLineCells =
+  | { readonly overflow: false; readonly cells: MarkdownTableCell[] }
+  | { readonly overflow: true };
+
+const isStructuralPipeAt = (line: string, index: number): boolean => {
+  if (line[index] !== "|") return false;
+  let backslashes = 0;
+  for (
+    let previous = index - 1;
+    previous >= 0 && line[previous] === "\\";
+    previous -= 1
+  ) {
+    backslashes += 1;
   }
-  return pipes;
+  return backslashes % 2 === 0;
 };
 
-const cellsForLine = (state: EditorState, from: number, to: number): MarkdownTableCell[] => {
+export const cellsForLine = (
+  state: EditorState,
+  from: number,
+  to: number,
+  maxCells?: number,
+): MarkdownTableLineCells => {
+  // EditorState exposes range text as a string, so one line slice is unavoidable.
+  // Separator and cell arrays are only created within the normalized cell limit.
   const line = state.sliceDoc(from, to);
-  const pipes = structuralPipes(line);
+  const cellLimit = normalizeCellLimit(maxCells);
   let firstContent = 0;
   while (firstContent < line.length && whitespace(line[firstContent])) firstContent += 1;
   let lastContent = line.length;
   while (lastContent > firstContent && whitespace(line[lastContent - 1])) lastContent -= 1;
 
-  const hasLeadingPipe = pipes.includes(firstContent);
-  const hasTrailingPipe = lastContent > 0 && pipes.includes(lastContent - 1);
+  const hasLeadingPipe = line[firstContent] === "|";
+  const hasTrailingPipe = lastContent > 0 &&
+    isStructuralPipeAt(line, lastContent - 1);
   const start = hasLeadingPipe ? firstContent + 1 : 0;
   const end = hasTrailingPipe ? lastContent - 1 : line.length;
-  if (start > end) return [];
-  const separators = pipes.filter((pipe) => pipe >= start && pipe < end);
-  const boundaries = [start, ...separators.map((pipe) => pipe + 1)];
-  const ends = [...separators, end];
+  if (start > end) return { overflow: false, cells: [] };
 
-  return boundaries.flatMap((cellStart, index) => {
-    const cellEnd = ends[index];
-    if (cellStart > cellEnd) return [];
+  const separators: number[] = [];
+  let backslashRun = 0;
+  for (let index = start; index < end; index += 1) {
+    const character = line[index];
+    if (character === "\\") {
+      backslashRun += 1;
+      continue;
+    }
+    if (character === "|" && backslashRun % 2 === 0) {
+      if (cellLimit !== undefined && separators.length + 2 > cellLimit) {
+        return { overflow: true };
+      }
+      separators.push(index);
+    }
+    backslashRun = 0;
+  }
+  if (cellLimit !== undefined && separators.length + 1 > cellLimit) {
+    return { overflow: true };
+  }
+
+  const cells: MarkdownTableCell[] = [];
+  let cellStart = start;
+  for (let index = 0; index <= separators.length; index += 1) {
+    const cellEnd = separators[index] ?? end;
     let trimmedStart = cellStart;
     let trimmedEnd = cellEnd;
     while (trimmedStart < trimmedEnd && whitespace(line[trimmedStart])) trimmedStart += 1;
     while (trimmedEnd > trimmedStart && whitespace(line[trimmedEnd - 1])) trimmedEnd -= 1;
     const source = line.slice(trimmedStart, trimmedEnd);
-    return [{
+    cells.push({
       from: from + trimmedStart,
       to: from + trimmedEnd,
       source,
       displayText: decodeTableCell(source),
-    }];
-  });
+    });
+    cellStart = cellEnd + 1;
+  }
+  return { overflow: false, cells };
 };
 
 const alignmentFor = (cell: MarkdownTableCell): TableAlignment | null => {
@@ -171,20 +203,36 @@ const tableForNode = (
   }
   if (!headerNode || !delimiterNode) return null;
 
-  const header = cellsForLine(state, headerNode.from, headerNode.to);
-  const delimiter = cellsForLine(state, delimiterNode.from, delimiterNode.to);
-  if (diagnostics) diagnostics.materializedCells += header.length;
-  const alignments = delimiter.map(alignmentFor);
-  if (
-    header.length === 0 ||
-    header.length !== delimiter.length ||
-    alignments.some((alignment) => alignment === null)
-  ) return null;
-
-  if (maxCells !== undefined && header.length > maxCells) {
+  const headerResult = cellsForLine(
+    state,
+    headerNode.from,
+    headerNode.to,
+    maxCells,
+  );
+  if (headerResult.overflow) {
     if (diagnostics) diagnostics.skippedForCellLimit += 1;
     return null;
   }
+  const header = headerResult.cells;
+  if (diagnostics) diagnostics.materializedCells += header.length;
+  if (header.length === 0) return null;
+
+  const delimiterResult = cellsForLine(
+    state,
+    delimiterNode.from,
+    delimiterNode.to,
+    header.length,
+  );
+  if (delimiterResult.overflow) {
+    if (diagnostics) diagnostics.skippedForCellLimit += 1;
+    return null;
+  }
+  const delimiter = delimiterResult.cells;
+  const alignments = delimiter.map(alignmentFor);
+  if (
+    header.length !== delimiter.length ||
+    alignments.some((alignment) => alignment === null)
+  ) return null;
 
   const rows: MarkdownTableCell[][] = [];
   let materializedTableCells = header.length;
@@ -197,7 +245,20 @@ const tableForNode = (
       if (diagnostics) diagnostics.skippedForCellLimit += 1;
       return null;
     }
-    const row = cellsForLine(state, child.from, child.to);
+    const remainingCells = maxCells === undefined
+      ? header.length
+      : Math.min(header.length, maxCells - materializedTableCells);
+    const rowResult = cellsForLine(
+      state,
+      child.from,
+      child.to,
+      remainingCells,
+    );
+    if (rowResult.overflow) {
+      if (diagnostics) diagnostics.skippedForCellLimit += 1;
+      return null;
+    }
+    const row = rowResult.cells;
     if (diagnostics) {
       diagnostics.materializedRows += 1;
       diagnostics.materializedCells += row.length;
