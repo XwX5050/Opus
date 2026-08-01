@@ -253,8 +253,11 @@ Vite, Tauri 2.
   Expected: an ARM64 ad-hoc-signed `Opus.app` passes structural verification and
   is reported as non-release. Copy it to `/Applications/Opus.app` only after
   making a timestamped rollback copy of the existing app. Before install
-  handoff, manually verify Cmd+Delete mutates text in an editable table cell in
-  the packaged WKWebView app; do not launch the replacement automatically.
+  handoff, place the caret at the start of `delta` in an editable table cell and
+  verify Command+Forward Delete leaves the cell empty in the packaged WKWebView
+  app. On keyboards without a dedicated Forward Delete key, use
+  Fn+Command+Delete (DOM `Meta+Delete`); do not launch the replacement
+  automatically.
 
 - [ ] **Step 3: Inspect the final changes and commit any verification-only adjustment**
 
