@@ -100,6 +100,11 @@ const nativeCellPointerEvents = new Set([
   "click",
 ]);
 
+const nativeCellDeletionKeys = new Set(["Backspace", "Delete"]);
+
+const isNativeCellDeletionEvent = (event: Event) =>
+  event instanceof KeyboardEvent && nativeCellDeletionKeys.has(event.key);
+
 interface DOMPoint {
   readonly node: Node;
   readonly offset: number;
@@ -183,15 +188,19 @@ const normalizeCellContent = (cell: HTMLElement) => {
       ]
     : [];
   const { text, pointOffsets } = plainCellText(cell, points);
+  const normalizedText = cell.childNodes.length === 1 &&
+      cell.firstChild instanceof HTMLBRElement
+    ? ""
+    : text;
   if (
     cell.childNodes.length === 1 &&
     cell.firstChild?.nodeType === Node.TEXT_NODE &&
-    cell.firstChild.nodeValue === text
+    cell.firstChild.nodeValue === normalizedText
   ) {
-    return text;
+    return normalizedText;
   }
 
-  const textNode = document.createTextNode(text);
+  const textNode = document.createTextNode(normalizedText);
   cell.replaceChildren(textNode);
   if (
     selection &&
@@ -201,12 +210,12 @@ const normalizeCellContent = (cell: HTMLElement) => {
     pointOffsets[1] !== undefined
   ) {
     const range = document.createRange();
-    range.setStart(textNode, Math.min(pointOffsets[0], text.length));
-    range.setEnd(textNode, Math.min(pointOffsets[1], text.length));
+    range.setStart(textNode, Math.min(pointOffsets[0], normalizedText.length));
+    range.setEnd(textNode, Math.min(pointOffsets[1], normalizedText.length));
     selection.removeAllRanges();
     selection.addRange(range);
   }
-  return text;
+  return normalizedText;
 };
 
 const cellElementForEvent = (
@@ -834,7 +843,8 @@ export class MarkdownTableWidget extends WidgetType {
   }
 
   ignoreEvent(event: Event) {
-    return nativeCellPointerEvents.has(event.type);
+    return nativeCellPointerEvents.has(event.type) ||
+      (this.editable && !this.readOnly && isNativeCellDeletionEvent(event));
   }
 }
 
