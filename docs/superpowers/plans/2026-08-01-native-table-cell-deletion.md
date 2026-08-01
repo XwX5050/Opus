@@ -160,6 +160,11 @@ Vite, Tauri 2.
   the existing input listener committed changes, and table delimiters plus
   surrounding text remained intact.
 
+  Also validate outerless two-column body rows: after native deletion empties
+  the first or last cell of `old | keep`, the exact saved source is respectively
+  `|  | keep` or `old |  |`. These boundary outputs are additional expectations;
+  all existing expected source outputs above remain unchanged.
+
 - [ ] **Step 3: Run the focused browser regression and confirm it fails**
 
   Run: `npm run test:e2e -- --grep "browser-supported native shortcuts"`

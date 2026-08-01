@@ -56,6 +56,12 @@ executes its five supported native transformations and saves exact Markdown
 while preserving table structure and surrounding document text. Manual packaged
 macOS WKWebView acceptance verifies the Meta+Delete text mutation.
 
+Real-`EditorView` coverage must also preserve an outerless GFM table when native
+deletion empties an edge body cell: `old | keep` becomes `|  | keep` for its
+first cell and `old |  |` for its last cell. Each exact source output must still
+render one `table.md-table`, proving that only the missing adjacent outer table
+boundary pipe was added.
+
 Run focused tests, the full Vitest suite, frontend build, Playwright workflow,
 and relevant packaging checks. Before installing a replacement `/Applications/Opus.app`,
 build and ad-hoc sign it, validate the ARM64 bundle, and retain an explicit
