@@ -1376,6 +1376,26 @@ describe("MarkdownTableWidget", () => {
       expect(widget.ignoreEvent(new Event(type))).toBe(true);
     }
 
+    for (const key of ["Backspace", "Delete"]) {
+      expect(widget.ignoreEvent(new KeyboardEvent("keydown", { key })))
+        .toBe(true);
+      expect(widget.ignoreEvent(new KeyboardEvent("keydown", {
+        key,
+        altKey: true,
+      }))).toBe(true);
+      expect(widget.ignoreEvent(new KeyboardEvent("keydown", {
+        key,
+        metaKey: true,
+      }))).toBe(true);
+    }
+
+    expect(new MarkdownTableWidget(table, false).ignoreEvent(
+      new KeyboardEvent("keydown", { key: "Backspace" }),
+    )).toBe(false);
+    expect(new MarkdownTableWidget(table, true, true).ignoreEvent(
+      new KeyboardEvent("keydown", { key: "Delete" }),
+    )).toBe(false);
+
     expect(widget.ignoreEvent(new KeyboardEvent("keydown", { key: "Tab" })))
       .toBe(false);
     expect(widget.ignoreEvent(new InputEvent("input", {
