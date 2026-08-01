@@ -28,7 +28,8 @@ operations, and menus are provided by a Rust/Tauri backend.
 - **Key npm packages**: `@codemirror/*`, `@tauri-apps/api`,
   `@tauri-apps/plugin-dialog/fs/opener/store`, `katex`, `react`, `react-dom`.
 - **Key Rust crates**: `tauri` 2.11, `notify` 8.2, `trash` 5.2, `sha2`, `serde`,
-  `tempfile`.
+  `tempfile`; macOS-only `objc2-app-kit`/`objc2-foundation`/`objc2-web-kit`
+  0.3 (pinned to wry's locked versions).
 
 ## Project structure
 
@@ -51,7 +52,8 @@ operations, and menus are provided by a Rust/Tauri backend.
 │   ├── asset_scope.rs      # Webview asset-scope registry
 │   ├── open_events.rs      # Deep-link / drag-drop / argv normalization
 │   ├── menu.rs             # Native macOS menu bar
-│   └── perf_mark.rs        # Startup instrumentation hook
+│   ├── perf_mark.rs        # Startup instrumentation hook
+│   └── window_background.rs# Native window/webview background sync
 ├── src-tauri/tests/        # Rust integration tests
 ├── tests/e2e/              # Playwright browser-shell workflows
 ├── tests/perf/             # Performance fixtures, reports, samples
@@ -80,13 +82,22 @@ operations, and menus are provided by a Rust/Tauri backend.
 - `src/workspace/`: folder sidebar tree state (`treeReducer.ts`) and UI
   (`FileSidebar.tsx`).
 - `src/theme/`: CSS tokens, app styles, theme hook, and editor/theme
-  preferences.
+  preferences. The reading column scales proportionally with the window
+  (`min(clamp(--editor-content-width, 68%, 1.6x it), 100% - 48px)` on
+  `.cm-content`); the preference is the column's minimum/base width, and the
+  scroller runs edge to edge so the scrollbar rides the window edge. Syntax
+  highlight colors are `--syntax-*` tokens mapped in
+  `editor/editorExtensions.ts`.
 - `src/conflict/` and `src/recovery/`: dialogs and helpers for external
   conflicts and crash recovery.
 - `src-tauri/src/document_io.rs`: reads files while preserving UTF-8 BOM and
   newline style; writes atomically via sibling temp file + `fsync` + rename.
 - `src-tauri/src/document_commands.rs`: Tauri command handlers for open, save,
   clipboard images, asset scopes, workspace operations, watches, and recovery.
+- `src-tauri/src/window_background.rs`: paints the NSWindow background and the
+  WKWebView under-page background with the resolved `--canvas` color so live
+  resizes never flash white; seeded dark at startup, synced from `useTheme` on
+  every theme change.
 
 ## Port selection and runtime modes
 
