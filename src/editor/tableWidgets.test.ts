@@ -29,6 +29,7 @@ const createView = (
   doc: string,
   editable = true,
   extraExtensions: Extension = [],
+  maxRenderedCells?: number,
 ) => {
   const parent = document.createElement("div");
   document.body.append(parent);
@@ -39,13 +40,29 @@ const createView = (
       extensions: [
         markdown({ extensions: [GFM] }),
         history(),
-        tableWidgetsExtension({ editable }),
+        tableWidgetsExtension({ editable, maxRenderedCells }),
         extraExtensions,
       ],
     }),
   });
   views.push(view);
   return view;
+};
+
+const generatedTable = (
+  columns: number,
+  bodyRows: number,
+  prefix = "cell",
+) => {
+  const row = (label: string) =>
+    `| ${Array.from({ length: columns }, (_, index) => `${label}-${index}`).join(" | ")} |`;
+  return [
+    row(`${prefix}-header`),
+    `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
+    ...Array.from({ length: bodyRows }, (_, index) =>
+      row(`${prefix}-row-${index}`)
+    ),
+  ].join("\n");
 };
 
 const atomicRanges = (view: EditorView) => {
@@ -251,6 +268,46 @@ describe("tableWidgetsExtension", () => {
     expect(view.dom.querySelector("table.md-table")).toBeNull();
     expect(view.contentDOM.textContent).toContain("not a delimiter");
     expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("renders a table whose cell count is exactly the configured limit", () => {
+    const doc = generatedTable(4, 2);
+    const view = createView(doc, true, [], 12);
+
+    expect(view.dom.querySelectorAll("table.md-table")).toHaveLength(1);
+    expect(view.dom.querySelectorAll(".md-table th, .md-table td"))
+      .toHaveLength(12);
+    expect(atomicRanges(view)).toEqual([{ from: 0, to: doc.length }]);
+  });
+
+  it.each([11, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "leaves an over-budget table as non-atomic raw source for limit %s",
+    (maxRenderedCells) => {
+      const doc = generatedTable(4, 2);
+      const view = createView(doc, true, [], maxRenderedCells);
+
+      expect(view.dom.querySelector("table.md-table")).toBeNull();
+      expect(view.contentDOM.textContent).toContain("cell-header-0");
+      expect(view.contentDOM.textContent).toContain("---");
+      expect(atomicRanges(view)).toEqual([]);
+      expect(view.state.doc.toString()).toBe(doc);
+    },
+  );
+
+  it("renders an in-budget table while leaving a later oversized table raw", () => {
+    const small = generatedTable(2, 1, "small");
+    const huge = generatedTable(5, 4, "huge");
+    const doc = `${small}\n\noutside\n\n${huge}`;
+    const view = createView(doc, true, [], 4);
+
+    expect(view.dom.querySelectorAll("table.md-table")).toHaveLength(1);
+    expect(view.dom.querySelectorAll(".md-table th, .md-table td"))
+      .toHaveLength(4);
+    expect(view.dom.querySelector("table.md-table")?.textContent)
+      .toContain("small-row-0-1");
+    expect(view.contentDOM.textContent).toContain("huge-header-0");
+    expect(view.contentDOM.textContent).toContain("outside");
+    expect(atomicRanges(view)).toEqual([{ from: 0, to: small.length }]);
   });
 
   it("does not make read-only table cells editable or tabbable", () => {

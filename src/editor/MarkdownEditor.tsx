@@ -21,6 +21,10 @@ import type { EditorViewMode } from "./viewMode";
 
 const externalValueSync = Annotation.define<boolean>();
 
+// Light mode bounds semantic table DOM per table. Oversized tables stay as
+// editable raw Markdown until the user opts back into full rendering.
+const LIGHT_MODE_TABLE_CELL_LIMIT = 1_000;
+
 export interface EditorImageDrop {
   readonly sequence: number;
   readonly paths: ReadonlyArray<string>;
@@ -50,8 +54,9 @@ export interface MarkdownEditorProps {
   /**
    * Large documents open in "light" mode: Markdown parsing, selection,
    * search and visible-range text styling stay active, while offscreen
-   * image creation and nonessential block widgets (math, images) are
-   * paused. Light mode never changes the document text.
+   * image creation and nonessential block widgets (math, images) are paused.
+   * Tables over the per-table cell budget stay as raw Markdown. Light mode
+   * never changes the document text.
    */
   performanceMode?: PerformanceMode;
 }
@@ -108,7 +113,12 @@ export default function MarkdownEditor({
       ...readOnly,
       // Reading mode never reveals source markers, wherever the cursor sits.
       livePreviewExtension({ revealSelection: mode !== "reading" }),
-      tableWidgetsExtension({ editable: mode === "editing" }),
+      tableWidgetsExtension({
+        editable: mode === "editing",
+        ...(perf === "light"
+          ? { maxRenderedCells: LIGHT_MODE_TABLE_CELL_LIMIT }
+          : {}),
+      }),
       // Light mode pauses offscreen image creation and nonessential block
       // widgets; visible-range text styling (live preview) stays on.
       ...(perf === "light"

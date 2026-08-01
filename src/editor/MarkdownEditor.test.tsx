@@ -56,6 +56,22 @@ const tableSource = [
   "after",
 ].join("\n");
 
+const generatedTable = (
+  columns: number,
+  bodyRows: number,
+  prefix: string,
+) => {
+  const row = (label: string) =>
+    `| ${Array.from({ length: columns }, (_, index) => `${label}-${index}`).join(" | ")} |`;
+  return [
+    row(`${prefix}-header`),
+    `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
+    ...Array.from({ length: bodyRows }, (_, index) =>
+      row(`${prefix}-row-${index}`)
+    ),
+  ].join("\n");
+};
+
 const tableCell = (index: number) => {
   const cell = document.querySelector<HTMLElement>(
     `.md-table [data-cell-index="${index}"]`,
@@ -221,6 +237,61 @@ describe("MarkdownEditor", () => {
       const expected = rich.replace("Ada", "Grace");
       expect(view.state.doc.toString()).toBe(expected);
       expect(onChange).toHaveBeenLastCalledWith(expected);
+    });
+
+    it("bounds table cell DOM in light mode and restores oversized tables in full mode", () => {
+      const small = generatedTable(2, 1, "small");
+      const oversized = generatedTable(10, 100, "large");
+      const value = `${small}\n\noutside\n\n${oversized}`;
+      const onChange = vi.fn();
+      const rendered = renderEditor({
+        value,
+        performanceMode: "light",
+        onChange,
+      });
+      const view = editorView();
+      const root = rendered.container.querySelector(".cm-editor");
+      view.dispatch({ selection: { anchor: value.indexOf("outside") } });
+      const selection = view.state.selection;
+      const history = undoDepth(view.state);
+
+      expect(rendered.container.querySelectorAll("table.md-table"))
+        .toHaveLength(1);
+      expect(rendered.container.querySelector("table.md-table")?.textContent)
+        .toContain("small-row-0-1");
+      expect(rendered.container.querySelectorAll(".md-table th, .md-table td").length)
+        .toBeLessThanOrEqual(1_000);
+      expect(content()).toHaveTextContent("large-header-0");
+      expect(content()).toHaveTextContent("---");
+      expect(atomicRanges(view)).toEqual([{ from: 0, to: small.length }]);
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} performanceMode="full" />,
+      );
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(rendered.container.querySelectorAll("table.md-table"))
+        .toHaveLength(2);
+      expect(rendered.container.querySelectorAll(".md-table th, .md-table td"))
+        .toHaveLength(1_014);
+      expect(view.state.doc.toString()).toBe(value);
+      expect(view.state.selection.eq(selection)).toBe(true);
+      expect(undoDepth(view.state)).toBe(history);
+      expect(onChange).not.toHaveBeenCalled();
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} performanceMode="light" />,
+      );
+      expect(editorView()).toBe(view);
+      expect(rendered.container.querySelector(".cm-editor")).toBe(root);
+      expect(rendered.container.querySelectorAll("table.md-table"))
+        .toHaveLength(1);
+      expect(rendered.container.querySelectorAll(".md-table th, .md-table td").length)
+        .toBeLessThanOrEqual(1_000);
+      expect(view.state.doc.toString()).toBe(value);
+      expect(view.state.selection.eq(selection)).toBe(true);
+      expect(undoDepth(view.state)).toBe(history);
+      expect(onChange).not.toHaveBeenCalled();
     });
   });
 

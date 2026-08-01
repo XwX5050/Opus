@@ -21,6 +21,8 @@ import {
 
 export interface TableWidgetsOptions {
   readonly editable: boolean;
+  /** Undefined is unlimited; invalid/nonpositive limits render no tables. */
+  readonly maxRenderedCells?: number;
 }
 
 interface TableWidgetContext {
@@ -711,8 +713,19 @@ const decorationSetsFor = (
 ): { decorations: DecorationSet; atomicRanges: DecorationSet } => {
   const replacements: ReturnType<Decoration["range"]>[] = [];
   const atomicRanges: ReturnType<Decoration["range"]>[] = [];
+  const maxRenderedCells = options.maxRenderedCells === undefined
+    ? undefined
+    : Number.isFinite(options.maxRenderedCells) && options.maxRenderedCells > 0
+      ? Math.floor(options.maxRenderedCells)
+      : 0;
 
   for (const table of extractMarkdownTables(state, view.visibleRanges)) {
+    if (
+      maxRenderedCells !== undefined &&
+      tableCells(table).length > maxRenderedCells
+    ) {
+      continue;
+    }
     let segmentFrom = table.from;
     let firstLine = true;
     while (segmentFrom < table.to) {

@@ -34,7 +34,8 @@ Covered flows (real CodeMirror interactions, no reducer calls):
 - dirty close → cancel keeps the tab and edits;
 - reading ↔ editing view toggle (marker hiding; reading is read-only);
 - interactive Markdown tables: native cell typing, plain-text paste,
-  Tab navigation/row append, isolated undo, save fidelity, and read-only mode;
+  Tab navigation/row append, isolated undo/redo, exact save fidelity, and
+  read-only mode;
 - LaTeX success renders KaTeX, invalid formula shows a non-blocking error
   and never blocks editing;
 - find/replace (⌘F panel, replace all) in the current document;
@@ -114,6 +115,11 @@ build SHA, chip, and macOS version with the results.
   horizontally without clipping or moving borders. In both Light and Dark
   themes, header/body borders, alignment, rounded corners, and the keyboard
   focus ring remain clearly visible without shifting cell layout.
+- **Large-document light mode**: in a document that triggers the performance
+  banner, tables of at most 1,000 cells remain semantic and interactive. A
+  table over 1,000 cells stays as editable raw Markdown without an atomic
+  range; nearby smaller tables still render. 继续完整渲染 restores the
+  oversized semantic table without changing text or undo history.
 - **Save/reopen fidelity**: save and reopen a table containing empty cells,
   Chinese text, and escaped pipes; source spelling and outside text remain
   exact. Repeat with a CRLF file through the native backend and verify its
@@ -206,7 +212,9 @@ build SHA, chip, and macOS version with the results.
       `npm run perf`).
     - **2 MiB boundary** (`light-2mb.md`): opens in light mode with the
       banner; 继续完整渲染 restores full rendering for that tab; closing and
-      reopening returns to automatic light mode; text is never altered.
+      reopening returns to automatic light mode. Tables over 1,000 cells use
+      editable raw-source fallback until full rendering is chosen; text is
+      never altered.
     - **10 MiB pressure** (`pressure-10mb.md`): opens ≤ 3 s in light mode;
       typing p95 ≤ 50 ms; ⌘S saves ≤ 1 s. The banner is dismissible.
 22. `npm run perf` (headless Chromium harness, `docs/performance.md`) must
