@@ -1070,6 +1070,34 @@ describe("tableWidgetsExtension", () => {
     expect(cell.textContent).toBe("");
   });
 
+  it("preserves outerless table boundaries when native deletion empties an edge cell", () => {
+    const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
+    const firstCellView = createView(doc);
+    const lastCellView = createView(doc);
+
+    const firstCell = tableCell(firstCellView, 2);
+    firstCell.replaceChildren(document.createElement("br"));
+    dispatchInput(firstCell);
+
+    expect(firstCellView.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "|  | keep"].join("\n"),
+    );
+    expect(firstCellView.dom.querySelectorAll("table.md-table")).toHaveLength(1);
+    expect(tableCell(firstCellView, 2).textContent).toBe("");
+    expect(tableCell(firstCellView, 3).textContent).toBe("keep");
+
+    const lastCell = tableCell(lastCellView, 3);
+    lastCell.replaceChildren(document.createElement("br"));
+    dispatchInput(lastCell);
+
+    expect(lastCellView.state.doc.toString()).toBe(
+      ["A | B", "--- | ---", "old |  |"].join("\n"),
+    );
+    expect(lastCellView.dom.querySelectorAll("table.md-table")).toHaveLength(1);
+    expect(tableCell(lastCellView, 2).textContent).toBe("old");
+    expect(tableCell(lastCellView, 3).textContent).toBe("");
+  });
+
   it("preserves a space boundary around block children", () => {
     const doc = ["A | B", "--- | ---", "old | keep"].join("\n");
     const view = createView(doc);
