@@ -48,8 +48,13 @@ const editorHighlightStyle = HighlightStyle.define([
   { tag: [tags.typeName, tags.className, tags.tagName], color: "var(--syntax-type)" },
   { tag: [tags.processingInstruction, tags.meta], color: "var(--syntax-meta)" },
   { tag: tags.function(tags.variableName), color: "var(--syntax-function)" },
+  // Builtin command names (shell `echo`/`git`/`npm`, language builtins).
+  { tag: tags.standard(tags.variableName), color: "var(--syntax-function)" },
   { tag: tags.propertyName, color: "var(--syntax-property)" },
+  // Definitions (shell `FOO=bar` assignments, declarations in general).
+  { tag: tags.definition(tags.variableName), color: "var(--syntax-property)" },
   { tag: tags.operator, color: "var(--syntax-operator)" },
+  { tag: tags.atom, color: "var(--syntax-number)" },
 ]);
 
 // Open the search panel and move focus into its replace field.
