@@ -205,7 +205,7 @@ test("types and pastes plain text into a Markdown table and saves exact source",
   expect(writes).toEqual([expected]);
 });
 
-test("clicking a reading-mode table body cell enters editing and saves exact source", async ({
+test("clicking a reading-mode Markdown table body cell enters editing and saves exact source", async ({
   page,
 }) => {
   await seed(page, {
