@@ -1361,7 +1361,7 @@ describe("MarkdownTableWidget", () => {
     )).toBe(false);
   });
 
-  it("leaves native pointer and mouse events to editable table cells", () => {
+  it("leaves native pointer, mouse, and deletion-key events to editable table cells", () => {
     const table = tableFor(["A | B", "--- | ---"].join("\n"));
     const widget = new MarkdownTableWidget(table, true);
 
