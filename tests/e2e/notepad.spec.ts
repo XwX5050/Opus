@@ -94,6 +94,21 @@ const clickEditableTableCell = async (cell: Locator) => {
   await expect(cell).toBeFocused();
 };
 
+const placeTableCaret = async (cell: Locator, offset: number) => {
+  await cell.evaluate((element, caretOffset) => {
+    const text = element.firstChild;
+    if (!text || text.nodeType !== Node.TEXT_NODE) {
+      throw new Error("Expected a plain-text Markdown table cell");
+    }
+    const range = document.createRange();
+    range.setStart(text, caretOffset);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, offset);
+};
+
 test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
   page,
 }) => {
@@ -195,6 +210,74 @@ test("types and pastes plain text into a Markdown table and saves exact source",
     "| Name | Note |",
     "| --- | --- |",
     String.raw`| Ada\|中文 | old<b>x\|y</b> 下一行 |`,
+    "",
+    "After untouched",
+    "",
+  ].join("\n");
+  const writes = await page.evaluate(() =>
+    (window.__E2E_PORT__?.writes ?? []).map((write) => write.text),
+  );
+  expect(writes).toEqual([expected]);
+});
+
+test("deletes table-cell text with native macOS shortcuts and saves exact source", async ({
+  page,
+}) => {
+  const deletionDocumentSource = [
+    "Before untouched",
+    "",
+    "| Backspace | Delete | Option backward | Option forward | Command backward | Command forward |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| abc | def | alpha | bravo | charlie | delta |",
+    "",
+    "After untouched",
+    "",
+  ].join("\n");
+  await seed(page, {
+    files: [{ path: "/docs/table.md", text: deletionDocumentSource }],
+    session: sessionWith("/docs/table.md"),
+  });
+
+  await expect(markdownTable(page)).toBeVisible();
+
+  await clickEditableTableCell(markdownTableCell(page, 6));
+  await placeTableCaret(markdownTableCell(page, 6), 3);
+  await page.keyboard.press("Backspace");
+  await expect(markdownTableCell(page, 6)).toHaveText("ab");
+
+  await clickEditableTableCell(markdownTableCell(page, 7));
+  await placeTableCaret(markdownTableCell(page, 7), 0);
+  await page.keyboard.press("Delete");
+  await expect(markdownTableCell(page, 7)).toHaveText("ef");
+
+  await clickEditableTableCell(markdownTableCell(page, 8));
+  await placeTableCaret(markdownTableCell(page, 8), 5);
+  await page.keyboard.press("Alt+Backspace");
+  await expect(markdownTableCell(page, 8)).toHaveText("");
+
+  await clickEditableTableCell(markdownTableCell(page, 9));
+  await placeTableCaret(markdownTableCell(page, 9), 0);
+  await page.keyboard.press("Alt+Delete");
+  await expect(markdownTableCell(page, 9)).toHaveText("");
+
+  await clickEditableTableCell(markdownTableCell(page, 10));
+  await placeTableCaret(markdownTableCell(page, 10), 7);
+  await page.keyboard.press("Meta+Backspace");
+  await expect(markdownTableCell(page, 10)).toHaveText("");
+
+  await clickEditableTableCell(markdownTableCell(page, 11));
+  await placeTableCaret(markdownTableCell(page, 11), 0);
+  await page.keyboard.press("Meta+Delete");
+  await expect(markdownTableCell(page, 11)).toHaveText("");
+
+  await page.keyboard.press("Meta+s");
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+  const expected = [
+    "Before untouched",
+    "",
+    "| Backspace | Delete | Option backward | Option forward | Command backward | Command forward |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| ab | ef |  |  |  |  |",
     "",
     "After untouched",
     "",
