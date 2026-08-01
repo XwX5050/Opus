@@ -658,14 +658,15 @@ body.outline-resizing * {
   background: var(--surface-hover);
 }
 
-/* The central reading column: width comes from the persisted preference. */
+/* The editor fills the editor area so the scroller (and its vertical
+ * scrollbar) runs edge to edge; the reading column is constrained on
+ * .cm-content below. No horizontal padding here — it would inset the
+ * scroller and pull the scrollbar away from the window edge. */
 .markdown-editor {
   width: 100%;
-  max-width: var(--editor-content-width);
-  margin-inline: auto;
   min-height: 0;
   display: flex;
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-4) 0;
 }
 
 .markdown-editor .cm-editor {
@@ -680,10 +681,24 @@ body.outline-resizing * {
   outline: none;
 }
 
+/* The central reading column: width grows proportionally with the window
+ * (68% of the scroller), never below the persisted preference and never
+ * above 1.6x it, so ultra-wide windows still cap the line length. On
+ * narrow windows the column shrinks instead of touching the edges, always
+ * keeping a small margin on both sides. */
 .markdown-editor .cm-content {
   caret-color: var(--text-primary);
   line-height: var(--editor-line-height);
   padding-bottom: 40vh;
+  max-width: min(
+    clamp(
+      var(--editor-content-width),
+      68%,
+      calc(var(--editor-content-width) * 1.6)
+    ),
+    calc(100% - var(--space-5) * 2)
+  );
+  margin-inline: auto;
 }
 
 .markdown-editor .cm-scroller {
