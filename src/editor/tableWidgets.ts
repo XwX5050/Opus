@@ -81,6 +81,14 @@ const blockElements = new Set([
   "UL",
 ]);
 
+const nativeCellPointerEvents = new Set([
+  "pointerdown",
+  "pointerup",
+  "mousedown",
+  "mouseup",
+  "click",
+]);
+
 interface DOMPoint {
   readonly node: Node;
   readonly offset: number;
@@ -701,8 +709,8 @@ export class MarkdownTableWidget extends WidgetType {
     return true;
   }
 
-  ignoreEvent() {
-    return false;
+  ignoreEvent(event: Event) {
+    return nativeCellPointerEvents.has(event.type);
   }
 }
 

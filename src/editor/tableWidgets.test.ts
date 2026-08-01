@@ -1207,7 +1207,28 @@ describe("MarkdownTableWidget", () => {
     expect(new MarkdownTableWidget(table, true).eq(
       new MarkdownTableWidget(sameSourceElsewhere, true),
     )).toBe(false);
-    expect(new MarkdownTableWidget(table, true).ignoreEvent()).toBe(false);
+  });
+
+  it("leaves native pointer and mouse events to editable table cells", () => {
+    const table = tableFor(["A | B", "--- | ---"].join("\n"));
+    const widget = new MarkdownTableWidget(table, true);
+
+    expect(widget.ignoreEvent(new MouseEvent("mousedown"))).toBe(true);
+
+    for (const type of [
+      "pointerdown",
+      "pointerup",
+      "mouseup",
+      "click",
+    ]) {
+      expect(widget.ignoreEvent(new Event(type))).toBe(true);
+    }
+
+    expect(widget.ignoreEvent(new KeyboardEvent("keydown", { key: "Tab" })))
+      .toBe(false);
+    expect(widget.ignoreEvent(new InputEvent("input", {
+      inputType: "insertText",
+    }))).toBe(false);
   });
 
   it("returns false when compared with another WidgetType", () => {

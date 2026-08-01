@@ -89,16 +89,9 @@ const markdownTable = (page: Page) => page.locator("table.md-table");
 const markdownTableCell = (page: Page, index: number) =>
   markdownTable(page).locator(`[data-cell-index="${index}"]`);
 
-const placeCaretAtEnd = async (cell: Locator) => {
+const clickEditableTableCell = async (cell: Locator) => {
   await cell.click();
-  await cell.evaluate((element) => {
-    const selection = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    range.collapse(false);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  });
+  await expect(cell).toBeFocused();
 };
 
 test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
@@ -176,7 +169,7 @@ test("types and pastes plain text into a Markdown table and saves exact source",
   await expect(table).toHaveAttribute("aria-label", "Markdown 表格");
   await expect(content).not.toContainText("| --- | --- |");
 
-  await placeCaretAtEnd(markdownTableCell(page, 2));
+  await clickEditableTableCell(markdownTableCell(page, 2));
   await page.keyboard.type("|中文");
   await expect(markdownTableCell(page, 2)).toHaveText("Ada|中文");
   await expect(page.locator(".tab-dirty")).toHaveCount(1);
@@ -188,7 +181,7 @@ test("types and pastes plain text into a Markdown table and saves exact source",
   await page.evaluate(() =>
     navigator.clipboard.writeText("<b>x|y</b>\n下一行"),
   );
-  await placeCaretAtEnd(markdownTableCell(page, 3));
+  await clickEditableTableCell(markdownTableCell(page, 3));
   await page.keyboard.press("Meta+v");
   await expect(markdownTableCell(page, 3))
     .toHaveText("old<b>x|y</b> 下一行");
@@ -223,7 +216,7 @@ test("navigates, appends, undoes, redoes, saves, and reads a Markdown table", as
   const content = editorContent(page);
   const table = markdownTable(page);
   await expect(table).toBeVisible();
-  await placeCaretAtEnd(markdownTableCell(page, 2));
+  await clickEditableTableCell(markdownTableCell(page, 2));
   await page.keyboard.type("|中文");
 
   await page.keyboard.press("Tab");
