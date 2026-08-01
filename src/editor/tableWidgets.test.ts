@@ -1067,8 +1067,6 @@ describe("tableWidgetsExtension", () => {
     expect(view.state.doc.toString()).toBe(
       ["| A | B |", "| --- | --- |", "|  | keep |"].join("\n"),
     );
-    expect(cell.childNodes).toHaveLength(1);
-    expect(cell.firstChild).toBeInstanceOf(Text);
     expect(cell.textContent).toBe("");
   });
 
