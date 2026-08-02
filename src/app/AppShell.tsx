@@ -24,8 +24,8 @@ import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
 import {
   BookOpenIcon,
-  ListTreeIcon,
   PanelLeftIcon,
+  PanelRightIcon,
   PencilLineIcon,
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
@@ -643,30 +643,18 @@ export default function AppShell({
               </>
             )}
             {active && (
-              <>
-                <button
-                  type="button"
-                  className="icon-button view-mode-toggle"
-                  aria-pressed={viewMode === "reading"}
-                  aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                  title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                  onClick={() => controller.toggleReading(active.id)}
-                >
-                  {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
-                </button>
-                <button
-                  type="button"
-                  className="icon-button outline-toggle"
-                  aria-expanded={outlineOpen}
-                  aria-pressed={outlineOpen}
-                  aria-controls="app-outline"
-                  aria-label={outlineOpen ? "收起大纲" : "展开大纲"}
-                  title={outlineOpen ? "收起大纲" : "展开大纲"}
-                  onClick={() => setOutlineOpen((current) => !current)}
-                >
-                  <ListTreeIcon />
-                </button>
-              </>
+              <button
+                type="button"
+                className="icon-button right-sidebar-toggle"
+                aria-expanded={outlineOpen}
+                aria-pressed={outlineOpen}
+                aria-controls="app-outline"
+                aria-label={outlineOpen ? "收起右侧栏" : "展开右侧栏"}
+                title={outlineOpen ? "收起右侧栏" : "展开右侧栏"}
+                onClick={() => setOutlineOpen((current) => !current)}
+              >
+                <PanelRightIcon />
+              </button>
             )}
           </>
         )}
@@ -786,6 +774,20 @@ export default function AppShell({
           }
           className="editor-area"
         >
+        {active && (
+          <div className="editor-toolbar">
+            <button
+              type="button"
+              className="icon-button view-mode-toggle"
+              aria-pressed={viewMode === "reading"}
+              aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+              title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+              onClick={() => controller.toggleReading(active.id)}
+            >
+              {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+            </button>
+          </div>
+        )}
         {showPerfBanner && active && (
           <div role="status" className="perf-banner">
             <span className="perf-banner-text">
@@ -916,7 +918,6 @@ export default function AppShell({
                   onNavigate={(heading) =>
                     navigateToOutlineHeading(active.id, heading)
                   }
-                  onClose={() => setOutlineOpen(false)}
                 />
               </aside>
             </div>

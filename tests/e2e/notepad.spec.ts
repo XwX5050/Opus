@@ -505,16 +505,13 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
   });
 
   const modeToggle = page.getByRole("button", { name: "编辑模式" });
-  const outlineToggle = page.getByRole("button", { name: "展开大纲" });
+  const outlineToggle = page.getByRole("button", { name: "展开右侧栏" });
   await expect(modeToggle).toBeVisible();
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
-  await expect
-    .poll(() =>
-      modeToggle.evaluate((mode) =>
-        mode.nextElementSibling?.getAttribute("aria-label"),
-      ),
-    )
-    .toBe("展开大纲");
+  // The view-mode control lives in the editor-pane toolbar while the
+  // right-sidebar toggle stays in the header.
+  await expect(page.locator(".editor-toolbar .view-mode-toggle")).toBeVisible();
+  await expect(page.locator(".app-header .right-sidebar-toggle")).toBeVisible();
 
   await outlineToggle.click();
   const outline = page.getByRole("complementary", { name: "大纲侧栏" });
@@ -542,12 +539,12 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
   await page.mouse.up();
   await expect(outline).toHaveCSS("width", "380px");
 
-  await outline.getByRole("button", { name: "收起右侧栏" }).click();
+  await page.getByRole("button", { name: "收起右侧栏" }).click();
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator("#app-outline")).toHaveAttribute("inert", "");
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "展开大纲" })).toHaveAttribute(
+  await expect(page.getByRole("button", { name: "展开右侧栏" })).toHaveAttribute(
     "aria-expanded",
     "false",
   );

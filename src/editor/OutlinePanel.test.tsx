@@ -40,7 +40,6 @@ const renderPanel = (
     onToggle: vi.fn(),
     onCollapseAll: vi.fn(),
     onNavigate: vi.fn(),
-    onClose: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<OutlinePanel {...props} />) };
@@ -120,14 +119,5 @@ describe("OutlinePanel", () => {
     renderPanel({ headings: [leaf("only", "Only", 1)] });
 
     expect(screen.getByRole("button", { name: "全部折叠" })).toBeDisabled();
-  });
-
-  it("closes through the right-panel toolbar control", async () => {
-    const user = userEvent.setup();
-    const { props } = renderPanel();
-
-    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
-
-    expect(props.onClose).toHaveBeenCalledOnce();
   });
 });

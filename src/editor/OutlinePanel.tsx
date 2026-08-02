@@ -1,7 +1,6 @@
 import {
   CollapseAllIcon,
   DisclosureChevronIcon,
-  PanelRightIcon,
 } from "../app/icons";
 import {
   collectOutlineParentIds,
@@ -14,7 +13,6 @@ export interface OutlinePanelProps {
   onToggle(id: string): void;
   onCollapseAll(): void;
   onNavigate(heading: OutlineHeading): void;
-  onClose(): void;
 }
 
 interface OutlineRowsProps {
@@ -94,7 +92,6 @@ export default function OutlinePanel({
   onToggle,
   onCollapseAll,
   onNavigate,
-  onClose,
 }: OutlinePanelProps) {
   const parentIds =
     headings === null ? new Set<string>() : collectOutlineParentIds(headings);
@@ -115,15 +112,6 @@ export default function OutlinePanel({
           onClick={onCollapseAll}
         >
           <CollapseAllIcon />
-        </button>
-        <button
-          type="button"
-          className="outline-icon-button"
-          aria-label="收起右侧栏"
-          title="收起右侧栏"
-          onClick={onClose}
-        >
-          <PanelRightIcon />
         </button>
       </div>
       <div className="outline-content">

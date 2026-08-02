@@ -426,10 +426,10 @@ describe("accessibility: stylesheet guarantees", () => {
 
   it("uses the text-selection color to highlight reading mode", () => {
     expect(appCss).toMatch(
-      /\.app-header \.view-mode-toggle\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
     expect(appCss).toMatch(
-      /\.app-header \.view-mode-toggle\[aria-pressed="true"\]:hover,\s*\.app-header \.view-mode-toggle\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]:hover,\s*\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
   });
 });

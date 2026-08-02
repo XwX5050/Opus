@@ -223,13 +223,13 @@ select:hover {
   color: var(--accent);
 }
 
-.app-header .view-mode-toggle[aria-pressed="true"] {
+.editor-toolbar .view-mode-toggle[aria-pressed="true"] {
   background: var(--selection);
   color: var(--accent);
 }
 
-.app-header .view-mode-toggle[aria-pressed="true"]:hover,
-.app-header .view-mode-toggle[aria-pressed="true"]:active {
+.editor-toolbar .view-mode-toggle[aria-pressed="true"]:hover,
+.editor-toolbar .view-mode-toggle[aria-pressed="true"]:active {
   background: var(--selection);
 }
 
@@ -630,6 +630,15 @@ body.outline-resizing * {
 .editor-area > .empty-state {
   flex: 1;
   min-height: 0;
+}
+
+/* Editor-pane toolbar: quiet row above the editor (Obsidian-style pane
+ * header); hosts the view-mode toggle, right-aligned. */
+.editor-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: var(--space-1) var(--space-3);
 }
 
 /* Large-document light-mode notice: inline, dismissible, token-driven. */

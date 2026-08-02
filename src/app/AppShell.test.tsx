@@ -100,7 +100,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "新建" })).toBeVisible();
     expect(screen.getByRole("button", { name: "打开文件" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "展开大纲" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开右侧栏" })).not.toBeInTheDocument();
   });
 
   it("inserts image files dropped on the window into the active editor", async () => {
@@ -127,7 +127,7 @@ describe("AppShell", () => {
     expect(subscribeToImageDrops).toHaveBeenCalledOnce();
   });
 
-  it("defaults to editing and toggles view modes through the header icon button in the same editor", async () => {
+  it("defaults to editing and toggles view modes through the editor-toolbar icon button in the same editor", async () => {
     const user = userEvent.setup();
     render(
       <AppShell
@@ -259,7 +259,7 @@ describe("AppShell", () => {
     }
   });
 
-  it("places a launch-collapsed outline toggle after the view-mode control", async () => {
+  it("places a launch-collapsed right-sidebar toggle in the header", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", file("/notes/a.md", "# Alpha\n## Child")]]),
       {
@@ -274,9 +274,12 @@ describe("AppShell", () => {
     );
     render(<AppShell port={port} fileActionsInHeader={false} />);
 
-    const toggle = await screen.findByRole("button", { name: "展开大纲" });
+    const toggle = await screen.findByRole("button", { name: "展开右侧栏" });
     const mode = screen.getByRole("button", { name: "编辑模式" });
-    expect(mode.nextElementSibling).toBe(toggle);
+    // The view-mode control lives in the editor-pane toolbar; the header
+    // carries only the right-sidebar toggle.
+    expect(mode.closest(".editor-toolbar")).not.toBeNull();
+    expect(toggle.closest(".app-header")).not.toBeNull();
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toggle).toHaveAttribute("aria-controls", "app-outline");
 
@@ -312,7 +315,7 @@ describe("AppShell", () => {
       },
     );
     render(<AppShell port={port} />);
-    await user.click(await screen.findByRole("button", { name: "展开大纲" }));
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
     const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
     expect(outline).toHaveStyle({ width: "300px" });
 
@@ -355,14 +358,14 @@ describe("AppShell", () => {
       },
     );
     render(<AppShell port={port} />);
-    await user.click(await screen.findByRole("button", { name: "展开大纲" }));
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
     await screen.findByRole("treeitem", { name: "Alpha child" });
 
     await user.click(screen.getByRole("button", { name: "收起 Alpha" }));
     expect(screen.queryByRole("treeitem", { name: "Alpha child" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: /b\.md/ }));
-    expect(screen.getByRole("button", { name: "收起大纲" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "收起右侧栏" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -385,7 +388,7 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
-    await user.click(screen.getByRole("button", { name: "展开大纲" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await screen.findByRole("treeitem", { name: "Child" });
     await user.click(screen.getByRole("button", { name: "收起 Alpha" }));
 
@@ -1493,7 +1496,8 @@ describe("AppShell conflict and save-failure dialogs", () => {
       expect(screen.queryByRole("button", { name: "打开文件夹" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
-      // The sidebar toggle and view-mode icons remain in the header.
+      // The sidebar toggle stays in the header; the view-mode icon lives in
+      // the editor-pane toolbar.
       expect(screen.getByRole("button", { name: "编辑模式" })).toBeVisible();
     });
   });
