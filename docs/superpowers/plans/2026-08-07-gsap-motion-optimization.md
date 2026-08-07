@@ -168,9 +168,9 @@ export const playEditorIntro = (
 };
 ```
 
-`playEditorIntro` 先用宿主 `autoAlpha/y`，再对收集目标做有限 stagger；缺少目标时仍返回可安全 kill 的 timeline。用 `MutationObserver` 只监听 `.md-image-widget`, `.md-table`, `.katex` 新增节点，WeakSet 防止同一节点重复播放；observer 在清理函数中 disconnect。
+`playEditorIntro` 在 `viewMode === "editing"` 时返回空 timeline，绝不改写 CodeMirror 宿主或 `.cm-line`；在阅读模式对收集目标做有限 stagger，且只使用 transform，避免阻塞焦点与输入。缺少目标时仍返回可安全 kill 的 timeline。仅在阅读模式安装 `MutationObserver` 监听 `.md-image-widget`, `.md-table`, `.katex` 新增节点，WeakSet 防止同一节点重复播放；observer 在清理函数中 disconnect。
 
-在 `MarkdownEditor` 的 EditorView 创建完成后用 `requestAnimationFrame` 调用 adapter；文档受控值同步和普通 `docChanged` 不调用 adapter。组件 cleanup 必须 kill timeline、disconnect observer，再 destroy EditorView。
+在 `MarkdownEditor` 的 EditorView 创建完成后用 `requestAnimationFrame` 调用 adapter；普通编辑模式受控值同步和 `docChanged` 不调用内容 adapter。组件 cleanup 必须 kill timeline、disconnect observer，再 destroy EditorView。
 
 - [ ] **Step 4: 运行相关测试**
 
