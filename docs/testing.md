@@ -214,6 +214,13 @@ build SHA, chip, and macOS version with the results.
 20. **Reduced motion**: enable System Settings → Accessibility → Display →
     Reduce Motion. Sidebar/dialog/state transitions lose nonessential
     animation; the app remains fully usable.
+21. **GSAP motion interaction**: rapidly switch tabs, expand/collapse both
+    sidebars, open/close dialogs, and toggle reading mode. Motion may use
+    transform/scale feedback, but focused controls remain focused, CodeMirror
+    typing and selection remain stable, and no animation waits before the
+    action is accepted. In editing mode, the CodeMirror DOM must not receive
+    content transforms; reading-mode content entrances are limited to the
+    visible range.
 
 ### Performance cases (§9 of the design spec)
 

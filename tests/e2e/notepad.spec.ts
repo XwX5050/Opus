@@ -123,6 +123,8 @@ test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
   await page.getByRole("button", { name: "打开文件", exact: true }).click();
   const tabs = page.getByRole("tab");
   await expect(tabs).toHaveCount(2);
+  await expect(page.locator(".tab-list")).toHaveAttribute("data-motion-list", "tabs");
+  await expect(tabs.nth(0)).toHaveAttribute("data-motion-item", "tab");
   // The last opened file is active; switching tabs swaps the editor document.
   await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(editorContent(page)).toContainText("Beta");
@@ -517,7 +519,12 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
   const outline = page.getByRole("complementary", { name: "大纲侧栏" });
   await expect(outline).toBeVisible();
   await expect(outline).toHaveCSS("width", "336px");
+  await expect(outline.locator(".outline-content")).toHaveAttribute(
+    "data-motion-list",
+    "outline",
+  );
   await expect(outline.getByRole("treeitem")).toHaveCount(5);
+  await expect(outline.locator("[data-motion-item]")).toHaveCount(5);
 
   await outline.getByRole("treeitem", { name: "第一节" }).click();
   await expect(editorContent(page)).toBeFocused();
@@ -611,6 +618,10 @@ test("opens the folder drawer and opens a file from the tree", async ({
   await page.getByRole("button", { name: "打开文件夹" }).click();
   const sidebar = page.locator('aside[aria-label="侧栏"]');
   await expect(sidebar).toBeVisible();
+  await expect(sidebar.locator(".file-tree")).toHaveAttribute(
+    "data-motion-list",
+    "files",
+  );
 
   await sidebar
     .getByRole("treeitem", { name: "notes" })
@@ -621,6 +632,10 @@ test("opens the folder drawer and opens a file from the tree", async ({
     .locator(".file-tree-name")
     .click();
   await expect(page.getByRole("tab", { name: "a.md" })).toHaveCount(1);
+  await expect(page.getByRole("tab", { name: "a.md" })).toHaveAttribute(
+    "data-motion-item",
+    "tab",
+  );
   await expect(editorContent(page)).toContainText("笔记 A");
 
   // The drawer stays manually collapsible.

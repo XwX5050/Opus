@@ -113,5 +113,3 @@ export const observeEditorWidgets = (
     activeTimeline = null;
   };
 };
-
-export { MAX_EDITOR_MOTION_TARGETS };

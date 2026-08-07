@@ -42,7 +42,7 @@ export const animateDialogIntro = (root: HTMLElement): gsap.core.Timeline => {
   const content = dialog
     ? Array.from(
         dialog.querySelectorAll<HTMLElement>(
-          "h2, p, > ul, > pre",
+          "h2, p, ul, pre",
         ),
       )
     : [];
