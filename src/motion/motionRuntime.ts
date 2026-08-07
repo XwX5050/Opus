@@ -17,27 +17,21 @@ export const prefersReducedMotion = (): boolean => {
 export const clampMotionTargets = <T>(targets: readonly T[]): T[] =>
   targets.slice(0, 16);
 
-const revealTargets = (timeline: gsap.core.Timeline, targets: Element[]) => {
-  if (targets.length === 0) return;
-  timeline.set(targets, { autoAlpha: 1, clearProps: "transform,visibility" });
-};
-
 export const animatePanelIntro = (root: HTMLElement): gsap.core.Timeline => {
   const timeline = gsap.timeline({ defaults: { overwrite: "auto" } });
   if (prefersReducedMotion()) {
-    timeline.set(root, { autoAlpha: 1, clearProps: "transform,visibility" });
+    timeline.set(root, { clearProps: "transform" });
     return timeline;
   }
   timeline.fromTo(
     root,
-    { autoAlpha: 0, y: 10, scale: 0.985 },
+    { y: 10, scale: 0.985 },
     {
-      autoAlpha: 1,
       y: 0,
       scale: 1,
       duration: MOTION.panel.duration,
       ease: MOTION.easing,
-      clearProps: "transform,visibility",
+      clearProps: "transform",
     },
   );
   return timeline;
@@ -48,46 +42,40 @@ export const animateDialogIntro = (root: HTMLElement): gsap.core.Timeline => {
   const content = dialog
     ? Array.from(
         dialog.querySelectorAll<HTMLElement>(
-          "h2, p, .dialog-actions > *, > button, > ul, > pre",
+          "h2, p, > ul, > pre",
         ),
       )
     : [];
   const timeline = gsap.timeline({ defaults: { overwrite: "auto" } });
   if (prefersReducedMotion()) {
-    revealTargets(timeline, [root, ...(dialog ? [dialog] : []), ...content]);
+    timeline.set([root, ...(dialog ? [dialog] : []), ...content], {
+      clearProps: "transform",
+    });
     return timeline;
   }
-  timeline.fromTo(
-    root,
-    { autoAlpha: 0 },
-    { autoAlpha: 1, duration: 0.16, ease: "power1.out" },
-  );
   if (dialog) {
     timeline.fromTo(
       dialog,
-      { autoAlpha: 0, y: 18, scale: 0.9 },
+      { y: 18, scale: 0.9 },
       {
-        autoAlpha: 1,
         y: 0,
         scale: 1,
         duration: MOTION.dialog.duration,
         ease: "back.out(1.35)",
-        clearProps: "transform,visibility",
+        clearProps: "transform",
       },
-      "<",
     );
   }
   if (content.length > 0) {
     timeline.fromTo(
       content,
-      { autoAlpha: 0, y: 8 },
+      { y: 8 },
       {
-        autoAlpha: 1,
         y: 0,
         duration: 0.2,
         ease: MOTION.easing,
         stagger: MOTION.list.stagger,
-        clearProps: "transform,visibility",
+        clearProps: "transform",
       },
       "-=0.16",
     );
@@ -102,23 +90,29 @@ export const animateListIntro = (
   const items = Array.from(root.querySelectorAll<HTMLElement>(selector)).slice(
     0,
     MAX_LIST_MOTION_TARGETS,
-  );
+  ).filter((item) => {
+    const active = document.activeElement;
+    return (
+      item.getAttribute("aria-selected") !== "true" &&
+      item !== active &&
+      !item.contains(active)
+    );
+  });
   const timeline = gsap.timeline({ defaults: { overwrite: "auto" } });
   if (prefersReducedMotion()) {
-    revealTargets(timeline, items);
+    timeline.set(items, { clearProps: "transform" });
     return timeline;
   }
   if (items.length > 0) {
     timeline.fromTo(
       items,
-      { autoAlpha: 0, x: -12 },
+      { x: -12 },
       {
-        autoAlpha: 1,
         x: 0,
         duration: 0.24,
         ease: "back.out(1.15)",
         stagger: MOTION.list.stagger,
-        clearProps: "transform,visibility",
+        clearProps: "transform",
       },
     );
   }

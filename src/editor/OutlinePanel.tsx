@@ -43,6 +43,7 @@ function OutlineRows({
           <li key={heading.id} role="none" className="outline-tree-node">
             <div
               className="outline-tree-row"
+              data-motion-item="outline"
               data-level={heading.level}
             >
               {expandable ? (
@@ -114,7 +115,7 @@ export default function OutlinePanel({
           <CollapseAllIcon />
         </button>
       </div>
-      <div className="outline-content">
+      <div className="outline-content" data-motion-list="outline">
         {headings === null ? (
           <p className="outline-message" role="status">正在生成大纲…</p>
         ) : headings.length === 0 ? (

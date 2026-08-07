@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useGSAP } from "@gsap/react";
 import type { DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import {
@@ -32,6 +33,11 @@ import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
 import { type EventSubscriber, useAppController } from "./useAppController";
 import type { TableCellEditRequest } from "../editor/tableWidgets";
+import {
+  animateDialogIntro,
+  animateListIntro,
+  animatePanelIntro,
+} from "../motion/motionRuntime";
 
 export type ImageDropSubscriber = (
   onImages: (drop: ImageDrop) => void,
@@ -369,6 +375,61 @@ export default function AppShell({
     closing || saveErrorOpen || recoveryOpen || conflictTab || settingsOpen,
   );
 
+  useGSAP(
+    () => {
+      const root = shellRef.current;
+      if (!root) return;
+      const header = root.querySelector<HTMLElement>(".app-header");
+      if (header) animatePanelIntro(header);
+    },
+    { scope: shellRef },
+  );
+
+  useGSAP(
+    () => {
+      const root = shellRef.current;
+      if (!root) return;
+      root
+        .querySelectorAll<HTMLElement>(
+          '[data-motion-panel]:not([data-collapsed="true"])',
+        )
+        .forEach((panel) => animatePanelIntro(panel));
+      root
+        .querySelectorAll<HTMLElement>("[data-motion-list]")
+        .forEach((list) => animateListIntro(list));
+    },
+    {
+      scope: shellRef,
+      dependencies: [
+        sidebar.collapsed,
+        outlineOpen,
+        showPerfBanner,
+      ],
+      revertOnUpdate: true,
+    },
+  );
+
+  useGSAP(
+    () => {
+      const root = shellRef.current;
+      if (!root) return;
+      root
+        .querySelectorAll<HTMLElement>("[data-motion-dialog]")
+        .forEach((dialog) => animateDialogIntro(dialog));
+    },
+    {
+      scope: shellRef,
+      dependencies: [
+        settingsOpen,
+        closing?.id,
+        saveErrorOpen,
+        recoveryOpen,
+        conflictTab?.id,
+      ],
+      revertOnUpdate: true,
+    },
+  );
+
   // Set by explicit user open actions (picker buttons, recent-folder items);
   // only those reveal the drawer — session restores keep the persisted
   // collapse state.
@@ -601,6 +662,7 @@ export default function AppShell({
       ref={shellRef}
       tabIndex={-1}
       className="app-shell"
+      data-motion-shell="true"
       onKeyDown={onShellKeyDown}
     >
       <div
@@ -678,6 +740,7 @@ export default function AppShell({
           <>
           <div
             className="sidebar-rail"
+            data-motion-panel="sidebar"
             data-collapsed={sidebar.collapsed}
             style={{ width: sidebar.collapsed ? 0 : sidebarDragWidth ?? sidebar.width }}
           >
@@ -789,7 +852,7 @@ export default function AppShell({
           </div>
         )}
         {showPerfBanner && active && (
-          <div role="status" className="perf-banner">
+          <div role="status" className="perf-banner" data-motion-panel="perf-banner">
             <span className="perf-banner-text">
               大文档已切换到轻量模式：图片与公式渲染已暂停，文本内容不受影响。
             </span>
@@ -893,6 +956,7 @@ export default function AppShell({
             )}
             <div
               className="outline-rail"
+              data-motion-panel="outline"
               data-collapsed={!outlineOpen}
               style={{
                 width: outlineOpen
@@ -927,7 +991,7 @@ export default function AppShell({
       </div>
 
       {(controller.error || externalError) && (
-        <div role="alert" className="app-alert">
+        <div role="alert" className="app-alert" data-motion-panel="alert">
           <span>{controller.error || externalError}</span>
           {!controller.error && externalError && onDismissExternalError && (
             <button type="button" aria-label="关闭错误提示" onClick={onDismissExternalError}>×</button>
@@ -936,7 +1000,7 @@ export default function AppShell({
       )}
 
       {closing && (
-        <div className="dialog-overlay">
+        <div className="dialog-overlay" data-motion-dialog="true">
         <div
           ref={dialogRef}
           role="dialog"
@@ -965,7 +1029,7 @@ export default function AppShell({
       )}
 
       {saveErrorOpen && controller.saveError && (
-        <div className="dialog-overlay">
+        <div className="dialog-overlay" data-motion-dialog="true">
         <div
           role="dialog"
           tabIndex={-1}
@@ -985,7 +1049,7 @@ export default function AppShell({
       )}
 
       {recoveryOpen && controller.recoveryDrafts && (
-        <div className="dialog-overlay">
+        <div className="dialog-overlay" data-motion-dialog="true">
         <RecoveryDialog
           drafts={controller.recoveryDrafts}
           onRestore={(info) => void controller.restoreDraft(info)}
@@ -996,7 +1060,7 @@ export default function AppShell({
       )}
 
       {conflictTab && (
-        <div className="dialog-overlay">
+        <div className="dialog-overlay" data-motion-dialog="true">
         <ConflictDialog
           title={conflictTab.title}
           path={conflictTab.path}
@@ -1008,7 +1072,7 @@ export default function AppShell({
       )}
 
       {settingsOpen && (
-        <div className="dialog-overlay">
+        <div className="dialog-overlay" data-motion-dialog="true">
         <SettingsDialog
           theme={controller.theme}
           editorPreferences={controller.editorPreferences}

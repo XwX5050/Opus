@@ -36,6 +36,7 @@ export default function TabList({ tabs, activeId, onActivate, onClose }: TabList
       aria-label="打开的文档"
       aria-orientation="vertical"
       className="tab-list"
+      data-motion-list="tabs"
     >
       {tabs.map((tab, index) => (
         <div key={tab.id} className="tab-item">
@@ -44,6 +45,7 @@ export default function TabList({ tabs, activeId, onActivate, onClose }: TabList
             role="tab"
             id={`document-tab-${tab.id}`}
             className="tab"
+            data-motion-item="tab"
             aria-selected={tab.id === activeId}
             aria-controls={`document-panel-${tab.id}`}
             tabIndex={tab.id === activeId ? 0 : -1}

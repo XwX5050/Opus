@@ -303,6 +303,7 @@ export default function FileSidebar({
         role="tree"
         aria-label="工作区文件"
         className="file-tree"
+        data-motion-list="files"
         onKeyDown={onTreeKeyDown}
       >
         {rows.map((row) => {
@@ -319,6 +320,7 @@ export default function FileSidebar({
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
               className="file-tree-row"
+              data-motion-item="file"
               ref={(element) => {
                 if (element) rowRefs.current.set(entry.path, element);
                 else rowRefs.current.delete(entry.path);
