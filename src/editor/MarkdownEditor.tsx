@@ -8,6 +8,10 @@ import {
 import { EditorView } from "@codemirror/view";
 import type { ClipboardImageInput } from "../document/DocumentPort";
 import { reportEditorEditable } from "../document/tauriDocumentPort";
+import {
+  observeEditorWidgets,
+  playEditorIntro,
+} from "../motion/editorMotion";
 import { editorExtensions } from "./editorExtensions";
 import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
@@ -253,6 +257,25 @@ export default function MarkdownEditor({
     // Preview extensions read live refs; rebuilding them on toggle is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, performanceMode]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    let intro: { kill(): void } | null = null;
+    let stopObserving: () => void = () => undefined;
+    const frame = requestAnimationFrame(() => {
+      if (!host.isConnected) return;
+      intro = playEditorIntro(host, performanceMode, viewMode);
+      if (viewMode === "reading") {
+        stopObserving = observeEditorWidgets(host, performanceMode);
+      }
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      intro?.kill();
+      stopObserving();
+    };
+  }, [performanceMode, viewMode]);
 
   const consumedOutlineNavigationRef = useRef(0);
 
