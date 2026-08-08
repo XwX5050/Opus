@@ -100,3 +100,64 @@ indicates they must be present"). Re-sign ad-hoc before local verification:
 codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist \
   "src-tauri/target/release/bundle/macos/Opus.app"
 ```
+
+## Automatic updates channel
+
+Opus updates itself through `tauri-plugin-updater`. Every release publishes
+a signed manifest to
+`https://github.com/XwX5050/Opus/releases/latest/download/latest.json`; the
+app checks that URL silently on startup and offers to download and install
+a newer version.
+
+### Update signing key
+
+Update packages are signed with a minisign key pair. Generate one with the
+Tauri CLI (this project uses a password-less key — leave the password
+prompts empty):
+
+```sh
+npm run tauri signer generate -- -w ~/.tauri/opus-updater.key
+```
+
+The secret key is written to `~/.tauri/opus-updater.key`; the printed
+public key is pinned in the `updater.pubkey` field of
+`src-tauri/tauri.conf.json`.
+
+**Never commit the secret key and back it up somewhere safe. Losing it
+breaks the update chain permanently**: clients verify every `latest.json`
+signature against the pinned public key, and a key cannot be rotated
+retroactively — a new key would only work for installs of a future build.
+
+### GitHub Secrets
+
+The release workflow (`.github/workflows/release.yml`, triggered by `v*`
+tags) reads two groups of secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/opus-updater.key` (the whole minisign secret key file). |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Empty for the password-less key; the secret must still be defined so the workflow passes it through. |
+| `APPLE_SIGNING_IDENTITY` | Developer ID identity name; with it, tauri-action signs the bundle. |
+| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Apple ID, app-specific password, and team ID for notarization. |
+
+When the `APPLE_*` secrets are missing, the workflow still runs but
+produces unsigned local builds (fine for internal testing, not for
+distribution). When they are configured, artifacts are Developer ID signed
+and notarized automatically.
+
+### Publishing a release
+
+Push a `v*` tag. The workflow runs the release gate (`npm run check`), then
+`tauri-action` builds the `app,dmg` bundles and creates a GitHub Release
+for the tag. Because `createUpdaterArtifacts` is enabled in
+`tauri.conf.json`, the release also carries the updater artifacts:
+`Opus.app.tar.gz`, its `.sig` signature, and a fresh `latest.json`.
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+`latest.json` is served from the release's `latest/download` URL, so the
+most recent tagged release automatically becomes the update target for all
+existing installs.

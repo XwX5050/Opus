@@ -19,17 +19,19 @@ operations, and menus are provided by a Rust/Tauri backend.
 
 ## Technology stack
 
-- **Frontend**: React 19, TypeScript (strict), Vite 8, CodeMirror 6, KaTeX.
+- **Frontend**: React 19, TypeScript (strict), Vite 8, CodeMirror 6, KaTeX,
+  GSAP (with `@gsap/react`).
 - **Native shell**: Tauri 2 with a Rust backend.
 - **Node toolchain**: Node.js 22 + npm.
 - **Rust toolchain**: Stable Rust (minimum `1.77.2`).
 - **Test runners**: Vitest (jsdom) for unit/component tests, Playwright for
   browser-shell E2E, Cargo for Rust tests and integration tests.
 - **Key npm packages**: `@codemirror/*`, `@tauri-apps/api`,
-  `@tauri-apps/plugin-dialog/fs/opener/store`, `katex`, `react`, `react-dom`.
-- **Key Rust crates**: `tauri` 2.11, `notify` 8.2, `trash` 5.2, `sha2`, `serde`,
-  `tempfile`; macOS-only `objc2-app-kit`/`objc2-foundation`/`objc2-web-kit`
-  0.3 (pinned to wry's locked versions).
+  `@tauri-apps/plugin-dialog/fs/opener/store`, `katex`, `gsap`, `@gsap/react`,
+  `react`, `react-dom`.
+- **Key Rust crates**: `tauri` 2.11, `notify` 8.2, `trash` 5.2, `sha2`,
+  `serde`, `tempfile`; macOS-only `objc2-app-kit`/`objc2-foundation`/
+  `objc2-web-kit` 0.3 (pinned to wry's locked versions).
 
 ## Project structure
 
@@ -39,6 +41,7 @@ operations, and menus are provided by a Rust/Tauri backend.
 │   ├── app/                # Application orchestration
 │   ├── document/           # Document state and storage ports
 │   ├── editor/             # CodeMirror editor and extensions
+│   ├── motion/             # GSAP animation runtime and editor motion
 │   ├── workspace/          # File drawer / folder sidebar
 │   ├── theme/              # Design tokens, CSS, preferences
 │   ├── conflict/           # External-change conflict dialog
@@ -67,8 +70,10 @@ operations, and menus are provided by a Rust/Tauri backend.
 ## Module divisions
 
 - `src/app/`: composition root (`App.tsx`, `createApp.tsx`), top-level shell
-  (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings,
-  tabs, and the E2E fixture bridge (`e2e.ts`).
+  (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings
+  dialog (`SettingsDialog.tsx`), tab bar (`TabList.tsx`), automatic
+  performance-mode hook (`usePerformanceMode.ts`), and the E2E fixture bridge
+  (`e2e.ts`).
 - `src/document/`: the `DocumentPort` contract (`DocumentPort.ts`), pure
   document reducer (`documentReducer.ts`), shared types (`types.ts`), and two
   implementations:
@@ -77,8 +82,17 @@ operations, and menus are provided by a Rust/Tauri backend.
     and Playwright E2E fixtures.
 - `src/editor/`: `MarkdownEditor.tsx` plus CodeMirror extensions for live
   preview, Markdown tables, math rendering, image widgets, image paste/drop,
-  outline publishing, search, frontmatter, highlight markers, and performance
-  (light) mode.
+  outline publishing (`outlineExtension.ts`, `OutlinePanel.tsx`), search,
+  frontmatter, highlight markers, and performance (light) mode
+  (`performanceMode.ts`). `viewMode.ts` defines the per-tab modes: `editing`
+  (live preview, selection reveals source) and `reading` (read-only, fully
+  rendered).
+- `src/motion/`: GSAP-based animation. `motionConfig.ts` holds the shared
+  timing/easing tokens; `motionRuntime.ts` provides panel/dialog/list intro
+  helpers that honor `prefers-reduced-motion`; `editorMotion.ts` animates
+  editor content on view-mode switches and is disabled in light performance
+  mode. Target counts are clamped (`MAX_EDITOR_MOTION_TARGETS`,
+  `MAX_LIST_MOTION_TARGETS`) to bound animation cost.
 - `src/workspace/`: folder sidebar tree state (`treeReducer.ts`) and UI
   (`FileSidebar.tsx`).
 - `src/theme/`: CSS tokens, app styles, theme hook, and editor/theme
@@ -103,7 +117,7 @@ operations, and menus are provided by a Rust/Tauri backend.
 
 All filesystem access goes through `DocumentPort`. The production app always
 uses `TauriDocumentPort`. Two browser-only modes exist for development and
- testing:
+testing:
 
 - **Dev demo**: `?demo=1` (optionally `&fixture=<name>` / `&workspace=1`) uses
   `MemoryDocumentPort` seeded with demo content so the UI can run in a plain
@@ -113,7 +127,7 @@ uses `TauriDocumentPort`. Two browser-only modes exist for development and
 
 `src/app/App.tsx` is the only place that decides which port to create.
 Production builds never define `VITE_E2E` and `import.meta.env.DEV` is false, so
- they always use the Tauri port.
+they always use the Tauri port.
 
 ## Build, development, and test commands
 
@@ -158,8 +172,8 @@ Performance:
 
 ```sh
 npm run perf:fixtures    # generate tests/perf/generated/*.md (gitignored)
-npm run perf             # browser + hot-start benchmarks -> tests/perf/report.json
-npm run perf:startup     # alias for measure-startup hot starts
+npm run perf             # browser editor benchmarks -> tests/perf/report.json
+npm run perf:startup     # hot-start benchmarks -> tests/perf/startup-samples.json
 ```
 
 ## Code style guidelines
@@ -172,6 +186,8 @@ npm run perf:startup     # alias for measure-startup hot starts
 - Keep filesystem access behind `DocumentPort`.
 - Preserve UTF-8 BOMs, newline style (`lf`/`cr_lf`), conflict tokens, atomic
   saves, and recovery guarantees.
+- Animations must respect `prefers-reduced-motion` and stay within the clamped
+  target counts in `src/motion/motionConfig.ts`.
 - Use focused [Conventional Commits](https://www.conventionalcommits.org/):
   `feat:`, `fix:`, `test:`, `docs:`, `perf:`, `release:`.
 
@@ -180,13 +196,14 @@ npm run perf:startup     # alias for measure-startup hot starts
 Automated gates:
 
 - Frontend unit/component tests live beside implementations as
-  `*.test.ts` / `*.test.tsx` and run in jsdom via Vitest.
+  `*.test.ts` / `*.test.tsx` and run in jsdom via Vitest. The Vitest config
+  (in `vite.config.ts`) excludes `tests/e2e/**` and `.worktrees/**`.
 - Rust integration tests live in `src-tauri/tests/` and cover document I/O,
   commands, workspace operations, asset scopes, recovery, open events, and
   clipboard images.
-- E2E tests in `tests/e2e/` run against a real Vite dev server with
-  `VITE_E2E=1`; they exercise the UI through DOM/CodeMirror interactions using
-  the in-memory port.
+- E2E tests in `tests/e2e/` run against a real Vite dev server on port 1421
+  with `VITE_E2E=1`; they exercise the UI through DOM/CodeMirror interactions
+  using the in-memory port (see `src/app/e2e.ts` and `playwright.config.ts`).
 - `npm run perf` enforces performance budgets and writes
   `tests/perf/report.json`.
 
@@ -199,17 +216,26 @@ Manual macOS acceptance checklist:
 
 CI:
 
-- `.github/workflows/ci.yml` runs on `macos-latest` and executes `npm ci`,
-  `npm test`, `npm run build`, Rust formatting/clippy/tests, and `npm run
-  test:e2e`.
+- `.github/workflows/ci.yml` runs on `macos-latest` with two jobs: `check`
+  (`npm ci`, `npm test`, `npm run build`, Rust fmt/clippy/tests) and `e2e`
+  (`npm run test:e2e` on Chromium, uploading `test-results/` traces on
+  failure).
 
 ## Security considerations
 
 - **No App Sandbox in v1**: `src-tauri/entitlements.plist` is deliberately
   empty and must not contain `com.apple.security.app-sandbox`. The release
-  verification script rejects it if present.
+  verification script (`scripts/verify-macos-bundle.sh`) rejects the build if
+  it is present.
+- **Webview CSP**: `tauri.conf.json` pins a strict CSP
+  (`default-src 'self'`; images additionally allow `asset: http: https:
+  data:`); the asset protocol is enabled with an empty static scope—scopes
+  are granted only at runtime.
 - **Release signing**: Distributable builds require Developer ID signing,
   Hardened Runtime, notarization, and stapling. See `docs/releasing.md`.
+- **Update key**: the updater signing key (`~/.tauri/opus-updater.key`)
+  must never be committed; losing it permanently breaks the automatic
+  update channel. See `docs/releasing.md`.
 - **Never commit**: credentials, `.env` files, signing certificates, build
   outputs, or personal documents.
 - **Atomic saves**: document writes use a sibling temporary file, `fsync`, and
@@ -244,6 +270,10 @@ Release procedures are documented in `docs/releasing.md`. High-level steps:
 
 2. Sign, notarize, staple, and verify the `.app` and `.dmg`.
 3. Publish the stapled DMG to GitHub Releases.
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds
+the `app,dmg` bundles, uploads the updater artifacts (`latest.json`,
+`.app.tar.gz`, `.sig`), and creates the GitHub Release.
 
 ## Useful references
 
