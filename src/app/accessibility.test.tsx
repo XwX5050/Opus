@@ -432,4 +432,56 @@ describe("accessibility: stylesheet guarantees", () => {
       /\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]:hover,\s*\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
   });
+
+  it("declares the Baseline-style motion tokens", () => {
+    expect(tokensCss).toMatch(
+      /--anim-easing:\s*cubic-bezier\(0\.1,\s*0,\s*0\.1,\s*1\.25\);/,
+    );
+    expect(tokensCss).toMatch(/--anim-superfast:\s*80ms;/);
+    expect(tokensCss).toMatch(/--anim-fast:\s*160ms;/);
+    expect(tokensCss).toMatch(/--anim-moderate:\s*320ms;/);
+    expect(tokensCss).toMatch(/--anim-slow:\s*480ms;/);
+  });
+
+  it("defines the Baseline-style entry keyframes", () => {
+    for (const name of ["dialogIn", "fadeIn", "bannerIn", "panelIn"]) {
+      expect(appCss).toMatch(new RegExp(`@keyframes ${name}\\s*\\{`));
+    }
+  });
+
+  it("uses composite fast/easing transitions with press feedback", () => {
+    expect(appCss).toMatch(
+      /\.outline-tree-row,[^}]*background-color var\(--anim-fast\) ease,[^}]*transform var\(--anim-moderate\) var\(--anim-easing\),[^}]*box-shadow var\(--anim-moderate\) var\(--anim-easing\);/s,
+    );
+    expect(appCss).toMatch(
+      /button:active:not\(:disabled\),\s*\.icon-button:active:not\(:disabled\)\s*\{[^}]*transform:\s*scale\(0\.96\);/s,
+    );
+    expect(appCss).toMatch(/\.file-tree-row:active,\s*\.tab:active\s*\{[^}]*opacity:\s*0\.8;/s);
+    expect(appCss).toMatch(
+      /\.icon-button:hover:not\(:disabled\)\s*\{[^}]*box-shadow:\s*var\(--shadow-hover\);/s,
+    );
+    expect(tokensCss).toMatch(/--shadow-hover:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.4\);/);
+    expect(tokensCss).toMatch(/--shadow-hover:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.08\);/);
+  });
+
+  it("hooks the entry animations and keeps collapsed rails intact", () => {
+    expect(appCss).toMatch(
+      /\.dialog-overlay\s*\{[^}]*animation:\s*fadeIn var\(--anim-fast\) ease;/s,
+    );
+    expect(appCss).toMatch(
+      /\.dialog-overlay \[role="dialog"\]\s*\{[^}]*animation:\s*dialogIn var\(--anim-moderate\) var\(--anim-easing\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.app-alert,[^}]*\.perf-banner\s*\{[^}]*animation:\s*bannerIn var\(--anim-moderate\) var\(--anim-easing\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.sidebar-rail:not\(\[data-collapsed="true"\]\),\s*\.outline-rail:not\(\[data-collapsed="true"\]\)\s*\{[^}]*animation:\s*panelIn var\(--anim-moderate\) var\(--anim-easing\);/s,
+    );
+  });
+
+  it("keeps reduced-motion covering the new animation durations", () => {
+    expect(appCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*animation-duration:\s*0\.01ms !important;/s,
+    );
+  });
 });

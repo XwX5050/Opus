@@ -42,6 +42,7 @@ select {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   border-radius: var(--radius-small);
+  transition: outline-color var(--anim-fast) ease;
 }
 
 input:focus-visible,
@@ -882,11 +883,36 @@ body.outline-resizing * {
 /* ---------- Empty state & recent list ---------- */
 
 .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  color: var(--text-secondary);
+  overflow-y: auto;
+}
+
+.empty-hero {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+}
+
+.empty-mark {
   display: grid;
   place-items: center;
-  align-content: center;
-  gap: var(--space-3);
-  color: var(--text-secondary);
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-large);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.empty-headline {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-primary);
 }
 
 .empty-actions {
@@ -894,9 +920,21 @@ body.outline-resizing * {
   gap: var(--space-2);
 }
 
+.empty-primary-action,
+.empty-primary-action:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--text-on-accent);
+}
+
+.empty-primary-action:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
 .recent-section {
   display: grid;
   gap: var(--space-1);
+  width: min(440px, 100%);
 }
 
 .recent-title {
@@ -904,6 +942,7 @@ body.outline-resizing * {
   font-weight: 600;
   letter-spacing: 0.02em;
   margin: 0;
+  padding: 0 var(--space-2);
   color: var(--text-muted);
 }
 
@@ -913,23 +952,61 @@ body.outline-resizing * {
   padding: 0;
   display: grid;
   gap: var(--space-0-5);
-  max-width: 70ch;
+  max-height: 38vh;
+  overflow-y: auto;
 }
 
 .recent-list button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
   border-color: transparent;
   background: transparent;
-  color: var(--text-secondary);
-  max-width: 70ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   border-radius: var(--radius-medium);
+  text-align: left;
+  color: var(--text-secondary);
 }
 
 .recent-list button:hover {
   background: var(--surface-hover);
+}
+
+.recent-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: color var(--anim-fast) ease;
+}
+
+.recent-list button:hover .recent-icon {
+  color: var(--accent);
+}
+
+.recent-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.recent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-primary);
+  font-size: var(--font-ui-size);
+}
+
+.recent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Right-to-left overflow keeps the closest directories visible. */
+  direction: rtl;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
 }
 
 /* ---------- Sidebar tree ---------- */
@@ -1234,9 +1311,14 @@ body.outline-resizing * {
 
 /* ---------- Motion ---------- */
 
+/* Composite transitions: colors snap at the fast step while transforms and
+ * shadows ease with a slight overshoot (Obsidian Baseline restraint). */
+button,
 .tab,
 .tab-close,
+.icon-button,
 .file-tree-row,
+.outline-tree-row,
 .app-header button,
 .sidebar-section-header,
 .sidebar-header button,
@@ -1244,7 +1326,75 @@ body.outline-resizing * {
 .outline-heading-button,
 .recent-list button,
 .perf-banner button {
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background-color var(--anim-fast) ease,
+    color var(--anim-fast) ease,
+    border-color var(--anim-fast) ease,
+    opacity var(--anim-fast) ease,
+    transform var(--anim-moderate) var(--anim-easing),
+    box-shadow var(--anim-moderate) var(--anim-easing);
+}
+
+/* Press feedback: controls shrink, rows and tabs fade. */
+button:active:not(:disabled),
+.icon-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.file-tree-row:active,
+.tab:active {
+  opacity: 0.8;
+}
+
+.icon-button:hover:not(:disabled) {
+  box-shadow: var(--shadow-hover);
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: scale(0.975) translateY(4px);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes bannerIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.dialog-overlay {
+  animation: fadeIn var(--anim-fast) ease;
+}
+
+.dialog-overlay [role="dialog"] {
+  animation: dialogIn var(--anim-moderate) var(--anim-easing);
+}
+
+.app-alert,
+.perf-banner {
+  animation: bannerIn var(--anim-moderate) var(--anim-easing);
+}
+
+/* Collapsed rails skip the entry animation so the collapsed opacity: 0 /
+ * visibility: hidden styles keep winning. */
+.sidebar-rail:not([data-collapsed="true"]),
+.outline-rail:not([data-collapsed="true"]) {
+  animation: panelIn var(--anim-moderate) var(--anim-easing);
 }
 
 @media (prefers-reduced-motion: reduce) {

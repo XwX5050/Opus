@@ -1,7 +1,10 @@
+import { useEffect, useRef } from "react";
 import {
   CollapseAllIcon,
   DisclosureChevronIcon,
+  ExpandAllIcon,
 } from "../app/icons";
+import { bindChevronSpreadHover } from "../motion/motionRuntime";
 import {
   collectOutlineParentIds,
   type OutlineHeading,
@@ -12,6 +15,7 @@ export interface OutlinePanelProps {
   readonly collapsedIds: ReadonlySet<string>;
   onToggle(id: string): void;
   onCollapseAll(): void;
+  onExpandAll(): void;
   onNavigate(heading: OutlineHeading): void;
 }
 
@@ -92,27 +96,39 @@ export default function OutlinePanel({
   collapsedIds,
   onToggle,
   onCollapseAll,
+  onExpandAll,
   onNavigate,
 }: OutlinePanelProps) {
   const parentIds =
     headings === null ? new Set<string>() : collectOutlineParentIds(headings);
-  const collapseAllDisabled =
-    parentIds.size === 0 ||
+  const allCollapsed =
+    parentIds.size > 0 &&
     [...parentIds].every((id) => collapsedIds.has(id));
+  const toggleAllLabel = allCollapsed ? "全部展开" : "全部折叠";
+
+  // Chevron spread hover on the collapse/expand-all toggle.
+  const toggleAllRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const button = toggleAllRef.current;
+    if (!button) return;
+    return bindChevronSpreadHover(button);
+  }, []);
 
   return (
     <>
       <div className="outline-toolbar">
         <h2>大纲</h2>
         <button
+          ref={toggleAllRef}
           type="button"
           className="outline-icon-button outline-collapse-all"
-          aria-label="全部折叠"
-          title="全部折叠"
-          disabled={collapseAllDisabled}
-          onClick={onCollapseAll}
+          aria-label={toggleAllLabel}
+          aria-pressed={allCollapsed}
+          title={toggleAllLabel}
+          disabled={parentIds.size === 0}
+          onClick={allCollapsed ? onExpandAll : onCollapseAll}
         >
-          <CollapseAllIcon />
+          {allCollapsed ? <ExpandAllIcon /> : <CollapseAllIcon />}
         </button>
       </div>
       <div className="outline-content" data-motion-list="outline">

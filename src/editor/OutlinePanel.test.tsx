@@ -39,6 +39,7 @@ const renderPanel = (
     collapsedIds: new Set<string>(),
     onToggle: vi.fn(),
     onCollapseAll: vi.fn(),
+    onExpandAll: vi.fn(),
     onNavigate: vi.fn(),
     ...overrides,
   };
@@ -102,20 +103,27 @@ describe("OutlinePanel", () => {
     expect(screen.getByRole("treeitem", { name: "Omega" })).toBeVisible();
   });
 
-  it("collapses every parent and disables the action when already complete", async () => {
+  it("toggles between collapsing and expanding every parent", async () => {
     const user = userEvent.setup();
     const first = renderPanel();
     const collapseAll = screen.getByRole("button", { name: "全部折叠" });
     expect(collapseAll).toBeEnabled();
+    expect(collapseAll).toHaveAttribute("aria-pressed", "false");
     await user.click(collapseAll);
     expect(first.props.onCollapseAll).toHaveBeenCalledOnce();
+    expect(first.props.onExpandAll).not.toHaveBeenCalled();
     first.unmount();
 
-    renderPanel({ collapsedIds: new Set(["alpha", "child"]) });
-    expect(screen.getByRole("button", { name: "全部折叠" })).toBeDisabled();
+    const second = renderPanel({ collapsedIds: new Set(["alpha", "child"]) });
+    const expandAll = screen.getByRole("button", { name: "全部展开" });
+    expect(expandAll).toBeEnabled();
+    expect(expandAll).toHaveAttribute("aria-pressed", "true");
+    await user.click(expandAll);
+    expect(second.props.onExpandAll).toHaveBeenCalledOnce();
+    expect(second.props.onCollapseAll).not.toHaveBeenCalled();
   });
 
-  it("disables collapse-all when there are no parent headings", () => {
+  it("disables the toggle-all action when there are no parent headings", () => {
     renderPanel({ headings: [leaf("only", "Only", 1)] });
 
     expect(screen.getByRole("button", { name: "全部折叠" })).toBeDisabled();

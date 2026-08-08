@@ -25,6 +25,8 @@ import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
 import {
   BookOpenIcon,
+  FileTextIcon,
+  FolderIcon,
   PanelLeftIcon,
   PanelRightIcon,
   PencilLineIcon,
@@ -37,6 +39,10 @@ import {
   animateDialogIntro,
   animateListIntro,
   animatePanelIntro,
+  bindButtonHoverMotion,
+  bindPanelDividerHover,
+  bindViewModeHover,
+  setPanelDividerState,
 } from "../motion/motionRuntime";
 
 export type ImageDropSubscriber = (
@@ -76,6 +82,14 @@ const pruneTabMap = <T,>(
 ): ReadonlyMap<string, T> => {
   if ([...current.keys()].every((id) => openIds.has(id))) return current;
   return new Map([...current].filter(([id]) => openIds.has(id)));
+};
+
+/** Splits a recent-item path into a display name and its parent directory. */
+const splitRecentPath = (path: string): { name: string; parent: string } => {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (index <= 0) return { name: trimmed, parent: "" };
+  return { name: trimmed.slice(index + 1), parent: trimmed.slice(0, index) };
 };
 
 export default function AppShell({
@@ -313,6 +327,14 @@ export default function AppShell({
       return next;
     });
   };
+  const expandAllOutlineBranches = (tabId: string) => {
+    setCollapsedOutlineIdsByTab((current) => {
+      if (!current.has(tabId)) return current;
+      const next = new Map(current);
+      next.set(tabId, new Set<string>());
+      return next;
+    });
+  };
   const navigateToOutlineHeading = (
     tabId: string,
     heading: OutlineHeading,
@@ -383,6 +405,83 @@ export default function AppShell({
       if (header) animatePanelIntro(header);
     },
     { scope: shellRef },
+  );
+
+  // Elastic scale hover on every header button (text actions and icon
+  // toggles). Rebinds when the conditionally rendered buttons appear or
+  // disappear; cleanup removes listeners and any in-flight transform.
+  // Panel toggles additionally animate the icon's divider line on hover as
+  // a preview of the collapse/expand they trigger.
+  const panelDividerStateRef = useRef({ leftCollapsed: true, rightCollapsed: true });
+  panelDividerStateRef.current = {
+    leftCollapsed: sidebar.collapsed,
+    rightCollapsed: !outlineOpen,
+  };
+  useGSAP(
+    () => {
+      const root = shellRef.current;
+      if (!root) return;
+      const header = root.querySelector<HTMLElement>(".app-header");
+      if (!header) return;
+      const cleanups = [bindButtonHoverMotion(header)];
+      const leftToggle = header.querySelector<HTMLElement>(".sidebar-toggle");
+      if (leftToggle) {
+        cleanups.push(
+          bindPanelDividerHover(
+            leftToggle,
+            "left",
+            () => panelDividerStateRef.current.leftCollapsed,
+          ),
+        );
+      }
+      const rightToggle = header.querySelector<HTMLElement>(".right-sidebar-toggle");
+      if (rightToggle) {
+        cleanups.push(
+          bindPanelDividerHover(
+            rightToggle,
+            "right",
+            () => panelDividerStateRef.current.rightCollapsed,
+          ),
+        );
+      }
+      const viewModeToggle = root.querySelector<HTMLElement>(".view-mode-toggle");
+      if (viewModeToggle) cleanups.push(bindViewModeHover(viewModeToggle));
+      return () => {
+        cleanups.forEach((cleanup) => cleanup());
+      };
+    },
+    {
+      scope: shellRef,
+      dependencies: [
+        sidebarAvailable,
+        controller.state.tabs.length > 0,
+        Boolean(active),
+        fileActionsInHeader,
+      ],
+      revertOnUpdate: true,
+    },
+  );
+
+  // Keep each panel toggle icon's divider in sync with the panel state;
+  // tweened, so clicking the toggle animates the icon along with the panel.
+  useGSAP(
+    () => {
+      const root = shellRef.current;
+      if (!root) return;
+      const leftToggle = root.querySelector<HTMLElement>(".sidebar-toggle");
+      if (leftToggle) setPanelDividerState(leftToggle, "left", sidebar.collapsed);
+      const rightToggle = root.querySelector<HTMLElement>(".right-sidebar-toggle");
+      if (rightToggle) setPanelDividerState(rightToggle, "right", !outlineOpen);
+    },
+    {
+      scope: shellRef,
+      dependencies: [
+        sidebar.collapsed,
+        outlineOpen,
+        sidebarAvailable,
+        Boolean(active),
+      ],
+    },
   );
 
   useGSAP(
@@ -907,28 +1006,46 @@ export default function AppShell({
           />
         ) : (
           <div role="region" aria-label="空白状态" className="empty-state">
-            <p>打开 Markdown 文件或创建新文档。</p>
-            <div className="empty-actions">
-              <button type="button" onClick={controller.newDocument}>新建</button>
-              <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
-              <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
+            <div className="empty-hero">
+              <span className="empty-mark" aria-hidden="true">
+                <FileTextIcon size={28} />
+              </span>
+              <p className="empty-headline">打开 Markdown 文件或创建新文档。</p>
+              <div className="empty-actions">
+                <button type="button" className="empty-primary-action" onClick={controller.newDocument}>新建</button>
+                <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
+                <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
+              </div>
             </div>
             {controller.state.tabs.length === 0 && controller.recent.length > 0 && (
               <section aria-label="最近打开" className="recent-section">
                 <h2 className="recent-title">最近打开</h2>
                 <ul className="recent-list">
-                  {controller.recent.map((item) => (
-                    <li key={`${item.kind}:${item.path}`}>
-                      <button
-                        type="button"
-                        aria-label={`${item.kind === "file" ? "文件" : "文件夹"} ${item.path}`}
-                        onClick={() => openRecentFromUser(item)}
-                      >
-                        <span aria-hidden="true">{item.kind === "file" ? "📄 " : "📁 "}</span>
-                        {item.path}
-                      </button>
-                    </li>
-                  ))}
+                  {controller.recent.map((item) => {
+                    const { name, parent } = splitRecentPath(item.path);
+                    return (
+                      <li key={`${item.kind}:${item.path}`}>
+                        <button
+                          type="button"
+                          aria-label={`${item.kind === "file" ? "文件" : "文件夹"} ${item.path}`}
+                          title={item.path}
+                          onClick={() => openRecentFromUser(item)}
+                        >
+                          <span className="recent-icon" aria-hidden="true">
+                            {item.kind === "file" ? <FileTextIcon /> : <FolderIcon />}
+                          </span>
+                          <span className="recent-text">
+                            <span className="recent-name">{name}</span>
+                            {parent && (
+                              // LRI/PDI keep the path LTR inside the rtl
+                              // container, so the leading "/" stays put.
+                              <span className="recent-path">{`⁦${parent}⁩`}</span>
+                            )}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             )}
@@ -979,6 +1096,7 @@ export default function AppShell({
                   onCollapseAll={() =>
                     collapseAllOutlineBranches(active.id, activeOutline ?? [])
                   }
+                  onExpandAll={() => expandAllOutlineBranches(active.id)}
                   onNavigate={(heading) =>
                     navigateToOutlineHeading(active.id, heading)
                   }

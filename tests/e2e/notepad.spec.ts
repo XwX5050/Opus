@@ -532,7 +532,13 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
   await outline.getByRole("button", { name: "全部折叠" }).click();
   await expect(outline.getByRole("treeitem", { name: "第一节" })).toHaveCount(0);
   await expect(outline.getByRole("treeitem", { name: "第二节" })).toHaveCount(0);
-  await expect(outline.getByRole("button", { name: "全部折叠" })).toBeDisabled();
+  const expandAllButton = outline.getByRole("button", { name: "全部展开" });
+  await expect(expandAllButton).toBeEnabled();
+
+  await expandAllButton.click();
+  await expect(outline.getByRole("treeitem", { name: "第一节" })).toBeVisible();
+  await outline.getByRole("button", { name: "全部折叠" }).click();
+  await expect(outline.getByRole("treeitem", { name: "第一节" })).toHaveCount(0);
 
   await outline.getByRole("button", { name: "展开 第二章" }).click();
   await expect(outline.getByRole("treeitem", { name: "第二节" })).toBeVisible();
