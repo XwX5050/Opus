@@ -33,6 +33,7 @@ import {
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
+import { checkUpdate, relaunchApp, type UpdateOffer } from "./updates";
 import { type EventSubscriber, useAppController } from "./useAppController";
 import type { TableCellEditRequest } from "../editor/tableWidgets";
 import {
@@ -114,6 +115,10 @@ export default function AppShell({
   const activeTabVisible =
     sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
   const [settingsRequested, setSettingsRequested] = useState(false);
+  // Startup update check result; non-null only while the update prompt is
+  // still pending or downloading.
+  const [updateOffer, setUpdateOffer] = useState<UpdateOffer | null>(null);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineResizing, setOutlineResizing] = useState(false);
@@ -230,6 +235,7 @@ export default function AppShell({
   const imageDropSequenceRef = useRef(0);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const updateButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -383,6 +389,7 @@ export default function AppShell({
   // Only one modal at a time, in priority order: the close confirmation, the
   // save-failure dialog, the launch recovery flow, a per-tab conflict, then
   // settings (the only user-triggered one, so it yields to everything else).
+  // The auto update prompt comes last and yields to every other modal.
   const conflictTab =
     !closing && !controller.saveError && active?.status === "conflict"
       ? active
@@ -393,8 +400,15 @@ export default function AppShell({
   const saveErrorOpen = !closing && Boolean(controller.saveError);
   const settingsOpen =
     settingsRequested && !closing && !saveErrorOpen && !recoveryOpen && !conflictTab;
+  const updateOpen =
+    updateOffer !== null &&
+    !closing &&
+    !saveErrorOpen &&
+    !recoveryOpen &&
+    !conflictTab &&
+    !settingsOpen;
   const anyDialogOpen = Boolean(
-    closing || saveErrorOpen || recoveryOpen || conflictTab || settingsOpen,
+    closing || saveErrorOpen || recoveryOpen || conflictTab || settingsOpen || updateOpen,
   );
 
   useGSAP(
@@ -524,6 +538,7 @@ export default function AppShell({
         saveErrorOpen,
         recoveryOpen,
         conflictTab?.id,
+        updateOpen,
       ],
       revertOnUpdate: true,
     },
@@ -562,6 +577,19 @@ export default function AppShell({
     };
   }, [subscribeToImageDrops]);
 
+  // One best-effort update check at startup; failures are swallowed inside
+  // checkUpdate so launching never depends on the update channel.
+  useEffect(() => {
+    let disposed = false;
+    void checkUpdate().then((offer) => {
+      if (disposed || offer === null) return;
+      setUpdateOffer(offer);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const reopenClosed = () => {
     if (controller.state.recentlyClosed.length === 0) return;
     pendingTabFocusRef.current = "reopen";
@@ -584,6 +612,23 @@ export default function AppShell({
       pendingTabFocusRef.current = "close";
     }
     controller.close(id);
+  };
+
+  const installUpdate = () => {
+    if (updateOffer === null || updateDownloading) return;
+    setUpdateDownloading(true);
+    void updateOffer
+      .downloadAndInstall()
+      .then(relaunchApp)
+      .catch(() => {
+        // Keep the dialog open so the user can retry or dismiss.
+        setUpdateDownloading(false);
+      });
+  };
+
+  const dismissUpdate = () => {
+    if (updateDownloading) return;
+    setUpdateOffer(null);
   };
 
   // The menu subscription registers once per subscriber identity; routing
@@ -695,6 +740,13 @@ export default function AppShell({
       }
       return;
     }
+    if (updateOpen) {
+      if (!previousFocusRef.current) {
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+      }
+      updateButtonRef.current?.focus();
+      return;
+    }
     const previous = previousFocusRef.current;
     previousFocusRef.current = null;
     const fallback = document.querySelector<HTMLElement>(
@@ -702,7 +754,7 @@ export default function AppShell({
     );
     if (previous?.isConnected) previous.focus();
     else (fallback ?? shellRef.current)?.focus();
-  }, [closing, controller.closeSaving, saveErrorOpen, recoveryOpen, conflictTab, settingsOpen]);
+  }, [closing, controller.closeSaving, saveErrorOpen, recoveryOpen, conflictTab, settingsOpen, updateOpen]);
 
   const onDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape" && !controller.closeSaving) {
@@ -750,6 +802,16 @@ export default function AppShell({
     if (event.key === "Escape") {
       event.preventDefault();
       controller.dismissSaveError();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    trapDialogFocus(event);
+  };
+
+  const onUpdateDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" && !updateDownloading) {
+      event.preventDefault();
+      dismissUpdate();
       return;
     }
     if (event.key !== "Tab") return;
@@ -1198,6 +1260,33 @@ export default function AppShell({
           onEditorPreferencesChange={controller.setEditorPreferences}
           onClose={() => setSettingsRequested(false)}
         />
+        </div>
+      )}
+
+      {updateOpen && updateOffer && (
+        <div className="dialog-overlay" data-motion-dialog="true">
+        <div
+          role="dialog"
+          tabIndex={-1}
+          aria-modal="true"
+          aria-busy={updateDownloading}
+          aria-labelledby="update-dialog-title"
+          onKeyDown={onUpdateDialogKeyDown}
+        >
+          <h2 id="update-dialog-title">发现新版本 v{updateOffer.version}</h2>
+          <p>新版本已准备就绪，下载完成后应用将自动重启以完成更新。</p>
+          <div className="dialog-actions">
+          <button
+            ref={updateButtonRef}
+            type="button"
+            disabled={updateDownloading}
+            onClick={installUpdate}
+          >
+            {updateDownloading ? "正在下载更新…" : "立即更新"}
+          </button>
+          <button type="button" disabled={updateDownloading} onClick={dismissUpdate}>稍后</button>
+          </div>
+        </div>
         </div>
       )}
     </main>
