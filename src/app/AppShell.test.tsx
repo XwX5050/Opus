@@ -840,6 +840,40 @@ describe("AppShell", () => {
     expect(screen.getAllByRole("tab", { name: /launch\.md/ })).toHaveLength(1);
     expect(editor()).toHaveTextContent("startup payload");
   });
+
+  it("keeps a launch-time open event focused instead of the restored session tab", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/a.md", file("/notes/a.md", "# Alpha")],
+        ["/notes/b.md", file("/notes/b.md", "# Beta")],
+      ]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    // The open event lands while the previous session is still restoring.
+    const bridge = vi.fn(
+      async (
+        _port: DocumentPort,
+        onFiles: (files: ReadonlyArray<OpenedFile>) => void,
+      ) => {
+        onFiles([await port.openPath("/notes/b.md")]);
+        return { ready: async () => {}, dispose: async () => {} };
+      },
+    );
+    render(<AppShell port={port} subscribeToEvents={bridge} />);
+
+    const explicit = await screen.findByRole("tab", { name: /b\.md/ });
+    const restored = await screen.findByRole("tab", { name: /a\.md/ });
+    await waitFor(() => expect(explicit).toHaveAttribute("aria-selected", "true"));
+    expect(restored).toHaveAttribute("aria-selected", "false");
+    expect(editor()).toHaveTextContent("Beta");
+  });
 });
 
 describe("AppShell workspace drawer", () => {

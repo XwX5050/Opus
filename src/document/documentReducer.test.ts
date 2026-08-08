@@ -118,6 +118,27 @@ describe("documentReducer", () => {
     expect(state.activeId).toBe("first");
   });
 
+  it("restores session tabs without stealing the active tab", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "explicit", file: openedFile({ path: "/tmp/new.md" }) },
+      {
+        type: "fileOpened",
+        id: "restored",
+        file: openedFile(),
+        activate: false,
+      },
+      {
+        type: "fileOpened",
+        id: "restored-duplicate",
+        file: openedFile({ path: "/tmp/new.md" }),
+        activate: false,
+      },
+    ]);
+
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["explicit", "restored"]);
+    expect(state.activeId).toBe("explicit");
+  });
+
   it("does not merge distinct case-sensitive Linux paths or Linux backslashes", () => {
     expect(normalizePathKey("/tmp/A.md", "linux")).not.toBe(
       normalizePathKey("/tmp/a.md", "linux"),

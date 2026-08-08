@@ -16,6 +16,11 @@ export type DocumentAction =
       id: string;
       file: OpenedFile;
       pathPlatform?: PathPlatform;
+      /**
+       * Session restore passes `false` so reopening previous tabs never
+       * steals focus from a document the user explicitly opened at launch.
+       */
+      activate?: boolean;
     }
   | { type: "activate"; id: string }
   | { type: "textChanged"; id: string; text: string }
@@ -217,19 +222,24 @@ export const documentReducer = (
     }
 
     case "fileOpened": {
+      const activate = action.activate ?? true;
       const sameId = state.tabs.find((tab) => tab.id === action.id);
-      if (sameId) return { ...state, activeId: sameId.id };
+      if (sameId) {
+        return activate ? { ...state, activeId: sameId.id } : state;
+      }
 
       const platform = action.pathPlatform ?? "macos";
       const key = normalizePathKey(action.file.path, platform);
       const existing = state.tabs.find(
         (tab) => tab.path !== null && normalizePathKey(tab.path, platform) === key,
       );
-      if (existing) return { ...state, activeId: existing.id };
+      if (existing) {
+        return activate ? { ...state, activeId: existing.id } : state;
+      }
       return {
         ...state,
         tabs: [...state.tabs, snapshotFromFile(action.id, action.file)],
-        activeId: action.id,
+        activeId: activate ? action.id : state.activeId,
       };
     }
 

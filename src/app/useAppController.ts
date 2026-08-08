@@ -138,6 +138,11 @@ export function useAppController(
   // Session saves are suppressed until the persisted session has been loaded,
   // so a slow load can never be overwritten by the empty launch state.
   const sessionLoadedRef = useRef(false);
+  // Bumped on every explicit user open (Finder/drag-drop open events, file
+  // picker, reopen). If any explicit open has happened by the time session
+  // restore finishes, that document keeps focus instead of the restored
+  // session's active tab.
+  const explicitOpenVersionRef = useRef(0);
   // Per-consumer promise chain serializing backend scope operations, so a
   // release (or a re-acquire after close→reopen with the same tab ID) can
   // never overtake a still-pending acquire and leak a registry reference.
@@ -308,13 +313,15 @@ export function useAppController(
 
   const addOpenedFiles = useCallback((
     files: ReadonlyArray<OpenedFile>,
-    options: { trackRecent?: boolean } = {},
+    options: { trackRecent?: boolean; activate?: boolean } = {},
   ) => {
     const trackRecent = options.trackRecent ?? true;
+    const activate = options.activate ?? true;
+    if (activate) explicitOpenVersionRef.current += 1;
     for (const openedFile of files) {
       const id = nextId();
       const before = stateRef.current;
-      const next = dispatch({ type: "fileOpened", id, file: openedFile });
+      const next = dispatch({ type: "fileOpened", id, file: openedFile, activate });
       // Only a genuinely new tab acquires a scope; duplicate-path opens just
       // focus the existing tab and must not leak a reference.
       const added = next.tabs.find(
@@ -821,19 +828,21 @@ export function useAppController(
           }
         }
       }
+      // Restored tabs must never steal focus from a document the user
+      // explicitly opened at launch (Finder double-click, drag-drop, argv).
       for (const path of session?.openPaths ?? []) {
         if (!isCurrent(generation)) return;
         try {
           const opened = await port.openPath(path);
           if (!isCurrent(generation)) return;
-          addOpenedFiles([opened], { trackRecent: false });
+          addOpenedFiles([opened], { trackRecent: false, activate: false });
         } catch {
           if (isCurrent(generation)) {
             setError(`无法打开上次会话中的文件：${path}`);
           }
         }
       }
-      if (session?.activePath) {
+      if (session?.activePath && explicitOpenVersionRef.current === 0) {
         const tab = findTabByPath(stateRef.current, session.activePath);
         if (tab) dispatch({ type: "activate", id: tab.id });
       }
