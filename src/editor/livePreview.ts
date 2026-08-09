@@ -620,6 +620,7 @@ class LivePreviewPlugin {
   }
 
   startComposition(view: EditorView) {
+    if (this.composing) return;
     this.composing = true;
     this.decorations = Decoration.none;
     this.atomicRanges = Decoration.none;

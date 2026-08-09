@@ -109,6 +109,82 @@ const placeTableCaret = async (cell: Locator, offset: number) => {
   }, offset);
 };
 
+const placeCaretBeforeText = async (line: Locator, text: string) => {
+  await line.evaluate((element, marker) => {
+    const content = element.closest<HTMLElement>(".cm-content");
+    const lineText = element.textContent ?? "";
+    const targetOffset = lineText.indexOf(marker);
+    if (!content || targetOffset < 0) {
+      throw new Error(`Expected line marker: ${marker}`);
+    }
+
+    content.focus();
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let remaining = targetOffset;
+    let node = walker.nextNode();
+    while (node && remaining > (node.nodeValue?.length ?? 0)) {
+      remaining -= node.nodeValue?.length ?? 0;
+      node = walker.nextNode();
+    }
+    if (!node) throw new Error(`Unable to place caret before: ${marker}`);
+
+    const range = document.createRange();
+    range.setStart(node, remaining);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, text);
+};
+
+test("keeps successive IME updates in one composition range", async ({
+  page,
+  context,
+}) => {
+  await seed(page, {
+    files: [{ path: "/docs/ime.md", text: "# 汉堡（番茄蛋）\n" }],
+    session: sessionWith("/docs/ime.md"),
+  });
+
+  const line = editorContent(page).locator(".cm-line").first();
+  await line.click();
+  await placeCaretBeforeText(line, "蛋");
+
+  const cdp = await context.newCDPSession(page);
+  try {
+    for (const composition of ["c", "ch", "cha", "chao"]) {
+      await cdp.send("Input.imeSetComposition", {
+        text: composition,
+        selectionStart: composition.length,
+        selectionEnd: composition.length,
+      });
+      await expect(line).toContainText(`番茄${composition}蛋`);
+    }
+    await cdp.send("Input.imeSetComposition", {
+      text: "cha",
+      selectionStart: 3,
+      selectionEnd: 3,
+    });
+    await expect(line).toContainText("番茄cha蛋");
+
+    await cdp.send("Input.insertText", { text: "炒" });
+    await expect(line).toContainText("番茄炒蛋");
+
+    await page.keyboard.press("Meta+s");
+    const writes = await page.evaluate(() =>
+      (window.__E2E_PORT__?.writes ?? []).map((write) => write.text),
+    );
+    expect(writes).toEqual(["# 汉堡（番茄炒蛋）\n"]);
+  } finally {
+    await cdp.send("Input.imeSetComposition", {
+      text: "",
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+    await cdp.detach();
+  }
+});
+
 test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
   page,
 }) => {

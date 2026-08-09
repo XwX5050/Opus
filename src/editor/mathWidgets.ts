@@ -323,9 +323,6 @@ const mathWidgetsPlugin = (options?: MathWidgetsOptions) =>
         compositionstart(_event, view) {
           this.startComposition(view);
         },
-        compositionupdate(_event, view) {
-          this.startComposition(view);
-        },
         compositionend(_event, view) {
           this.endComposition(view);
         },
