@@ -25,6 +25,19 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - run: npm run check
+      - name: Configure optional Apple signing
+        env:
+          OPUS_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          OPUS_APPLE_ID: ${{ secrets.APPLE_ID }}
+          OPUS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          OPUS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$OPUS_APPLE_SIGNING_IDENTITY" ]]; then
+            printf 'APPLE_SIGNING_IDENTITY=%s\n' "$OPUS_APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+            printf 'APPLE_ID=%s\n' "$OPUS_APPLE_ID" >> "$GITHUB_ENV"
+            printf 'APPLE_PASSWORD=%s\n' "$OPUS_APPLE_PASSWORD" >> "$GITHUB_ENV"
+            printf 'APPLE_TEAM_ID=%s\n' "$OPUS_APPLE_TEAM_ID" >> "$GITHUB_ENV"
+          fi
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,11 +49,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Apple signing/notarization. When the APPLE_* secrets are not
           # configured the artifacts are unsigned local builds; when set,
-          # tauri-action signs with Developer ID and notarizes automatically.
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # the step above exports them for Developer ID signing and notarization.
         with:
           tagName: ${{ github.ref_name }}
           args: --bundles app,dmg
