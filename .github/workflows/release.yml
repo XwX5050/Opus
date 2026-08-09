@@ -52,4 +52,6 @@ jobs:
           # the step above exports them for Developer ID signing and notarization.
         with:
           tagName: ${{ github.ref_name }}
+          releaseName: "Opus ${{ github.ref_name }}"
+          generateReleaseNotes: true
           args: --bundles app,dmg
