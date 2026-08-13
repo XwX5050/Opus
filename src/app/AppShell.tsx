@@ -33,7 +33,12 @@ import {
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
-import { checkUpdate, relaunchApp, type UpdateOffer } from "./updates";
+import {
+  checkUpdate,
+  relaunchApp,
+  type UpdateCheckState,
+  type UpdateOffer,
+} from "./updates";
 import { type EventSubscriber, useAppController } from "./useAppController";
 import type { TableCellEditRequest } from "../editor/tableWidgets";
 import {
@@ -119,6 +124,10 @@ export default function AppShell({
   // still pending or downloading.
   const [updateOffer, setUpdateOffer] = useState<UpdateOffer | null>(null);
   const [updateDownloading, setUpdateDownloading] = useState(false);
+  // Manual update-check state surfaced in the settings dialog; the startup
+  // check does not touch it (a startup offer opens the update dialog).
+  const [updateCheckState, setUpdateCheckState] =
+    useState<UpdateCheckState>("idle");
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineResizing, setOutlineResizing] = useState(false);
@@ -577,18 +586,35 @@ export default function AppShell({
     };
   }, [subscribeToImageDrops]);
 
-  // One best-effort update check at startup; failures are swallowed inside
-  // checkUpdate so launching never depends on the update channel.
+  // One best-effort update check at startup; only an available update is
+  // acted on, so launching never depends on the update channel.
   useEffect(() => {
     let disposed = false;
-    void checkUpdate().then((offer) => {
-      if (disposed || offer === null) return;
-      setUpdateOffer(offer);
+    void checkUpdate().then((result) => {
+      if (disposed || result.status !== "update") return;
+      setUpdateOffer(result.offer);
     });
     return () => {
       disposed = true;
     };
   }, []);
+
+  // Manual check from the settings dialog. An available update hands off to
+  // the existing update dialog (which yields to the open settings dialog and
+  // appears after it closes); the other outcomes are reported inline in the
+  // settings dialog through updateCheckState.
+  const checkForUpdates = () => {
+    if (updateCheckState === "checking") return;
+    setUpdateCheckState("checking");
+    void checkUpdate().then((result) => {
+      if (result.status === "update") {
+        setUpdateCheckState("idle");
+        setUpdateOffer(result.offer);
+        return;
+      }
+      setUpdateCheckState(result.status);
+    });
+  };
 
   const reopenClosed = () => {
     if (controller.state.recentlyClosed.length === 0) return;
@@ -1259,6 +1285,8 @@ export default function AppShell({
           onThemeChange={controller.setTheme}
           onEditorPreferencesChange={controller.setEditorPreferences}
           onClose={() => setSettingsRequested(false)}
+          onCheckForUpdates={checkForUpdates}
+          updateCheckState={updateCheckState}
         />
         </div>
       )}

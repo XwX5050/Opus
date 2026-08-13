@@ -6,24 +6,53 @@ export interface UpdateOffer {
   readonly downloadAndInstall: () => Promise<void>;
 }
 
+/** Manual update-check states surfaced in the settings dialog. */
+export type UpdateCheckState =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "error"
+  | "unsupported";
+
 /**
- * Checks the GitHub Releases channel for a newer version. Returns null when
- * no update is available, when the environment cannot run the updater (dev
- * builds, E2E runs, plain browsers without the Tauri bridge), or when the
- * check itself fails — an update check must never affect startup.
+ * Result of an update check, as a discriminated union:
+ * - `update` — a newer version exists; the offer drives the update dialog.
+ * - `up-to-date` — the channel was reachable and has nothing newer.
+ * - `unsupported` — this environment cannot run the updater (dev builds, E2E
+ *   runs, plain browsers without the Tauri bridge).
+ * - `error` — the check itself failed (offline, channel unreachable).
  */
-export const checkUpdate = async (): Promise<UpdateOffer | null> => {
-  if (import.meta.env.DEV || import.meta.env.VITE_E2E === "1") return null;
-  if (!("__TAURI_INTERNALS__" in window)) return null;
+export type UpdateCheckResult =
+  | { readonly status: "update"; readonly offer: UpdateOffer }
+  | { readonly status: "up-to-date" }
+  | { readonly status: "unsupported" }
+  | { readonly status: "error" };
+
+/**
+ * Checks the GitHub Releases channel for a newer version. An update check
+ * must never affect startup: unsupported environments short-circuit before
+ * touching the plugin, and check failures surface as `error` instead of
+ * throwing.
+ */
+export const checkUpdate = async (): Promise<UpdateCheckResult> => {
+  if (import.meta.env.DEV || import.meta.env.VITE_E2E === "1") {
+    return { status: "unsupported" };
+  }
+  if (!("__TAURI_INTERNALS__" in window)) {
+    return { status: "unsupported" };
+  }
   try {
     const update = await check();
-    if (update === null) return null;
+    if (update === null) return { status: "up-to-date" };
     return {
-      version: update.version,
-      downloadAndInstall: () => update.downloadAndInstall(),
+      status: "update",
+      offer: {
+        version: update.version,
+        downloadAndInstall: () => update.downloadAndInstall(),
+      },
     };
   } catch {
-    return null;
+    return { status: "error" };
   }
 };
 

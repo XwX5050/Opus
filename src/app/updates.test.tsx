@@ -43,38 +43,38 @@ describe("checkUpdate", () => {
     unstubTauriBridge();
   });
 
-  it("skips the check in dev builds without touching the plugin", async () => {
-    expect(await checkUpdate()).toBeNull();
+  it("reports unsupported in dev builds without touching the plugin", async () => {
+    expect(await checkUpdate()).toEqual({ status: "unsupported" });
     expect(pluginCheck).not.toHaveBeenCalled();
   });
 
-  it("skips the check in E2E runs even with a Tauri bridge", async () => {
+  it("reports unsupported in E2E runs even with a Tauri bridge", async () => {
     vi.stubEnv("DEV", false);
     vi.stubEnv("VITE_E2E", "1");
     stubTauriBridge();
-    expect(await checkUpdate()).toBeNull();
+    expect(await checkUpdate()).toEqual({ status: "unsupported" });
     expect(pluginCheck).not.toHaveBeenCalled();
   });
 
-  it("skips the check when the Tauri bridge is missing", async () => {
+  it("reports unsupported when the Tauri bridge is missing", async () => {
     vi.stubEnv("DEV", false);
-    expect(await checkUpdate()).toBeNull();
+    expect(await checkUpdate()).toEqual({ status: "unsupported" });
     expect(pluginCheck).not.toHaveBeenCalled();
   });
 
-  it("swallows check failures", async () => {
+  it("surfaces check failures as error", async () => {
     vi.stubEnv("DEV", false);
     stubTauriBridge();
     vi.mocked(pluginCheck).mockRejectedValue(new Error("offline"));
-    expect(await checkUpdate()).toBeNull();
+    expect(await checkUpdate()).toEqual({ status: "error" });
     expect(pluginCheck).toHaveBeenCalledOnce();
   });
 
-  it("returns null when no update is available", async () => {
+  it("reports up-to-date when no update is available", async () => {
     vi.stubEnv("DEV", false);
     stubTauriBridge();
     vi.mocked(pluginCheck).mockResolvedValue(null);
-    expect(await checkUpdate()).toBeNull();
+    expect(await checkUpdate()).toEqual({ status: "up-to-date" });
     expect(pluginCheck).toHaveBeenCalledOnce();
   });
 
@@ -85,9 +85,11 @@ describe("checkUpdate", () => {
     vi.mocked(pluginCheck).mockResolvedValue(
       updateOffer("0.2.0", downloadAndInstall),
     );
-    const offer = await checkUpdate();
-    expect(offer?.version).toBe("0.2.0");
-    await offer?.downloadAndInstall();
+    const result = await checkUpdate();
+    expect(result.status).toBe("update");
+    if (result.status !== "update") return;
+    expect(result.offer.version).toBe("0.2.0");
+    await result.offer.downloadAndInstall();
     expect(downloadAndInstall).toHaveBeenCalledOnce();
   });
 

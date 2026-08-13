@@ -1174,7 +1174,7 @@ body.outline-resizing * {
 /* The settings panel takes the full dialog width; other dialogs stay
    content-sized. The overlay is a centered grid, so an auto width would
    shrink to max-content. */
-.dialog-overlay [role="dialog"]:has(.settings-grid) {
+.dialog-overlay .settings-dialog {
   width: min(520px, 100% - 48px);
 }
 
@@ -1216,38 +1216,126 @@ body.outline-resizing * {
 
 /* ---------- Settings dialog ---------- */
 
-/* Rows as grouped list items: generous whitespace, hairline dividers drawn
-   by the shared border of each row's label/control pair (both cells carry
-   identical vertical padding, so their borders land on the same line and
-   the divider runs edge to edge), labels in secondary text, narrow numeric
-   fields at the control column start. */
-.settings-grid {
+/* macOS-style grouped settings: labelled sections (外观/编辑器/关于), each a
+   rounded inset card of hairline-divided rows. Cards stay overflow-visible
+   so the custom-font dropdown can float below its row without being
+   clipped; the card background still follows the rounded corners. */
+.settings-section {
   display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
+  gap: var(--space-0-5);
 }
 
-.settings-grid > * {
+.settings-section-heading {
+  margin: 0;
+  padding: var(--space-1) var(--space-1) var(--space-0-5);
+  font-size: var(--font-ui-size-small);
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.settings-group {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-medium);
+  background: var(--surface-inset);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  min-height: 40px;
+}
+
+.settings-row + .settings-row {
   border-top: 1px solid var(--divider);
 }
 
-.settings-grid > label {
-  padding-block: var(--space-3);
-  padding-right: var(--space-4);
+.settings-row > label,
+.settings-row-label {
+  color: var(--text-primary);
+}
+
+.settings-row input[type="number"] {
+  width: 6.5em;
+}
+
+/* Control polish: the quiet form styling above, plus a surface lift on
+   hover and a background transition so focus/hover never snap. */
+.settings-row input:not([type="checkbox"]):not([type="radio"]),
+.settings-row select {
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.settings-row input:hover:not(:disabled):not(:focus-visible),
+.settings-row select:hover:not(:disabled):not(:focus-visible) {
+  background: var(--surface);
+}
+
+/* Custom-font field: drawn searchable list anchored below the input. The
+   wrapper keeps the dropdown's coordinate space; the list is a floating
+   surface that overlays the rows beneath it. */
+.font-search {
+  position: relative;
+  width: 240px;
+  max-width: 100%;
+  justify-self: end;
+}
+
+.font-search input {
+  width: 100%;
+}
+
+.font-search-list {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  z-index: 3;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-0-5);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-popover);
+}
+
+.font-search-option {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-small);
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--transition-fast);
+}
+
+.font-search-option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+/* About section: the version trails like a value, and the update action
+   sits at the row's right edge with its status hint inline. */
+.settings-version-value {
   color: var(--text-secondary);
 }
 
-.settings-grid > select,
-.settings-grid > input:not([type="checkbox"]):not([type="radio"]) {
-  padding-block: var(--space-3);
+.settings-update-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
-.settings-grid > :nth-child(-n + 2) {
-  border-top: none;
-}
-
-.settings-grid input[type="number"] {
-  width: 6.5em;
+.settings-update-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
 }
 
 /* ---------- Alerts ---------- */

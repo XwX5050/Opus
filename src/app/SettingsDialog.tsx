@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
 import { invoke } from "@tauri-apps/api/core";
 import {
   EDITOR_PREFERENCE_LIMITS,
@@ -6,6 +8,12 @@ import {
   type EditorPreferences,
   type ThemePreference,
 } from "../theme/preferences";
+import { MOTION } from "../motion/motionConfig";
+import { prefersReducedMotion } from "../motion/motionRuntime";
+import type { UpdateCheckState } from "./updates";
+import { version as APP_VERSION } from "../../package.json";
+
+gsap.registerPlugin(useGSAP);
 
 export interface SettingsDialogProps {
   readonly theme: ThemePreference;
@@ -13,6 +21,8 @@ export interface SettingsDialogProps {
   readonly onThemeChange: (value: ThemePreference) => void;
   readonly onEditorPreferencesChange: (value: EditorPreferences) => void;
   readonly onClose: () => void;
+  readonly onCheckForUpdates: () => void;
+  readonly updateCheckState: UpdateCheckState;
 }
 
 const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
@@ -27,6 +37,16 @@ const FONT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "monospace", label: "等宽" },
   { value: "custom", label: "自定义…" },
 ];
+
+/** Inline hints next to the 检查更新 button, per manual-check state. */
+const UPDATE_HINTS: Readonly<
+  Record<Exclude<UpdateCheckState, "idle">, string>
+> = {
+  checking: "正在检查…",
+  "up-to-date": "当前已是最新版本",
+  error: "检查失败，请稍后重试",
+  unsupported: "当前环境不支持检查更新",
+};
 
 const isPresetFont = (fontFamily: string): boolean =>
   (FONT_PRESETS as ReadonlyArray<string>).includes(fontFamily);
@@ -77,6 +97,151 @@ function NumberField({ id, value, min, max, step, onCommit }: NumberFieldProps) 
   );
 }
 
+interface FontSearchFieldProps {
+  readonly id: string;
+  readonly value: string;
+  readonly fonts: readonly string[] | null;
+  readonly onChange: (value: string) => void;
+}
+
+/**
+ * Custom-font name field with a drawn, searchable list of installed fonts.
+ * The native `<datalist>` picker cannot be styled inside the dark WKWebView
+ * (its popup renders as an unreadable black box), so the list is drawn
+ * in-app: filtered live as the user types, navigable with ArrowUp/ArrowDown
+ * + Enter, closed by Escape, blur or a choice. `fonts` is null outside the
+ * Tauri webview, where the field stays a plain text input.
+ */
+function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const filtered = useMemo(() => {
+    if (fonts === null) return null;
+    const query = value.trim().toLocaleLowerCase();
+    return query.length === 0
+      ? fonts
+      : fonts.filter((name) => name.toLocaleLowerCase().includes(query));
+  }, [fonts, value]);
+
+  // Keep the highlighted option inside the filtered list while typing.
+  useEffect(() => {
+    setActiveIndex((current) =>
+      filtered === null
+        ? 0
+        : Math.min(current, Math.max(filtered.length - 1, 0)),
+    );
+  }, [filtered]);
+
+  const select = (name: string) => {
+    onChange(name);
+    setOpen(false);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (filtered === null) return;
+    if (event.key === "Escape") {
+      if (open) {
+        // Close only the list; the dialog handles Escape itself.
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      }
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        setOpen(true);
+        setActiveIndex(0);
+        return;
+      }
+      if (filtered.length === 0) return;
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((current) =>
+        Math.min(filtered.length - 1, Math.max(0, current + delta)),
+      );
+      return;
+    }
+    if (event.key === "Enter" && open && filtered.length > 0) {
+      event.preventDefault();
+      select(filtered[Math.min(activeIndex, filtered.length - 1)]);
+    }
+  };
+
+  const listVisible = open && filtered !== null && filtered.length > 0;
+  const activeOptionId = listVisible
+    ? `${id}-option-${Math.min(activeIndex, filtered.length - 1)}`
+    : undefined;
+
+  return (
+    <div
+      className="font-search"
+      onBlur={(event) => {
+        // React's onBlur bubbles, so this also fires when the input inside
+        // loses focus. Clicking an option never blurs the input (mousedown
+        // is prevented), so any blur leaving the wrapper closes the list.
+        if (
+          event.relatedTarget === null ||
+          !event.currentTarget.contains(event.relatedTarget as Node)
+        ) {
+          setOpen(false);
+        }
+      }}
+    >
+      <input
+        id={id}
+        type="text"
+        role={fonts === null ? undefined : "combobox"}
+        aria-expanded={fonts === null ? undefined : open}
+        aria-controls={listVisible ? `${id}-listbox` : undefined}
+        aria-activedescendant={listVisible ? activeOptionId : undefined}
+        placeholder={fonts === null ? "已安装字体的名称" : "搜索已安装字体…"}
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+          if (fonts !== null) setOpen(true);
+        }}
+        onMouseDown={() => {
+          if (fonts !== null) setOpen(true);
+        }}
+        onFocus={() => {
+          if (fonts !== null) {
+            setOpen(true);
+            setActiveIndex(0);
+          }
+        }}
+        onKeyDown={onKeyDown}
+      />
+      {listVisible && (
+        <ul
+          id={`${id}-listbox`}
+          role="listbox"
+          aria-label="已安装字体"
+          className="font-search-list"
+        >
+          {filtered.map((name, index) => (
+            <li
+              key={name}
+              id={`${id}-option-${index}`}
+              role="option"
+              aria-selected={index === activeIndex}
+              className="font-search-option"
+              style={{ fontFamily: name }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                select(name);
+              }}
+            >
+              {name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /**
  * Theme and editor-preferences dialog. Changes apply (and persist)
  * immediately; values are clamped by the controller. Follows the same modal
@@ -88,6 +253,8 @@ export default function SettingsDialog({
   onThemeChange,
   onEditorPreferencesChange,
   onClose,
+  onCheckForUpdates,
+  updateCheckState,
 }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstControlRef = useRef<HTMLSelectElement>(null);
@@ -125,6 +292,33 @@ export default function SettingsDialog({
       cancelled = true;
     };
   }, []);
+
+  // Rows stagger in when the dialog opens (the overlay's own dialog intro is
+  // handled by AppShell). Skipped under prefers-reduced-motion.
+  useGSAP(
+    () => {
+      const root = dialogRef.current;
+      if (!root) return;
+      const rows = root.querySelectorAll<HTMLElement>("[data-settings-row]");
+      if (prefersReducedMotion()) {
+        gsap.set(rows, { clearProps: "opacity,transform" });
+        return;
+      }
+      gsap.fromTo(
+        rows,
+        { y: 8, opacity: 0 },
+        {
+          y: 0,
+          opacity: 1,
+          duration: 0.24,
+          ease: MOTION.easing,
+          stagger: MOTION.list.stagger,
+          clearProps: "opacity,transform",
+        },
+      );
+    },
+    { scope: dialogRef },
+  );
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
@@ -166,103 +360,155 @@ export default function SettingsDialog({
       tabIndex={-1}
       aria-modal="true"
       aria-labelledby="settings-dialog-title"
+      className="settings-dialog"
       onKeyDown={onKeyDown}
     >
       <h2 id="settings-dialog-title">设置</h2>
-      <div className="settings-grid">
-        <label htmlFor="settings-theme">主题</label>
-        <select
-          id="settings-theme"
-          ref={firstControlRef}
-          value={theme}
-          onChange={(event) =>
-            onThemeChange(event.target.value as ThemePreference)
-          }
-        >
-          {THEME_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
 
-        <label htmlFor="settings-body-size">正文字号</label>
-        <NumberField
-          id="settings-body-size"
-          min={limits.bodySizePx.min}
-          max={limits.bodySizePx.max}
-          value={editorPreferences.bodySizePx}
-          onCommit={(value) => update({ bodySizePx: value })}
-        />
-
-        <label htmlFor="settings-line-height">行高</label>
-        <NumberField
-          id="settings-line-height"
-          min={limits.lineHeight.min}
-          max={limits.lineHeight.max}
-          step={0.05}
-          value={editorPreferences.lineHeight}
-          onCommit={(value) => update({ lineHeight: value })}
-        />
-
-        <label htmlFor="settings-content-width">内容宽度</label>
-        <NumberField
-          id="settings-content-width"
-          min={limits.contentWidthPx.min}
-          max={limits.contentWidthPx.max}
-          step={10}
-          value={editorPreferences.contentWidthPx}
-          onCommit={(value) => update({ contentWidthPx: value })}
-        />
-
-        <label htmlFor="settings-font">字体</label>
-        <select
-          id="settings-font"
-          value={customSelected ? "custom" : editorPreferences.fontFamily}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value === "custom") {
-              setCustomSelected(true);
-            } else {
-              setCustomSelected(false);
-              update({ fontFamily: value });
-            }
-          }}
-        >
-          {FONT_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-
-        {customSelected && (
-          <>
-            <label htmlFor="settings-font-custom">自定义字体</label>
-            <input
-              id="settings-font-custom"
-              type="text"
-              list={installedFonts ? "settings-font-datalist" : undefined}
-              placeholder={
-                installedFonts ? "搜索已安装字体…" : "已安装字体的名称"
+      <section
+        className="settings-section"
+        aria-labelledby="settings-heading-appearance"
+      >
+        <h3 id="settings-heading-appearance" className="settings-section-heading">
+          外观
+        </h3>
+        <div className="settings-group">
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-theme">主题</label>
+            <select
+              id="settings-theme"
+              ref={firstControlRef}
+              value={theme}
+              onChange={(event) =>
+                onThemeChange(event.target.value as ThemePreference)
               }
-              value={
-                isPresetFont(editorPreferences.fontFamily)
-                  ? ""
-                  : editorPreferences.fontFamily
-              }
-              onChange={(event) => update({ fontFamily: event.target.value })}
+            >
+              {THEME_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="settings-section"
+        aria-labelledby="settings-heading-editor"
+      >
+        <h3 id="settings-heading-editor" className="settings-section-heading">
+          编辑器
+        </h3>
+        <div className="settings-group">
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-body-size">正文字号</label>
+            <NumberField
+              id="settings-body-size"
+              min={limits.bodySizePx.min}
+              max={limits.bodySizePx.max}
+              value={editorPreferences.bodySizePx}
+              onCommit={(value) => update({ bodySizePx: value })}
             />
-            {installedFonts && (
-              <datalist id="settings-font-datalist">
-                {installedFonts.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-            )}
-          </>
-        )}
-      </div>
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-line-height">行高</label>
+            <NumberField
+              id="settings-line-height"
+              min={limits.lineHeight.min}
+              max={limits.lineHeight.max}
+              step={0.05}
+              value={editorPreferences.lineHeight}
+              onCommit={(value) => update({ lineHeight: value })}
+            />
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-content-width">内容宽度</label>
+            <NumberField
+              id="settings-content-width"
+              min={limits.contentWidthPx.min}
+              max={limits.contentWidthPx.max}
+              step={10}
+              value={editorPreferences.contentWidthPx}
+              onCommit={(value) => update({ contentWidthPx: value })}
+            />
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-font">字体</label>
+            <select
+              id="settings-font"
+              value={customSelected ? "custom" : editorPreferences.fontFamily}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "custom") {
+                  setCustomSelected(true);
+                } else {
+                  setCustomSelected(false);
+                  update({ fontFamily: value });
+                }
+              }}
+            >
+              {FONT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {customSelected && (
+            <div className="settings-row" data-settings-row>
+              <label htmlFor="settings-font-custom">自定义字体</label>
+              <FontSearchField
+                id="settings-font-custom"
+                value={
+                  isPresetFont(editorPreferences.fontFamily)
+                    ? ""
+                    : editorPreferences.fontFamily
+                }
+                fonts={installedFonts}
+                onChange={(value) => update({ fontFamily: value })}
+              />
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section
+        className="settings-section"
+        aria-labelledby="settings-heading-about"
+      >
+        <h3 id="settings-heading-about" className="settings-section-heading">
+          关于
+        </h3>
+        <div className="settings-group">
+          <div className="settings-row" data-settings-row>
+            <span className="settings-row-label">版本</span>
+            <span className="settings-version-value">v{APP_VERSION}</span>
+          </div>
+          <div className="settings-row" data-settings-row>
+            <span className="settings-row-label">更新</span>
+            <div className="settings-update-controls">
+              <button
+                type="button"
+                onClick={onCheckForUpdates}
+                disabled={updateCheckState === "checking"}
+              >
+                检查更新
+              </button>
+              {updateCheckState !== "idle" && (
+                <span role="status" className="settings-update-hint">
+                  {UPDATE_HINTS[updateCheckState]}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div className="dialog-actions">
         <button type="button" onClick={onClose}>
           完成

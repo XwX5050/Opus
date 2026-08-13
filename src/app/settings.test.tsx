@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { check as pluginCheck } from "@tauri-apps/plugin-updater";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { PersistedSession } from "../document/types";
@@ -9,6 +11,21 @@ import AppShell from "./AppShell";
 const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
+
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: vi.fn(),
+}));
+
+const stubTauriBridge = () => {
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    value: {},
+    configurable: true,
+  });
+};
+
+const unstubTauriBridge = () => {
+  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+};
 
 beforeEach(() => {
   document.documentElement.removeAttribute("data-theme");
@@ -250,13 +267,13 @@ describe("settings: theme and editor preferences", () => {
 
 describe("settings: installed font enumeration", () => {
   afterEach(() => {
-    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    unstubTauriBridge();
     tauriMocks.invoke.mockReset();
   });
 
   it("falls back to a plain text input outside the Tauri webview", async () => {
     // jsdom has no `__TAURI_INTERNALS__`, so the dialog must never call the
-    // native command and keeps the manual-entry input.
+    // native command and keeps the manual-entry input without a list.
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
@@ -267,11 +284,13 @@ describe("settings: installed font enumeration", () => {
 
     const input = within(dialog).getByLabelText("自定义字体");
     expect(input).not.toHaveAttribute("list");
-    expect(document.getElementById("settings-font-datalist")).toBeNull();
+    expect(input).not.toHaveAttribute("role");
+    await user.type(input, "Ping");
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
   });
 
-  it("lists installed fonts in a searchable datalist inside the webview", async () => {
+  it("lists installed fonts in a drawn, filterable list inside the webview", async () => {
     // Out of order on purpose: the dialog must sort the names for display.
     tauriMocks.invoke.mockImplementation((command: string) => {
       if (command === "list_installed_fonts") {
@@ -279,10 +298,61 @@ describe("settings: installed font enumeration", () => {
       }
       return Promise.reject(new Error(`unmocked command: ${command}`));
     });
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      value: {},
-      configurable: true,
+    stubTauriBridge();
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("list_installed_fonts");
+    // The placeholder switches only once the font list is loaded.
+    await waitFor(() =>
+      expect(input).toHaveAttribute("placeholder", "搜索已安装字体…"),
+    );
+
+    // Focusing the field opens the full, sorted list.
+    await user.click(input);
+    let listbox = within(dialog).getByRole("listbox", { name: "已安装字体" });
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["LXGW WenKai", "PingFang SC", "Songti SC"]);
+
+    // Typing filters in real time.
+    await user.type(input, "wen");
+    listbox = within(dialog).getByRole("listbox", { name: "已安装字体" });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(1);
+    expect(
+      within(listbox).getByRole("option", { name: "LXGW WenKai" }),
+    ).toBeInTheDocument();
+
+    // Choosing the option commits the font and closes the list.
+    await user.click(
+      within(listbox).getByRole("option", { name: "LXGW WenKai" }),
+    );
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.fontFamily).toBe("LXGW WenKai"),
+    );
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(
+      document.documentElement.style.getPropertyValue("--editor-body-font"),
+    ).toContain("LXGW WenKai");
+  });
+
+  it("navigates the font list with the keyboard and keeps the value editable", async () => {
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_installed_fonts") {
+        return Promise.resolve(["Songti SC", "PingFang SC", "LXGW WenKai"]);
+      }
+      return Promise.reject(new Error(`unmocked command: ${command}`));
     });
+    stubTauriBridge();
 
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(new Map());
@@ -294,25 +364,211 @@ describe("settings: installed font enumeration", () => {
 
     const input = within(dialog).getByLabelText("自定义字体");
     await waitFor(() =>
-      expect(input).toHaveAttribute("list", "settings-font-datalist"),
+      expect(input).toHaveAttribute("placeholder", "搜索已安装字体…"),
     );
-    expect(tauriMocks.invoke).toHaveBeenCalledWith("list_installed_fonts");
+    await user.click(input);
+    expect(
+      within(dialog).getByRole("listbox", { name: "已安装字体" }),
+    ).toBeInTheDocument();
 
-    const datalist = document.getElementById("settings-font-datalist");
-    expect(datalist).not.toBeNull();
-    const options = Array.from(datalist!.querySelectorAll("option"));
-    expect(options.map((option) => option.getAttribute("value"))).toEqual([
-      "LXGW WenKai",
-      "PingFang SC",
-      "Songti SC",
-    ]);
-
-    // jsdom has no datalist picker, so a choice is entered as text; the
-    // single change event also avoids the keystroke-by-keystroke race
-    // between userEvent and React's controlled-value commits.
-    fireEvent.change(input, { target: { value: "LXGW WenKai" } });
+    // ArrowDown highlights the second font; Enter commits it.
+    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{Enter}");
     await waitFor(() =>
-      expect(port.session?.editorPreferences?.fontFamily).toBe("LXGW WenKai"),
+      expect(port.session?.editorPreferences?.fontFamily).toBe("PingFang SC"),
     );
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+
+    // The field stays a plain text input: the picked value is still
+    // editable by hand.
+    await user.type(input, "x");
+    expect(input).toHaveValue("PingFang SCx");
+  });
+
+  it("closes the font list with Escape without closing the dialog", async () => {
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_installed_fonts") {
+        return Promise.resolve(["PingFang SC"]);
+      }
+      return Promise.reject(new Error(`unmocked command: ${command}`));
+    });
+    stubTauriBridge();
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    await waitFor(() =>
+      expect(input).toHaveAttribute("placeholder", "搜索已安装字体…"),
+    );
+    await user.click(input);
+    expect(
+      within(dialog).getByRole("listbox", { name: "已安装字体" }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
+  });
+});
+
+describe("settings: manual update check", () => {
+  beforeEach(() => {
+    // The settings dialog probes the native font command on open; give the
+    // mock a promise-shaped default so it fails quietly instead of crashing
+    // the render when a Tauri bridge is stubbed.
+    tauriMocks.invoke.mockImplementation(() =>
+      Promise.reject(new Error("unmocked command")),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    unstubTauriBridge();
+    tauriMocks.invoke.mockReset();
+  });
+
+  it("shows the version and an update entry in the about section", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    expect(within(dialog).getByText(/v\d+\.\d+\.\d+/)).toBeInTheDocument();
+    // Presence, not visibility: the rows are mid intro animation.
+    expect(
+      within(dialog).getByRole("button", { name: "检查更新" }),
+    ).toBeInTheDocument();
+  });
+
+  it("reports unsupported outside the Tauri updater environment", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(
+      within(dialog).getByRole("button", { name: "检查更新" }),
+    );
+    expect(
+      within(dialog).getByText("当前环境不支持检查更新"),
+    ).toBeInTheDocument();
+  });
+
+  it("reports checking then up-to-date on a successful manual check", async () => {
+    vi.stubEnv("DEV", false);
+    stubTauriBridge();
+    let resolveManual!: (update: Update | null) => void;
+    let call = 0;
+    vi.mocked(pluginCheck).mockImplementation(
+      () =>
+        new Promise<Update | null>((resolve) => {
+          // The first call is the startup check; only the manual check is
+          // deferred so the "checking" state can be observed.
+          if (call++ === 0) {
+            resolve(null);
+            return;
+          }
+          resolveManual = resolve;
+        }),
+    );
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const checkButton = within(dialog).getByRole("button", {
+      name: "检查更新",
+    });
+    await user.click(checkButton);
+    expect(checkButton).toBeDisabled();
+    expect(within(dialog).getByText("正在检查…")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveManual(null);
+    });
+    await waitFor(() =>
+      expect(within(dialog).getByText("当前已是最新版本")).toBeInTheDocument(),
+    );
+    expect(checkButton).toBeEnabled();
+  });
+
+  it("reports a failed manual check", async () => {
+    vi.stubEnv("DEV", false);
+    stubTauriBridge();
+    let call = 0;
+    vi.mocked(pluginCheck).mockImplementation(() => {
+      // First call is the startup check; the manual check fails.
+      call += 1;
+      return call === 1
+        ? Promise.resolve(null)
+        : Promise.reject(new Error("offline"));
+    });
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(
+      within(dialog).getByRole("button", { name: "检查更新" }),
+    );
+    await waitFor(() =>
+      expect(within(dialog).getByText("检查失败，请稍后重试")).toBeInTheDocument(),
+    );
+  });
+
+  it("hands a found update to the update dialog after settings closes", async () => {
+    vi.stubEnv("DEV", false);
+    stubTauriBridge();
+    let resolveManual!: (update: Update | null) => void;
+    let call = 0;
+    vi.mocked(pluginCheck).mockImplementation(
+      () =>
+        new Promise<Update | null>((resolve) => {
+          if (call++ === 0) {
+            resolve(null); // startup check: nothing new
+            return;
+          }
+          resolveManual = resolve;
+        }),
+    );
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(
+      within(dialog).getByRole("button", { name: "检查更新" }),
+    );
+    await act(async () => {
+      resolveManual({
+        version: "2.0.0",
+        downloadAndInstall: vi.fn(async () => {}),
+      } as unknown as Update);
+    });
+
+    // The update prompt yields to the open settings dialog...
+    expect(
+      screen.queryByRole("dialog", { name: "发现新版本 v2.0.0" }),
+    ).not.toBeInTheDocument();
+
+    // ...and appears once settings closes.
+    await user.click(within(dialog).getByRole("button", { name: "完成" }));
+    expect(
+      await screen.findByRole("dialog", { name: "发现新版本 v2.0.0" }),
+    ).toBeVisible();
   });
 });
