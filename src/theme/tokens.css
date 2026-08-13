@@ -52,38 +52,43 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #1e1f24;
-  --surface: #26272e;
-  --surface-hover: #2e3038;
-  --surface-active: #35373f;
-  --surface-inset: #1a1b20;
-  --text-primary: #e6e6ea;
-  --text-secondary: #a8aab3;
-  --text-muted: #6f7079;
-  --divider: rgba(255, 255, 255, 0.06);
+  /* Deep, low-luminance canvas with a slight blue-violet lean; the native
+     window background (window_background.rs) must stay exactly this hex. */
+  --canvas: #141519;
+  /* Faint violet aura layered over the canvas on <body> only; the native
+     under-page background stays the flat --canvas hex. */
+  --canvas-glow: radial-gradient(120% 70% at 50% -5%, rgba(127, 109, 242, 0.06), transparent 60%);
+  --surface: #1b1c22;
+  --surface-hover: #23252c;
+  --surface-active: #2b2d34;
+  --surface-inset: #101115;
+  --text-primary: #e8e8ec;
+  --text-secondary: #aaacb5;
+  --text-muted: #757680;
+  --divider: rgba(255, 255, 255, 0.08);
   --accent: #7f6df2;
-  --accent-soft: rgba(127, 109, 242, 0.16);
+  --accent-soft: rgba(127, 109, 242, 0.18);
   --text-on-accent: #ffffff;
   --danger: #e5534b;
-  --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.35);
-  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.6);
   --shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --backdrop: rgba(0, 0, 0, 0.5);
-  --focus-ring: rgba(127, 109, 242, 0.4);
-  --selection: rgba(127, 109, 242, 0.18);
-  --search-match: rgba(224, 175, 104, 0.35);
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --focus-ring: rgba(127, 109, 242, 0.45);
+  --selection: rgba(127, 109, 242, 0.2);
+  --search-match: rgba(224, 175, 104, 0.4);
   --highlight: #796a32;
-  --scrollbar: rgba(255, 255, 255, 0.1);
-  --scrollbar-hover: rgba(255, 255, 255, 0.22);
+  --scrollbar: rgba(255, 255, 255, 0.13);
+  --scrollbar-hover: rgba(255, 255, 255, 0.26);
   --syntax-keyword: #b3a1ff;
   --syntax-string: #a3d9a5;
-  --syntax-comment: #6f7079;
+  --syntax-comment: #787983;
   --syntax-number: #e0a06a;
   --syntax-type: #7dc4e4;
-  --syntax-meta: #8b8d96;
+  --syntax-meta: #92949e;
   --syntax-function: #f2a7c3;
   --syntax-property: #84d2c5;
-  --syntax-operator: #9ea2b0;
+  --syntax-operator: #a4a8b6;
 }
 
 :root[data-theme="light"] {
