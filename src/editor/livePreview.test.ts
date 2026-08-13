@@ -358,7 +358,7 @@ describe("planLivePreview", () => {
     expect(new Set(links.map(({ from, to }) => `${from}:${to}`)).size).toBe(3);
   });
 
-  it("plans non-interactive checked and unchecked task widgets from GFM nodes", () => {
+  it("plans checked and unchecked task widgets from GFM nodes", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const state = createState(doc, [{ anchor: doc.length }]);
     expect(syntaxTree(state).toString()).toContain("Task(TaskMarker)");
@@ -367,13 +367,20 @@ describe("planLivePreview", () => {
     expect(hiddenSource(state, tasks)).toEqual(["[ ]", "[x]"]);
   });
 
-  it("reveals the task source and parent list marker when its checkbox is selected", () => {
+  it("reveals the task source while keeping the sibling task's marker hidden", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const state = createState(doc, [{ anchor: doc.indexOf("[ ]") + 1 }]);
     const hidden = hiddenSource(state, planLivePreview(state));
     expect(hidden).not.toContain("[ ]");
-    expect(hidden.filter((source) => source === "-")).toHaveLength(1);
-    expect(hidden).toContain("[x]");
+    // The sibling task hides both its dash and its TaskMarker.
+    expect(hidden).toEqual(["- ", "[x]"]);
+  });
+
+  it("plans a strike-through mark covering only the text of checked tasks", () => {
+    const doc = "- [ ] todo\n- [x] done\n\noutside";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const done = markedAs(planLivePreview(state), "cm-live-preview-task-done");
+    expect(done.map(({ from, to }) => state.sliceDoc(from, to))).toEqual(["done"]);
   });
 
   it("limits planned decorations and syntax visits to requested document ranges", () => {
@@ -455,7 +462,7 @@ describe("planLivePreview", () => {
 });
 
 describe("livePreviewExtension", () => {
-  const createView = (doc = "**world** rest") => {
+  const createView = (doc = "**world** rest", readingMode = false) => {
     const parent = document.createElement("div");
     document.body.append(parent);
     const state = EditorState.create({
@@ -463,7 +470,12 @@ describe("livePreviewExtension", () => {
       selection: { anchor: doc.length },
       extensions: [
         markdown({ extensions: [GFM, highlightMarkdownExtension] }),
-        livePreviewExtension(),
+        livePreviewExtension(
+          readingMode ? { revealSelection: false } : undefined,
+        ),
+        ...(readingMode
+          ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+          : []),
       ],
     });
     return new EditorView({ state, parent });
@@ -523,7 +535,7 @@ describe("livePreviewExtension", () => {
     expect(ranges).toEqual([
       { from: 0, to: 2 },
       { from: 7, to: 9 },
-      { from: 11, to: 12 },
+      { from: 11, to: 13 },
       { from: 13, to: 16 },
     ]);
     expect(ranges).not.toContainEqual({ from: 0, to: 9 });
@@ -589,32 +601,48 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
-  it("renders task widgets as disabled, hidden-from-ARIA controls that cannot edit the document", () => {
+  it("renders task widgets as clickable controls that toggle the document", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const view = createView(doc);
     const checkboxes = view.dom.querySelectorAll<HTMLInputElement>(
       ".cm-live-preview-task-checkbox",
     );
-    const listMarkers = view.dom.querySelectorAll<HTMLElement>(
-      ".cm-live-preview-list-marker",
-    );
-    expect([...listMarkers].map((marker) => marker.textContent)).toEqual(["•", "•"]);
-    for (const marker of listMarkers) {
-      expect(marker).not.toHaveAttribute("aria-hidden");
-      expect(marker).toHaveAttribute("role", "listitem");
-      expect(marker).toHaveAccessibleName("项目符号");
-    }
+    // Task items render no bullet marker; plain lists keep theirs.
+    expect(view.dom.querySelectorAll(".cm-live-preview-list-marker")).toHaveLength(0);
     expect(checkboxes).toHaveLength(2);
     expect([...checkboxes].map((checkbox) => checkbox.checked)).toEqual([false, true]);
     for (const checkbox of checkboxes) {
-      expect(checkbox.disabled).toBe(true);
-      expect(checkbox.tabIndex).toBe(-1);
+      expect(checkbox.disabled).toBe(false);
       expect(checkbox).toHaveAttribute("role", "checkbox");
       expect(checkbox).toHaveAttribute("aria-checked", String(checkbox.checked));
-      expect(checkbox).toHaveAttribute("aria-disabled", "true");
+      expect(checkbox).not.toHaveAttribute("aria-disabled");
       checkbox.click();
     }
-    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.state.doc.toString()).toBe("- [x] todo\n- [ ] done\n\noutside");
+    view.destroy();
+  });
+
+  it("toggles the document from reading mode while the widget stays fully rendered", () => {
+    const doc = "- [ ] todo\n- [x] done\n\noutside";
+    const view = createView(doc, true);
+    const checkboxes = view.dom.querySelectorAll<HTMLInputElement>(
+      ".cm-live-preview-task-checkbox",
+    );
+    expect(checkboxes).toHaveLength(2);
+    checkboxes[0]!.click();
+    checkboxes[1]!.click();
+    expect(view.state.doc.toString()).toBe("- [x] todo\n- [ ] done\n\noutside");
+    expect(view.dom.querySelectorAll(".cm-live-preview-task-checkbox")).toHaveLength(2);
+    view.destroy();
+  });
+
+  it("strikes through the text of checked tasks and leaves unchecked task text plain", () => {
+    const view = createView("- [ ] todo\n- [x] done\n\noutside");
+    const doneMarks = view.dom.querySelectorAll<HTMLElement>(
+      ".cm-live-preview-task-done",
+    );
+    expect(doneMarks).toHaveLength(1);
+    expect(doneMarks[0]?.textContent).toBe("done");
     view.destroy();
   });
 
@@ -624,6 +652,9 @@ describe("livePreviewExtension", () => {
       ".cm-live-preview-list-marker",
     );
     expect([...markers].map((marker) => marker.textContent)).toEqual(["•", "2."]);
+    for (const marker of markers) {
+      expect(marker).toHaveAttribute("role", "listitem");
+    }
     expect([...markers].map((marker) => marker.getAttribute("aria-label"))).toEqual([
       "项目符号",
       "列表序号 2.",

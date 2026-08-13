@@ -362,6 +362,15 @@ export const planLivePreview = (
       const previewNode = markerRangeForPreview(state, owner, node);
       const source = state.sliceDoc(previewNode.from, previewNode.to);
       if (owner.node.name === "ListItem") {
+        if (owner.node.getChild("Task")) {
+          // Task items render only the checkbox: hide the dash and the
+          // whitespace between it and the TaskMarker.
+          let to = previewNode.to;
+          const line = state.doc.lineAt(previewNode.from);
+          while (to < line.to && /[ \t]/.test(state.sliceDoc(to, to + 1))) to += 1;
+          planned.push({ from: previewNode.from, to, kind: "replace" });
+          continue;
+        }
         planned.push({
           from: previewNode.from,
           to: previewNode.to,
@@ -370,13 +379,32 @@ export const planLivePreview = (
           displayText: source === "-" || source === "+" || source === "*" ? "•" : source,
         });
       } else if (owner.node.name === "Task") {
+        const checked = source === "[x]" || source === "[X]";
         planned.push({
           from: previewNode.from,
           to: previewNode.to,
           kind: "task-checkbox",
           className: "cm-live-preview-task-checkbox",
-          checked: source === "[x]" || source === "[X]",
+          checked,
         });
+        if (checked) {
+          // Struck-through task text; skip the whitespace after the checkbox.
+          let from = previewNode.to;
+          while (
+            from < owner.node.to &&
+            /[ \t]/.test(state.sliceDoc(from, from + 1))
+          ) {
+            from += 1;
+          }
+          if (from < owner.node.to) {
+            planned.push({
+              from,
+              to: owner.node.to,
+              kind: "mark",
+              className: "cm-live-preview-task-done",
+            });
+          }
+        }
       } else {
         planned.push({
           from: previewNode.from,
@@ -455,7 +483,11 @@ class ListMarkerWidget extends WidgetType {
 }
 
 class TaskCheckboxWidget extends WidgetType {
-  constructor(private readonly checked: boolean) {
+  constructor(
+    private readonly from: number,
+    private readonly to: number,
+    private readonly checked: boolean,
+  ) {
     super();
   }
 
@@ -463,17 +495,32 @@ class TaskCheckboxWidget extends WidgetType {
     return other instanceof TaskCheckboxWidget && other.checked === this.checked;
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const checkbox = document.createElement("input");
     checkbox.className = "cm-live-preview-task-checkbox";
     checkbox.type = "checkbox";
     checkbox.checked = this.checked;
-    checkbox.disabled = true;
-    checkbox.tabIndex = -1;
     checkbox.setAttribute("role", "checkbox");
     checkbox.setAttribute("aria-checked", String(this.checked));
-    checkbox.setAttribute("aria-disabled", "true");
     checkbox.setAttribute("aria-label", this.checked ? "已完成任务" : "未完成任务");
+    const toggle = (event: Event) => {
+      event.preventDefault();
+      // A double-click fires two clicks; ignore the second one so the
+      // checkbox does not toggle back in place.
+      if ((event as MouseEvent).detail > 1) return;
+      const source = view.state.sliceDoc(this.from, this.to);
+      if (source !== "[ ]" && source !== "[x]" && source !== "[X]") return;
+      view.dispatch({
+        changes: {
+          from: this.from,
+          to: this.to,
+          insert: source === "[x]" || source === "[X]" ? "[ ]" : "[x]",
+        },
+      });
+    };
+    // Keep focus and the cursor where they are; the click still fires.
+    checkbox.addEventListener("mousedown", (event) => event.preventDefault());
+    checkbox.addEventListener("click", toggle);
     return checkbox;
   }
 
@@ -521,7 +568,7 @@ const decorationSetsFor = (
       }).range(item.from, item.to);
     } else if (item.kind === "task-checkbox") {
       decoration = Decoration.replace({
-        widget: new TaskCheckboxWidget(item.checked ?? false),
+        widget: new TaskCheckboxWidget(item.from, item.to, item.checked ?? false),
       }).range(item.from, item.to);
     } else {
       let from = item.from;
@@ -694,7 +741,6 @@ const livePreviewTheme = EditorView.baseTheme({
   },
   ".cm-live-preview-task-checkbox": {
     margin: "0 0.25em 0 0",
-    pointerEvents: "none",
   },
   ".cm-live-preview-horizontal-rule": {
     borderTop: "1px solid var(--divider)",
