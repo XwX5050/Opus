@@ -9,6 +9,9 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import gsap from "gsap";
+import { MOTION } from "../motion/motionConfig";
+import { prefersReducedMotion } from "../motion/motionRuntime";
 import { FrontMatter } from "./frontmatterExtension";
 import { Highlight, HighlightMark } from "./highlightExtension";
 
@@ -388,18 +391,19 @@ export const planLivePreview = (
           checked,
         });
         if (checked) {
-          // Struck-through task text; skip the whitespace after the checkbox.
+          // Struck-through task text, ending at the hard line break: a
+          // visual soft-wrap stays on one document line, while an explicit
+          // Enter starts a new line that must stay plain. Skip the
+          // whitespace between the checkbox and the text.
           let from = previewNode.to;
-          while (
-            from < owner.node.to &&
-            /[ \t]/.test(state.sliceDoc(from, from + 1))
-          ) {
+          const lineEnd = state.doc.lineAt(from).to;
+          while (from < lineEnd && /[ \t]/.test(state.sliceDoc(from, from + 1))) {
             from += 1;
           }
-          if (from < owner.node.to) {
+          if (from < lineEnd) {
             planned.push({
               from,
-              to: owner.node.to,
+              to: lineEnd,
               kind: "mark",
               className: "cm-live-preview-task-done",
             });
@@ -482,6 +486,69 @@ class ListMarkerWidget extends WidgetType {
   }
 }
 
+const syncTaskCheckboxDom = (dom: HTMLElement, checked: boolean): void => {
+  if (!(dom instanceof HTMLInputElement)) return;
+  dom.checked = checked;
+  dom.setAttribute("aria-checked", String(checked));
+  dom.setAttribute("aria-label", checked ? "已完成任务" : "未完成任务");
+};
+
+// A crisp pop on the checkbox itself when a click toggles it, reusing the
+// shared motion tokens. Skipped when the user prefers reduced motion.
+const animateTaskCheckboxPop = (checkbox: HTMLInputElement): void => {
+  if (prefersReducedMotion()) return;
+  gsap.fromTo(
+    checkbox,
+    { scale: 0.8 },
+    {
+      scale: 1,
+      duration: MOTION.hover.enter.duration,
+      ease: MOTION.hover.enter.ease,
+      overwrite: "auto",
+    },
+  );
+};
+
+// One-shot opacity settle for the strike-through text that just appeared;
+// the tween runs on the element regardless of its decoration lifetime.
+const animateTaskDoneReveal = (checkbox: HTMLInputElement): void => {
+  if (prefersReducedMotion()) return;
+  const done = checkbox
+    .closest(".cm-line")
+    ?.querySelector<HTMLElement>(".cm-live-preview-task-done");
+  if (!done) return;
+  gsap.fromTo(
+    done,
+    { opacity: 0 },
+    {
+      opacity: 1,
+      duration: 0.2,
+      ease: MOTION.easing,
+      clearProps: "opacity",
+    },
+  );
+};
+
+// Browsers flip a checkbox before click listeners run and revert it after
+// dispatch when the click is canceled (as this handler does), so the
+// updateDOM sync inside the dispatch is undone before the event finishes.
+// Re-sync from the document once the current event has fully completed.
+const resyncTaskCheckboxAfterToggle = (
+  view: EditorView,
+  checkbox: HTMLInputElement,
+  from: number,
+  to: number,
+): void => {
+  queueMicrotask(() => {
+    const source = view.state.sliceDoc(from, to);
+    if (source === "[x]" || source === "[X]") {
+      syncTaskCheckboxDom(checkbox, true);
+    } else if (source === "[ ]") {
+      syncTaskCheckboxDom(checkbox, false);
+    }
+  });
+};
+
 class TaskCheckboxWidget extends WidgetType {
   constructor(
     private readonly from: number,
@@ -492,17 +559,32 @@ class TaskCheckboxWidget extends WidgetType {
   }
 
   eq(other: WidgetType) {
-    return other instanceof TaskCheckboxWidget && other.checked === this.checked;
+    // A same-position widget is only reused untouched when its state
+    // matches; a flipped check must fail eq so CodeMirror calls
+    // updateDOM instead of silently keeping the stale DOM.
+    return (
+      other instanceof TaskCheckboxWidget &&
+      other.from === this.from &&
+      other.to === this.to &&
+      other.checked === this.checked
+    );
+  }
+
+  updateDOM(dom: HTMLElement, _view: EditorView, from: TaskCheckboxWidget): boolean {
+    // Only an in-place swap is safe: the click listener captured this
+    // widget's from/to, so a widget that moved must be rebuilt with a
+    // fresh listener.
+    if (from.from !== this.from || from.to !== this.to) return false;
+    syncTaskCheckboxDom(dom, this.checked);
+    return true;
   }
 
   toDOM(view: EditorView) {
     const checkbox = document.createElement("input");
     checkbox.className = "cm-live-preview-task-checkbox";
     checkbox.type = "checkbox";
-    checkbox.checked = this.checked;
     checkbox.setAttribute("role", "checkbox");
-    checkbox.setAttribute("aria-checked", String(this.checked));
-    checkbox.setAttribute("aria-label", this.checked ? "已完成任务" : "未完成任务");
+    syncTaskCheckboxDom(checkbox, this.checked);
     const toggle = (event: Event) => {
       event.preventDefault();
       // A double-click fires two clicks; ignore the second one so the
@@ -510,13 +592,17 @@ class TaskCheckboxWidget extends WidgetType {
       if ((event as MouseEvent).detail > 1) return;
       const source = view.state.sliceDoc(this.from, this.to);
       if (source !== "[ ]" && source !== "[x]" && source !== "[X]") return;
+      const checked = source === "[x]" || source === "[X]";
       view.dispatch({
         changes: {
           from: this.from,
           to: this.to,
-          insert: source === "[x]" || source === "[X]" ? "[ ]" : "[x]",
+          insert: checked ? "[ ]" : "[x]",
         },
       });
+      resyncTaskCheckboxAfterToggle(view, checkbox, this.from, this.to);
+      animateTaskCheckboxPop(checkbox);
+      animateTaskDoneReveal(checkbox);
     };
     // Keep focus and the cursor where they are; the click still fires.
     checkbox.addEventListener("mousedown", (event) => event.preventDefault());
@@ -524,7 +610,9 @@ class TaskCheckboxWidget extends WidgetType {
     return checkbox;
   }
 
-  destroy(_dom: HTMLElement) {}
+  destroy(dom: HTMLElement) {
+    gsap.killTweensOf(dom);
+  }
 
   ignoreEvent() {
     return true;

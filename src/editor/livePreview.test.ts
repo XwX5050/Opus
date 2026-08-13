@@ -380,6 +380,18 @@ describe("planLivePreview", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const state = createState(doc, [{ anchor: doc.length }]);
     const done = markedAs(planLivePreview(state), "cm-live-preview-task-done");
+    expect(done).toEqual([
+      { from: 17, to: 21, kind: "mark", className: "cm-live-preview-task-done" },
+    ]);
+    expect(state.sliceDoc(17, 21)).toBe("done");
+  });
+
+  it("strikes only the checked task's own line, not continuation lines or later paragraphs", () => {
+    const doc = "- [x] done\n  continuation\n\nnext paragraph";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    // The Task node spans both lines, but the strike must end at the hard
+    // line break so a manually started line stays plain.
+    const done = markedAs(planLivePreview(state), "cm-live-preview-task-done");
     expect(done.map(({ from, to }) => state.sliceDoc(from, to))).toEqual(["done"]);
   });
 
@@ -619,6 +631,23 @@ describe("livePreviewExtension", () => {
       checkbox.click();
     }
     expect(view.state.doc.toString()).toBe("- [x] todo\n- [ ] done\n\noutside");
+    view.destroy();
+  });
+
+  it("reuses the checkbox DOM across toggles instead of rebuilding it", async () => {
+    const view = createView("- [ ] todo\n\noutside");
+    const checkbox = view.dom.querySelector<HTMLInputElement>(
+      ".cm-live-preview-task-checkbox",
+    )!;
+    checkbox.click();
+    expect(view.state.doc.toString()).toBe("- [x] todo\n\noutside");
+    // The widget was updated in place: same node, synced state. The DOM
+    // sync completes on a microtask after the click's native activation.
+    await Promise.resolve();
+    expect(view.dom.querySelector(".cm-live-preview-task-checkbox")).toBe(checkbox);
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox).toHaveAttribute("aria-checked", "true");
+    expect(checkbox).toHaveAccessibleName("已完成任务");
     view.destroy();
   });
 
