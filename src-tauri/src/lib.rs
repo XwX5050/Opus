@@ -1,6 +1,7 @@
 pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
+pub mod fonts;
 pub mod menu;
 pub mod open_events;
 pub mod perf_mark;
@@ -42,6 +43,8 @@ pub fn run() {
             document_commands::read_recovery_draft,
             document_commands::discard_recovery_draft,
             perf_mark::perf_mark_editor_editable,
+            #[cfg(target_os = "macos")]
+            fonts::list_installed_fonts,
             #[cfg(target_os = "macos")]
             window_background::set_window_background
         ])

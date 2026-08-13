@@ -1,10 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { PersistedSession } from "../document/types";
 import { DEFAULT_EDITOR_PREFERENCES } from "../theme/preferences";
 import AppShell from "./AppShell";
+
+const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 
 beforeEach(() => {
   document.documentElement.removeAttribute("data-theme");
@@ -241,5 +245,74 @@ describe("settings: theme and editor preferences", () => {
     expect(
       document.documentElement.style.getPropertyValue("--editor-body-font"),
     ).toContain("LXGW WenKai");
+  });
+});
+
+describe("settings: installed font enumeration", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    tauriMocks.invoke.mockReset();
+  });
+
+  it("falls back to a plain text input outside the Tauri webview", async () => {
+    // jsdom has no `__TAURI_INTERNALS__`, so the dialog must never call the
+    // native command and keeps the manual-entry input.
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    expect(input).not.toHaveAttribute("list");
+    expect(document.getElementById("settings-font-datalist")).toBeNull();
+    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("lists installed fonts in a searchable datalist inside the webview", async () => {
+    // Out of order on purpose: the dialog must sort the names for display.
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_installed_fonts") {
+        return Promise.resolve(["Songti SC", "PingFang SC", "LXGW WenKai"]);
+      }
+      return Promise.reject(new Error(`unmocked command: ${command}`));
+    });
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    await waitFor(() =>
+      expect(input).toHaveAttribute("list", "settings-font-datalist"),
+    );
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("list_installed_fonts");
+
+    const datalist = document.getElementById("settings-font-datalist");
+    expect(datalist).not.toBeNull();
+    const options = Array.from(datalist!.querySelectorAll("option"));
+    expect(options.map((option) => option.getAttribute("value"))).toEqual([
+      "LXGW WenKai",
+      "PingFang SC",
+      "Songti SC",
+    ]);
+
+    // jsdom has no datalist picker, so a choice is entered as text; the
+    // single change event also avoids the keystroke-by-keystroke race
+    // between userEvent and React's controlled-value commits.
+    fireEvent.change(input, { target: { value: "LXGW WenKai" } });
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.fontFamily).toBe("LXGW WenKai"),
+    );
   });
 });

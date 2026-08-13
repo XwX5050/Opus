@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.1"
+version = "0.1.2"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -38,10 +38,15 @@ trash = "5.2.3"
 notify = "8.2.0"
 
 # macOS-only bindings for the WKWebView under-page background (see
-# window_background.rs). Pinned to the exact versions wry already locks so
-# the types line up with the webview handles tauri hands over in
-# `with_webview`.
+# window_background.rs) and installed-font enumeration (see fonts.rs).
+# Pinned to the exact versions wry already locks so the types line up with
+# the webview handles tauri hands over in `with_webview`.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "NSColor"] }
+# Direct dependency so the `CFArray`/`CFString` types used by fonts.rs can
+# enable their features here (objc2-core-text's `CTFontManager` only pulls in
+# `CFArray`; the returned family names are `CFString`s).
+objc2-core-foundation = { version = "0.3.2", features = ["std", "CFArray", "CFString"] }
+objc2-core-text = { version = "0.3.2", features = ["std", "CTFontManager"] }
 objc2-foundation = { version = "0.3.2", features = ["std", "objc2-core-foundation"] }
 objc2-web-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "objc2-app-kit", "WKWebView"] }

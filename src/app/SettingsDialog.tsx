@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   EDITOR_PREFERENCE_LIMITS,
   FONT_PRESETS,
@@ -96,9 +97,33 @@ export default function SettingsDialog({
   const [customSelected, setCustomSelected] = useState(() =>
     !isPresetFont(editorPreferences.fontFamily),
   );
+  // Installed font family names for the custom-font searchable list. Loaded
+  // once per dialog open; `null` means "not available" and keeps the plain
+  // text input. Outside the Tauri webview (`queryLocalFonts` is absent in
+  // WKWebView) this stays `null` so the fallback input is used.
+  const [installedFonts, setInstalledFonts] = useState<readonly string[] | null>(
+    null,
+  );
 
   useEffect(() => {
     firstControlRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    invoke<string[]>("list_installed_fonts")
+      .then((names) => {
+        if (cancelled) return;
+        setInstalledFonts([...names].sort((a, b) => a.localeCompare(b)));
+      })
+      .catch(() => {
+        // Enumeration is a nicety; on failure the dialog keeps the plain
+        // text input.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -217,7 +242,10 @@ export default function SettingsDialog({
             <input
               id="settings-font-custom"
               type="text"
-              placeholder="已安装字体的名称"
+              list={installedFonts ? "settings-font-datalist" : undefined}
+              placeholder={
+                installedFonts ? "搜索已安装字体…" : "已安装字体的名称"
+              }
               value={
                 isPresetFont(editorPreferences.fontFamily)
                   ? ""
@@ -225,6 +253,13 @@ export default function SettingsDialog({
               }
               onChange={(event) => update({ fontFamily: event.target.value })}
             />
+            {installedFonts && (
+              <datalist id="settings-font-datalist">
+                {installedFonts.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            )}
           </>
         )}
       </div>
