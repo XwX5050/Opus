@@ -331,37 +331,57 @@ export const bindChevronSpreadHover = (button: HTMLElement): (() => void) => {
 };
 
 /**
- * Hover animation for the translate toggle. The languages glyph sways like
- * two letters swapping places — a small horizontal slide with a slight tilt —
- * and elastically returns on leave, matching the view-mode toggle's feel.
- * The icon is queried at event time for consistency with bindViewModeHover.
+ * Hover animation for the translate toggle. The glyph reads as two characters
+ * side by side — the "文"-like strokes on the left, the "A" on the right.
+ * Hovering scales the whole icon up while pulling the halves apart, as if
+ * translating between languages, then elastically returns on leave. Icon and
+ * halves are queried at event time for consistency with bindViewModeHover.
  * Skipped when the user prefers reduced motion.
  */
 export const bindTranslateHover = (button: HTMLElement): (() => void) => {
   if (prefersReducedMotion()) return () => {};
   const icon = () => button.querySelector("[data-translate-icon]");
-  if (!icon()) return () => {};
+  const left = () => button.querySelector('[data-translate-part="left"]');
+  const right = () => button.querySelector('[data-translate-part="right"]');
+  if (!icon() || !left() || !right()) return () => {};
   const onEnter = () => {
     const target = icon();
-    if (!target) return;
+    const leftPart = left();
+    const rightPart = right();
+    if (!target || !leftPart || !rightPart) return;
     gsap.to(target, {
+      scale: 1.12,
+      transformOrigin: "center",
+      duration: MOTION.hover.enter.duration,
+      ease: MOTION.hover.enter.ease,
+      overwrite: "auto",
+    });
+    gsap.to(leftPart, {
+      x: -2,
+      duration: MOTION.hover.enter.duration,
+      ease: MOTION.hover.enter.ease,
+      overwrite: "auto",
+    });
+    gsap.to(rightPart, {
       x: 2,
-      rotation: 8,
       duration: MOTION.hover.enter.duration,
       ease: MOTION.hover.enter.ease,
       overwrite: "auto",
     });
   };
   const onLeave = () => {
-    const target = icon();
-    if (!target) return;
-    gsap.to(target, {
-      x: 0,
-      rotation: 0,
-      duration: MOTION.hover.exit.duration,
-      ease: MOTION.hover.exit.ease,
-      overwrite: "auto",
-      clearProps: "transform",
+    // Single-target tweens only: killTweensOf cannot reliably find tweens
+    // whose target list is an array, and cleanup must be able to kill these.
+    [icon(), left(), right()].forEach((target) => {
+      if (!target) return;
+      gsap.to(target, {
+        x: 0,
+        scale: 1,
+        duration: MOTION.hover.exit.duration,
+        ease: MOTION.hover.exit.ease,
+        overwrite: "auto",
+        clearProps: "transform",
+      });
     });
   };
   button.addEventListener("pointerenter", onEnter);
@@ -369,14 +389,15 @@ export const bindTranslateHover = (button: HTMLElement): (() => void) => {
   return () => {
     button.removeEventListener("pointerenter", onEnter);
     button.removeEventListener("pointerleave", onLeave);
-    const target = icon();
-    if (target) {
+    // Kill per target: killTweensOf with an array misses tweens that were
+    // created against a single element of that array.
+    [icon(), left(), right()].forEach((target) => {
+      if (!target) return;
       gsap.killTweensOf(target);
       gsap.set(target, { clearProps: "transform" });
-    }
+    });
   };
 };
-
 
 export const bindViewModeHover = (button: HTMLElement): (() => void) => {
   if (prefersReducedMotion()) return () => {};

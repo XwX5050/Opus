@@ -275,23 +275,36 @@ describe("motion runtime", () => {
     vi.unstubAllGlobals();
   });
 
-  it("animates the translate icon on hover and skips reduced motion", () => {
+  it("scales the translate glyph and pulls its halves apart on hover", () => {
     vi.stubGlobal("matchMedia", () => ({
       matches: false,
       media: "(prefers-reduced-motion: reduce)",
     }));
     const button = document.createElement("button");
-    button.innerHTML = '<svg data-translate-icon viewBox="0 0 24 24"></svg>';
+    button.innerHTML =
+      '<svg data-translate-icon viewBox="0 0 24 24">' +
+      '<g data-translate-part="left"></g>' +
+      '<g data-translate-part="right"></g></svg>';
+    const icon = button.querySelector("[data-translate-icon]")!;
+    const left = button.querySelector('[data-translate-part="left"]')!;
+    const right = button.querySelector('[data-translate-part="right"]')!;
 
     const cleanup = bindTranslateHover(button);
     button.dispatchEvent(new Event("pointerenter"));
-    const icon = button.querySelector("[data-translate-icon]")!;
-    expect(gsap.getTweensOf(icon).length).toBeGreaterThan(0);
+    expect(gsap.getTweensOf(icon)[0].vars.scale).toBe(1.12);
+    expect(gsap.getTweensOf(left)[0].vars.x).toBe(-2);
+    expect(gsap.getTweensOf(right)[0].vars.x).toBe(2);
     button.dispatchEvent(new Event("pointerleave"));
+    expect(gsap.getTweensOf(icon).length).toBeGreaterThan(0);
+    expect(gsap.getTweensOf(left).length).toBeGreaterThan(0);
+    expect(gsap.getTweensOf(right).length).toBeGreaterThan(0);
 
     cleanup();
+    expect((icon as SVGElement).style.transform).toBe("");
     button.dispatchEvent(new Event("pointerenter"));
     expect(gsap.getTweensOf(icon)).toHaveLength(0);
+    expect(gsap.getTweensOf(left)).toHaveLength(0);
+    expect(gsap.getTweensOf(right)).toHaveLength(0);
     vi.unstubAllGlobals();
   });
 
