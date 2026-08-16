@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open, save: mocks.save
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: mocks.emit }));
 
 import { DocumentPortError } from "./DocumentPort";
+import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
 import { createTauriDocumentPort, restoreWindowGeometry, subscribeToImageDrops, subscribeToMenuActions, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
 
 describe("tauri document port", () => {
@@ -790,6 +791,54 @@ describe("tauri document port session, window geometry, and close requests", () 
     });
   });
 
+  it("round-trips translation settings and normalizes malformed stored ones", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      const session = {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        translationSettings: {
+          endpoint: "https://api.openai.com/v1",
+          apiKey: "secret",
+          model: "gpt-4o-mini",
+          targetLanguage: "中文",
+          concurrency: 10,
+        },
+      };
+      await port.saveSession(session);
+      await vi.advanceTimersByTimeAsync(500);
+      // Reloading through parseSession must recover the exact translation
+      // settings the user configured (the API key included), not the defaults.
+      await expect(port.loadSession()).resolves.toEqual(session);
+
+      storeMocks.values.set("session", {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        translationSettings: { endpoint: 42, apiKey: "", model: "   " },
+      });
+      await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        translationSettings: {
+          endpoint: DEFAULT_TRANSLATION_SETTINGS.endpoint,
+          apiKey: DEFAULT_TRANSLATION_SETTINGS.apiKey,
+          model: DEFAULT_TRANSLATION_SETTINGS.model,
+          targetLanguage: DEFAULT_TRANSLATION_SETTINGS.targetLanguage,
+          concurrency: DEFAULT_TRANSLATION_SETTINGS.concurrency,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes on close request before destroying the window", async () => {
     const port = createTauriDocumentPort();
     const stop = await port.onCloseRequested(async () => {
@@ -885,6 +934,7 @@ describe("tauri document port translation", () => {
     apiKey: "secret",
     model: "gpt-4o-mini",
     targetLanguage: "中文",
+    concurrency: 10,
   };
 
   it("invokes translate_segments with camel case settings and returns translations in order", async () => {

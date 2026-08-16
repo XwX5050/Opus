@@ -2025,6 +2025,7 @@ describe("useAppController translations", () => {
           apiKey: "secret-key",
           model: "gpt-4o",
           targetLanguage: "日本語",
+          concurrency: 10,
         },
       },
     });
@@ -2036,6 +2037,7 @@ describe("useAppController translations", () => {
         apiKey: "secret-key",
         model: "gpt-4o",
         targetLanguage: "日本語",
+        concurrency: 10,
       }),
     );
 
@@ -2045,6 +2047,7 @@ describe("useAppController translations", () => {
         apiKey: "other-key",
         model: "llama",
         targetLanguage: "English",
+        concurrency: 10,
       });
     });
     await waitFor(() =>
@@ -2053,6 +2056,7 @@ describe("useAppController translations", () => {
         apiKey: "other-key",
         model: "llama",
         targetLanguage: "English",
+        concurrency: 10,
       }),
     );
     hook.unmount();
@@ -2076,6 +2080,7 @@ describe("useAppController translations", () => {
         apiKey: "",
         model: "gpt-4o-mini",
         targetLanguage: "中文",
+        concurrency: 10,
       }),
     );
     hook.unmount();

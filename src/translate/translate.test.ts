@@ -10,6 +10,7 @@ const settings: TranslationSettings = {
   apiKey: "sk-test",
   model: "gpt-test",
   targetLanguage: "中文",
+  concurrency: 10,
 };
 
 interface FakeTranslatePort {

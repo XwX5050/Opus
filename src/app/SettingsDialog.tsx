@@ -439,9 +439,10 @@ export default function SettingsDialog({
   const [installedFonts, setInstalledFonts] = useState<readonly string[] | null>(
     null,
   );
-  // Model names for the model field's searchable list, loaded on demand via
-  // the port. `null` keeps the plain text input until a fetch succeeds; the
-  // connection test shares the same request but only reports the outcome.
+  // Model names offered by the model select, loaded on demand via the port.
+  // `null` before the first fetch keeps the select down to the stored model
+  // alone; the connection test shares the same request but only reports the
+  // outcome.
   const [translationModels, setTranslationModels] = useState<
     readonly string[] | null
   >(null);
@@ -573,6 +574,17 @@ export default function SettingsDialog({
   };
 
   const limits = EDITOR_PREFERENCE_LIMITS;
+
+  // Model names selectable in the model field: the fetched list plus, first,
+  // the stored model when it is missing from it. The select is controlled by
+  // translationSettings.model, so the stored value must always be one of the
+  // options — including before the list is fetched, when it is the only one.
+  const modelOptions = useMemo(() => {
+    const models = translationModels ?? [];
+    return models.includes(translationSettings.model)
+      ? models
+      : [translationSettings.model, ...models];
+  }, [translationModels, translationSettings.model]);
 
   return (
     <div
@@ -732,15 +744,19 @@ export default function SettingsDialog({
           <div className="settings-row" data-settings-row>
             <label htmlFor="settings-translation-model">模型</label>
             <div className="settings-update-controls">
-              <SearchableField
+              <select
                 id="settings-translation-model"
                 value={translationSettings.model}
-                options={translationModels}
-                fallbackPlaceholder="模型名称"
-                searchPlaceholder="搜索模型…"
-                listLabel="可用模型"
-                onChange={(value) => updateTranslation({ model: value })}
-              />
+                onChange={(event) =>
+                  updateTranslation({ model: event.target.value })
+                }
+              >
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
                 disabled={port === undefined || modelsLoading}
@@ -753,6 +769,32 @@ export default function SettingsDialog({
                   {modelsHint}
                 </span>
               )}
+            </div>
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-translation-concurrency">并发数</label>
+            <div className="settings-update-controls">
+              <input
+                id="settings-translation-concurrency"
+                type="number"
+                min={1}
+                max={32}
+                step={1}
+                value={translationSettings.concurrency}
+                onChange={(event) => {
+                  const raw = event.target.value.trim();
+                  // An emptied field is ignored; the stored value stands.
+                  if (raw === "") return;
+                  const parsed = Number.parseInt(raw, 10);
+                  if (Number.isNaN(parsed)) return;
+                  // The controller clamps to 1-32 on write-back.
+                  updateTranslation({ concurrency: parsed });
+                }}
+              />
+              <span className="settings-update-hint">
+                同时翻译的段落数，范围 1-32，默认 10；调太高可能被服务商限流。
+              </span>
             </div>
           </div>
 

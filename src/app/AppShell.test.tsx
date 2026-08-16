@@ -1732,6 +1732,7 @@ describe("AppShell document translation", () => {
             apiKey: "test-key",
             model: "gpt-4o-mini",
             targetLanguage: "中文",
+            concurrency: 10,
           },
         },
       },

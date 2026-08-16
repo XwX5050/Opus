@@ -12,12 +12,14 @@ describe("normalizeTranslationSettings", () => {
         apiKey: "sk-test",
         model: "gpt-test",
         targetLanguage: "English",
+        concurrency: 6,
       }),
     ).toEqual({
       endpoint: "https://example.com/v1",
       apiKey: "sk-test",
       model: "gpt-test",
       targetLanguage: "English",
+      concurrency: 6,
     });
   });
 
@@ -75,11 +77,45 @@ describe("normalizeTranslationSettings", () => {
       apiKey: "sk-test",
       model: "gpt-test",
       targetLanguage: "中文",
+      concurrency: 10,
     });
   });
 
   it("never returns the shared default object", () => {
     const normalized = normalizeTranslationSettings(null);
     expect(normalized).not.toBe(DEFAULT_TRANSLATION_SETTINGS);
+  });
+});
+
+describe("concurrency field", () => {
+  it("defaults to 10", () => {
+    expect(DEFAULT_TRANSLATION_SETTINGS.concurrency).toBe(10);
+  });
+
+  it("falls back to the default for non-finite values", () => {
+    for (const value of [undefined, null, "5", NaN, Infinity, {}]) {
+      expect(
+        normalizeTranslationSettings({ concurrency: value }).concurrency,
+      ).toBe(DEFAULT_TRANSLATION_SETTINGS.concurrency);
+    }
+  });
+
+  it("rounds fractional values", () => {
+    expect(normalizeTranslationSettings({ concurrency: 5.6 }).concurrency).toBe(
+      6,
+    );
+    expect(normalizeTranslationSettings({ concurrency: 3.4 }).concurrency).toBe(
+      3,
+    );
+  });
+
+  it("clamps to the 1-32 range", () => {
+    expect(normalizeTranslationSettings({ concurrency: 0 }).concurrency).toBe(1);
+    expect(normalizeTranslationSettings({ concurrency: -3 }).concurrency).toBe(
+      1,
+    );
+    expect(normalizeTranslationSettings({ concurrency: 100 }).concurrency).toBe(
+      32,
+    );
   });
 });

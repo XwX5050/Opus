@@ -10,7 +10,7 @@ import {
   normalizeThemePreference,
 } from "../theme/preferences";
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecentItem, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
-import type { TranslationSettings } from "../translate/types";
+import { normalizeTranslationSettings, type TranslationSettings } from "../translate/types";
 import {
   normalizeOutlinePreferences,
   normalizeSidebarPreferences,
@@ -111,6 +111,11 @@ const parseSession = (value: unknown): PersistedSession | null => {
       : {}),
     ...(record.outline !== undefined
       ? { outline: normalizeOutlinePreferences(record.outline) }
+      : {}),
+    // Translation settings are optional too; malformed stored values fall
+    // back to the defaults in the translate module.
+    ...(record.translationSettings !== undefined
+      ? { translationSettings: normalizeTranslationSettings(record.translationSettings) }
       : {}),
   };
 };

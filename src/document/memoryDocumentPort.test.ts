@@ -174,6 +174,7 @@ describe("MemoryDocumentPort session and close requests", () => {
       apiKey: "secret",
       model: "gpt-4o-mini",
       targetLanguage: "中文",
+      concurrency: 10,
     };
     const session = {
       recent: [],
@@ -215,6 +216,7 @@ describe("MemoryDocumentPort translation", () => {
     apiKey: "secret",
     model: "gpt-4o-mini",
     targetLanguage: "中文",
+    concurrency: 10,
   };
 
   it("fake-translates every requested segment in order", async () => {

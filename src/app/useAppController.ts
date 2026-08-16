@@ -418,6 +418,7 @@ export function useAppController(
     };
     void translateDocument(port, settings, text, {
       signal: controller.signal,
+      concurrency: settings.concurrency,
       onPartial: applyPartial,
     })
       .then((translatedText) => {
