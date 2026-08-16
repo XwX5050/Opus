@@ -111,6 +111,14 @@ export interface DocumentPort {
   loadSession(): Promise<PersistedSession | null>;
   saveSession(session: PersistedSession): Promise<void>;
   /**
+   * Persists any pending debounced session save immediately, bypassing the
+   * trailing-edge timer — e.g. before an in-app update restarts the process,
+   * where the window close event is never emitted. Resolves once the store
+   * write settles (or immediately when nothing is pending). Best-effort: a
+   * failed write never rejects.
+   */
+  flushSession(): Promise<void>;
+  /**
    * Registers a handler run when the window is asked to close. The handler
    * may be async (e.g. flushing recovery drafts); the window closes after it
    * settles. Resolves to an unsubscribe function.

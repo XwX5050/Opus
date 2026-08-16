@@ -158,6 +158,90 @@ export function splitMarkdownSegments(text: string): Segment[] {
 }
 
 /**
+ * Upper bound, in characters, for a single translatable chunk sent to the
+ * provider. Paragraphs are subdivided past this limit because OpenAI-
+ * compatible providers (DeepSeek and similar) can drop or mis-decode very
+ * long single requests — oversized segments have been observed to disconnect
+ * with `response JSON is invalid: error decoding response body`. 1500
+ * characters covers nearly every real paragraph as a single request, so
+ * subdivision only kicks in for unusually long runs, while staying far below
+ * provider context limits and bounding the cost of a request that has to be
+ * retried. Exported so tests and callers can reason about the same limit.
+ */
+export const MAX_TRANSLATABLE_CHUNK_LENGTH = 1500;
+
+/**
+ * Sentence- and phrase-ending punctuation, Chinese and English. Chunks split
+ * *after* these characters (keeping them attached) so translated fragments
+ * still end at natural boundaries. The regex matches one sentence — a run of
+ * non-punctuation characters plus any trailing punctuation — or a bare
+ * non-punctuation run, exhausting the input with no empty matches, so the
+ * concatenation of the matches is always byte-identical to the input line.
+ */
+const SENTENCE_BOUNDARY_RE =
+  /[^。！？；：，!?;:,]*[。！？；：，!?;:,]+|[^。！？；：，!?;:,]+/g;
+
+/**
+ * Splits a single over-long line into chunks at sentence boundaries, falling
+ * back to exact character cuts for any sentence that still exceeds the
+ * limit. The line's trailing line break stays attached to the final chunk so
+ * paragraph structure survives translation losslessly.
+ */
+const subdivideLongLine = (line: string, maxLength: number): string[] => {
+  const trailing = /[\r\n]+$/.exec(line)?.[0] ?? "";
+  const body = trailing.length > 0 ? line.slice(0, -trailing.length) : line;
+  const sentences = body.match(SENTENCE_BOUNDARY_RE) ?? [body];
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of sentences) {
+    if (current.length + sentence.length <= maxLength) {
+      current += sentence;
+    } else {
+      if (current.length > 0) chunks.push(current);
+      current = sentence;
+      while (current.length > maxLength) {
+        chunks.push(current.slice(0, maxLength));
+        current = current.slice(maxLength);
+      }
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  if (chunks.length === 0) chunks.push(body);
+  if (trailing.length > 0) chunks[chunks.length - 1] += trailing;
+  return chunks;
+};
+
+/**
+ * Splits one translatable segment's text into chunks no longer than
+ * `maxLength`, preferring line boundaries so a paragraph's lines stay
+ * together when they fit, then sentence boundaries for any single over-long
+ * line, with exact character cuts as the last resort. Chunks concatenate
+ * back to `text` byte-for-byte, keeping the segment contract that
+ * `reassembleTranslation` relies on; only the final chunk of a chunked line
+ * may exceed the limit by its trailing line break (one or two characters).
+ */
+export function subdivideSegment(
+  text: string,
+  maxLength: number = MAX_TRANSLATABLE_CHUNK_LENGTH,
+): string[] {
+  if (text.length <= maxLength) return [text];
+  const chunks: string[] = [];
+  for (const line of splitLines(text)) {
+    if (line.length > maxLength) {
+      chunks.push(...subdivideLongLine(line, maxLength));
+    } else {
+      const last = chunks[chunks.length - 1];
+      if (last !== undefined && last.length + line.length <= maxLength) {
+        chunks[chunks.length - 1] = last + line;
+      } else {
+        chunks.push(line);
+      }
+    }
+  }
+  return chunks;
+}
+
+/**
  * Fills translated text back into the translatable segments, keeping the
  * protected segments as-is. `translated[i]` corresponds to the i-th
  * translatable segment; missing entries fall back to the original text.

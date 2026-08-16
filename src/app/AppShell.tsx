@@ -778,7 +778,15 @@ export default function AppShell({
     setUpdateDownloading(true);
     void updateOffer
       .downloadAndInstall()
-      .then(relaunchApp)
+      .then(async () => {
+        // relaunch() is a hard process restart that never emits the window
+        // close event, so flush any pending debounced session save first —
+        // the latest preference change (e.g. a translation API key) would
+        // otherwise be lost. The flush is best-effort and must never block
+        // the restart.
+        await port.flushSession();
+        return relaunchApp();
+      })
       .catch(() => {
         // Keep the dialog open so the user can retry or dismiss.
         setUpdateDownloading(false);

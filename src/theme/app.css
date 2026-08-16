@@ -1200,9 +1200,15 @@ body.outline-resizing * {
 
 /* The settings panel takes the full dialog width; other dialogs stay
    content-sized. The overlay is a centered grid, so an auto width would
-   shrink to max-content. */
+   shrink to max-content. The panel is capped to the window height so the
+   middle row scrolls on short windows; the vh line is the no-dvh fallback
+   for older WKWebViews. The middle row is minmax(0, 1fr) so it shrinks
+   below its content height when the cap binds. */
 .dialog-overlay .settings-dialog {
   width: min(520px, 100% - 48px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: calc(100vh - var(--space-5) - var(--space-5));
+  max-height: calc(100dvh - var(--space-5) - var(--space-5));
 }
 
 .dialog-overlay [role="dialog"] h2 {
@@ -1242,6 +1248,20 @@ body.outline-resizing * {
 }
 
 /* ---------- Settings dialog ---------- */
+
+/* Scrollable middle row of the settings dialog: the sections scroll under
+   the pinned title and 完成 button when the window is short. The gutter is
+   reserved so an appearing scrollbar never shifts the rows horizontally;
+   overflow-x stays hidden so no horizontal scrollbar can sneak in. */
+.settings-body {
+  display: grid;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding-bottom: var(--space-1);
+}
 
 /* macOS-style grouped settings: labelled sections (外观/编辑器/关于), each a
    rounded inset card of hairline-divided rows. Cards stay overflow-visible

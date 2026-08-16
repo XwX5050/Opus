@@ -94,6 +94,7 @@ class InspectablePort implements DocumentPort {
   async discardDraft() {}
   async loadSession() { return null; }
   async saveSession() {}
+  async flushSession() {}
   async onCloseRequested() { return () => {}; }
 }
 
@@ -1856,7 +1857,9 @@ describe("AppShell document translation", () => {
   it("shows a failure banner with a working retry", async () => {
     const user = userEvent.setup();
     const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
-    let failures = 1;
+    // The pipeline retries a failed request twice before giving up, so the
+    // banner only appears when all three attempts of the first run fail.
+    let failures = 3;
     port.translateSegments = async (_settings: TranslationSettings, segments: string[]) => {
       if (failures > 0) {
         failures -= 1;
@@ -1868,8 +1871,15 @@ describe("AppShell document translation", () => {
     await user.click(screen.getByRole("button", { name: "打开文件" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
-    const banner = await screen.findByRole("status");
-    expect(banner).toHaveTextContent("翻译失败：boom");
+    // The two automatic retries (300ms + 900ms backoff) must elapse before the
+    // run fails and the error banner replaces the translating one. Poll on
+    // the banner text: the phase-dependent banners share the status role.
+    await waitFor(
+      () =>
+        expect(screen.getByRole("status")).toHaveTextContent("翻译失败：boom"),
+      { timeout: 5000 },
+    );
+    const banner = screen.getByRole("status");
     expect(screen.getByRole("button", { name: "翻译文档" })).toBeInTheDocument();
 
     await user.click(within(banner).getByRole("button", { name: "重试" }));

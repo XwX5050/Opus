@@ -598,6 +598,9 @@ export default function SettingsDialog({
     >
       <h2 id="settings-dialog-title">设置</h2>
 
+      {/* Scrollable middle row: on short windows the sections scroll while
+          the title and 完成 button stay pinned. */}
+      <div className="settings-body">
       <section
         className="settings-section"
         aria-labelledby="settings-heading-appearance"
@@ -867,6 +870,7 @@ export default function SettingsDialog({
           </div>
         </div>
       </section>
+      </div>
 
       <div className="dialog-actions">
         <button type="button" onClick={onClose}>

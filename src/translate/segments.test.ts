@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_TRANSLATABLE_CHUNK_LENGTH,
   reassembleTranslation,
   splitMarkdownSegments,
+  subdivideSegment,
   type Segment,
 } from "./segments";
 
@@ -224,6 +226,99 @@ describe("splitMarkdownSegments", () => {
     ]);
     expect(texts(segments, "translatable")).toEqual(["# Heading\n", "tail\n"]);
     expect(joined(segments)).toBe(doc);
+  });
+});
+
+describe("subdivideSegment", () => {
+  it("returns the text unchanged when it fits the limit", () => {
+    const text = "a\nb\n" + "c".repeat(100) + "\n";
+    expect(subdivideSegment(text)).toEqual([text]);
+    expect(
+      subdivideSegment("x".repeat(MAX_TRANSLATABLE_CHUNK_LENGTH)),
+    ).toEqual(["x".repeat(MAX_TRANSLATABLE_CHUNK_LENGTH)]);
+  });
+
+  it("splits an over-long paragraph along line boundaries", () => {
+    const line = "l".repeat(300) + "\n"; // 301 chars
+    const text = line.repeat(6); // 1806 chars
+    const chunks = subdivideSegment(text);
+    expect(chunks).toEqual([line.repeat(4), line.repeat(2)]);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("splits an over-long single line at sentence boundaries", () => {
+    const sentence = "句".repeat(500) + "。"; // 501 chars
+    const text = sentence.repeat(5) + "\n"; // 2506 chars
+    const chunks = subdivideSegment(text);
+    // Two sentences fit per chunk (1002); the punctuation stays attached to
+    // its sentence, and the last chunk carries the trailing newline.
+    expect(chunks).toEqual([
+      "句".repeat(500) + "。" + "句".repeat(500) + "。",
+      "句".repeat(500) + "。" + "句".repeat(500) + "。",
+      "句".repeat(500) + "。\n",
+    ]);
+    expect(chunks.join("")).toBe(text);
+    expect(
+      chunks.every(
+        (chunk) => chunk.length <= MAX_TRANSLATABLE_CHUNK_LENGTH,
+      ),
+    ).toBe(true);
+  });
+
+  it("hard-splits a sentence longer than the limit as a last resort", () => {
+    const text = "x".repeat(5000) + "\n";
+    const chunks = subdivideSegment(text);
+    expect(chunks).toEqual([
+      "x".repeat(1500),
+      "x".repeat(1500),
+      "x".repeat(1500),
+      "x".repeat(500) + "\n",
+    ]);
+    expect(chunks.join("")).toBe(text);
+    expect(
+      chunks.every(
+        (chunk) => chunk.length <= MAX_TRANSLATABLE_CHUNK_LENGTH,
+      ),
+    ).toBe(true);
+  });
+
+  it("splits consecutive over-long lines independently", () => {
+    const text = "x".repeat(1600) + "\n" + "y".repeat(1700) + "\n";
+    expect(subdivideSegment(text)).toEqual([
+      "x".repeat(1500),
+      "x".repeat(100) + "\n",
+      "y".repeat(1500),
+      "y".repeat(200) + "\n",
+    ]);
+  });
+
+  it("honors an explicit maxLength", () => {
+    expect(subdivideSegment("aaaa\nbbbb\ncccc\n", 10)).toEqual([
+      "aaaa\nbbbb\n",
+      "cccc\n",
+    ]);
+    expect(subdivideSegment("x".repeat(12), 5)).toEqual([
+      "x".repeat(5),
+      "x".repeat(5),
+      "xx",
+    ]);
+    expect(subdivideSegment("甲。乙。丙。", 3)).toEqual(["甲。", "乙。", "丙。"]);
+  });
+
+  it("is lossless for mixed paragraphs, sentence-split lines and CRLF", () => {
+    const text =
+      "短行\n" +
+      "medium line with text\n".repeat(3) +
+      ("句".repeat(600) + "。").repeat(4) +
+      "又一段。\n" +
+      "结尾\r\n";
+    const chunks = subdivideSegment(text);
+    expect(chunks.join("")).toBe(text);
+    expect(
+      chunks.every(
+        (chunk) => chunk.length <= MAX_TRANSLATABLE_CHUNK_LENGTH,
+      ),
+    ).toBe(true);
   });
 });
 

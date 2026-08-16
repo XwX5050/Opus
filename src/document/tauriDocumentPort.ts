@@ -228,10 +228,27 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
   // Session writes are debounced: setting-dialog keystrokes fire one
   // saveSession each, and every write is a Store.load + set + save round
   // trip. A trailing-edge timer collapses a burst into a single write (the
-  // latest snapshot wins), and onCloseRequested flushes any pending save
-  // before the window is destroyed so the final change is never lost.
+  // latest snapshot wins). Translation-settings changes bypass the timer and
+  // write immediately — an API key configured in the settings dialog must
+  // survive even a force-kill or an in-app relaunch, and settings are
+  // applied in discrete steps rather than keystroke bursts, so the extra
+  // write is cheap.
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSession: PersistedSession | null = null;
+  // Translation settings of the last successful store write; a differing
+  // session flushes immediately instead of waiting out the debounce.
+  let lastFlushedTranslationSettings: TranslationSettings | null = null;
+  const sameTranslationSettings = (
+    a: TranslationSettings | null,
+    b: TranslationSettings | null,
+  ): boolean =>
+    a === null || b === null
+      ? a === b
+      : a.endpoint === b.endpoint &&
+        a.apiKey === b.apiKey &&
+        a.model === b.model &&
+        a.targetLanguage === b.targetLanguage &&
+        a.concurrency === b.concurrency;
   const flushSession = async (): Promise<void> => {
     if (sessionSaveTimer) {
       clearTimeout(sessionSaveTimer);
@@ -244,9 +261,11 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       const store = await sessionStore();
       await store.set("session", session);
       await store.save();
+      const settings = session.translationSettings ?? null;
+      if (settings !== null) lastFlushedTranslationSettings = settings;
     } catch {
       // Session persistence is best-effort; a failed flush must never
-      // block the window from closing.
+      // block the window from closing or the app from relaunching.
     }
   };
   return {
@@ -389,10 +408,19 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     async saveSession(session: PersistedSession): Promise<void> {
       pendingSession = session;
       if (sessionSaveTimer) clearTimeout(sessionSaveTimer);
+      const settings = session.translationSettings ?? null;
+      if (!sameTranslationSettings(settings, lastFlushedTranslationSettings)) {
+        // Translation settings changed: persist right away instead of
+        // waiting out the debounce, so a configured API key survives an
+        // in-app relaunch or a process that dies before the timer fires.
+        await flushSession();
+        return;
+      }
       sessionSaveTimer = setTimeout(() => {
         void flushSession();
       }, SESSION_SAVE_DEBOUNCE_MS);
     },
+    flushSession,
     onCloseRequested(handler: () => void | Promise<void>): Promise<() => void> {
       const win = getCurrentWindow();
       return win.onCloseRequested(async (event) => {

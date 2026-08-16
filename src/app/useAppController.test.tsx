@@ -63,6 +63,7 @@ class InspectableControllerPort implements DocumentPort {
   async discardDraft() {}
   async loadSession() { return null; }
   async saveSession() {}
+  async flushSession() {}
   async onCloseRequested() { return () => {}; }
 }
 
@@ -118,6 +119,7 @@ class ScopeAwareControllerPort implements DocumentPort {
   async discardDraft() {}
   async loadSession() { return null; }
   async saveSession() {}
+  async flushSession() {}
   async onCloseRequested() { return () => {}; }
 }
 
@@ -253,6 +255,7 @@ describe("useAppController", () => {
       async discardDraft() {},
       async loadSession() { return null; },
       async saveSession() {},
+      async flushSession() {},
       async onCloseRequested() { return () => {}; },
     };
     const hook = renderHook(() => useAppController(port));

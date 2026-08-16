@@ -661,6 +661,75 @@ describe("tauri document port session, window geometry, and close requests", () 
     }
   });
 
+  it("flushSession persists a pending debounced save without waiting for the timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      const session = {
+        recent: [],
+        openPaths: ["/notes/a.md"],
+        activePath: "/notes/a.md",
+        workspacePath: null,
+      };
+      await port.saveSession(session);
+      expect(storeMocks.values.has("session")).toBe(false);
+
+      await port.flushSession();
+
+      // A fresh port reads the session back from the store immediately.
+      expect(storeMocks.values.get("session")).toEqual(session);
+      await expect(createTauriDocumentPort().loadSession()).resolves.toEqual(session);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushSession resolves without a store round trip when nothing is pending", async () => {
+    storeMocks.load.mockClear();
+    const port = createTauriDocumentPort();
+    await port.flushSession();
+    expect(storeMocks.load).not.toHaveBeenCalled();
+  });
+
+  it("flushes immediately when translation settings change, skipping the debounce", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      const session = { recent: [], openPaths: [], activePath: null, workspacePath: null };
+      await port.saveSession(session);
+      expect(storeMocks.values.has("session")).toBe(false);
+
+      const settings = {
+        endpoint: "https://api.openai.com/v1",
+        apiKey: "secret",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+        concurrency: 10,
+      };
+      const configured = { ...session, translationSettings: settings };
+      await port.saveSession(configured);
+      // The settings change bypasses the debounce window entirely.
+      expect(storeMocks.values.get("session")).toEqual(configured);
+
+      // Unrelated changes with the same settings go back to the debounce.
+      const extended = { ...configured, openPaths: ["/notes/b.md"] };
+      await port.saveSession(extended);
+      expect(storeMocks.values.get("session")).toEqual(configured);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(storeMocks.values.get("session")).toEqual(extended);
+
+      // A second settings change flushes immediately again.
+      const rekeyed = {
+        ...extended,
+        translationSettings: { ...settings, apiKey: "new-secret" },
+      };
+      await port.saveSession(rekeyed);
+      expect(storeMocks.values.get("session")).toEqual(rekeyed);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops malformed entries when loading a session", async () => {
     storeMocks.values.set("session", {
       recent: [

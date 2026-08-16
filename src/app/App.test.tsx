@@ -39,6 +39,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
       async discardDraft() {},
       async loadSession() { return null; },
       async saveSession() {},
+      async flushSession() {},
       async onCloseRequested() { return () => {}; },
     };
   },

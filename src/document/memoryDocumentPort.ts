@@ -648,6 +648,12 @@ export class MemoryDocumentPort implements DocumentPort {
     this.#session = cloneSession(session);
   }
 
+  /**
+   * The in-memory port stores sessions synchronously on saveSession, so a
+   * flush has nothing to defer; this no-op exists to honor the contract.
+   */
+  async flushSession(): Promise<void> {}
+
   async onCloseRequested(
     handler: () => void | Promise<void>,
   ): Promise<() => void> {

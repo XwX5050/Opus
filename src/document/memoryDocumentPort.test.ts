@@ -190,6 +190,21 @@ describe("MemoryDocumentPort session and close requests", () => {
     expect(loaded?.translationSettings).not.toBe(settings);
   });
 
+  it("flushSession resolves immediately without discarding the stored session", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const session = {
+      recent: [],
+      openPaths: ["/notes/a.md"],
+      activePath: null,
+      workspacePath: null,
+    };
+    await port.saveSession(session);
+    // saveSession stores synchronously, so the explicit flush is a no-op
+    // that still resolves and never discards what was saved.
+    await expect(port.flushSession()).resolves.toBeUndefined();
+    await expect(port.loadSession()).resolves.toEqual(session);
+  });
+
   it("runs close-requested handlers in order until unsubscribed", async () => {
     const port = new MemoryDocumentPort(new Map());
     const calls: string[] = [];
