@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.8` (kept in sync across `package.json`,
+- Version: `0.1.9` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first)
 - UI language: Chinese (`zh-CN`); code, comments, and docs are in English
@@ -115,9 +115,13 @@ Rust/Tauri backend.
   within 1-32, default 10) and the per-tab `TranslationViewState`; `segments.ts`
   splits Markdown into
   translatable paragraph blocks and protected blocks (frontmatter, fenced
-  code, display math, HTML comments); `translate.ts` issues one
-  `DocumentPort.translateSegments` call per segment through a bounded
-  concurrency pool and surfaces incremental results via `onPartial`. The
+  code, display math, HTML comments) and subdivides over-long translatable
+  segments into chunks under `MAX_TRANSLATABLE_CHUNK_LENGTH` (line boundaries
+  first, then sentence punctuation, then hard cuts);
+  `translate.ts` issues one
+  `DocumentPort.translateSegments` call per chunk through a bounded
+  concurrency pool, retries transiently failed chunk requests with a short
+  backoff (never on abort), and surfaces incremental results via `onPartial`. The
   backend `src-tauri/src/translate.rs` translates through an
   OpenAI-compatible chat completions endpoint via reqwest (rustls) and caches
   results per segment on disk.
@@ -229,8 +233,9 @@ Automated gates:
   `*.test.ts` / `*.test.tsx` and run in jsdom via Vitest. The Vitest config
   (in `vite.config.ts`) excludes `tests/e2e/**` and `.worktrees/**`.
 - Rust integration tests live in `src-tauri/tests/` and cover document I/O,
-  commands, workspace operations, asset scopes, recovery, open events, and
-  clipboard images.
+  commands, workspace operations, asset scopes, recovery, open events,
+  clipboard images, and the translation pipeline (cache and
+  OpenAI-compatible client).
 - E2E tests in `tests/e2e/` run against a real Vite dev server on port 1421
   with `VITE_E2E=1` (`reuseExistingServer` is off so the environment is
   guaranteed); they exercise the UI through DOM/CodeMirror interactions using
