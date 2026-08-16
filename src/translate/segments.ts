@@ -21,7 +21,17 @@ export interface Segment {
 type ScanState = "normal" | "frontmatter" | "fence" | "math" | "comment";
 
 const FENCE_RE = /^[ \t]*(`{3,}|~{3,})/;
-const MATH_OPEN_RE = /^[ \t]*\$\$/;
+const COMMENT_OPEN_RE = /^[ \t]*<!--/;
+
+/**
+ * Independent `$$` delimiter line, mirroring the editor's math extension
+ * (mathExtension.ts matches `^\$\$[\t ]*\r?$` on the line's content; blocks
+ * that never close fall back to a plain paragraph there). Nothing but
+ * optional whitespace may follow the `$$`, so prose such as `$$ 500 元/人`
+ * is not a delimiter and stays translatable. The `\r?\n?` absorbs the
+ * newline that `splitLines` keeps attached to the line.
+ */
+const MATH_DELIMITER_RE = /^[ \t]*\$\$[\t ]*\r?\n?$/;
 
 const isBlankLine = (line: string): boolean => line.trim().length === 0;
 
@@ -34,12 +44,6 @@ const isFrontmatterOpening = (line: string): boolean => line.trim() === "---";
 const isFrontmatterClosing = (line: string): boolean => {
   const trimmed = line.trim();
   return trimmed === "---" || trimmed === "...";
-};
-
-/** A one-line `$$...$$` block carries no content to protect separately. */
-const isSelfContainedMathLine = (line: string): boolean => {
-  const trimmed = line.trim();
-  return trimmed.length > 2 && trimmed.startsWith("$$") && trimmed.endsWith("$$");
 };
 
 export function splitMarkdownSegments(text: string): Segment[] {
@@ -92,9 +96,9 @@ export function splitMarkdownSegments(text: string): Segment[] {
       }
       case "math":
         pending.push(line);
-        // Any `$$`-prefixed line closes the block; the opening line was
-        // already consumed, so an unmatched block runs to EOF.
-        if (MATH_OPEN_RE.test(line)) {
+        // Any independent `$$` delimiter line closes the block; the opening
+        // line was already consumed, so an unmatched block runs to EOF.
+        if (MATH_DELIMITER_RE.test(line)) {
           flush();
           state = "normal";
         }
@@ -132,12 +136,12 @@ export function splitMarkdownSegments(text: string): Segment[] {
           state = "fence";
           break;
         }
-        if (MATH_OPEN_RE.test(line)) {
+        if (MATH_DELIMITER_RE.test(line)) {
           startProtectedBlock(line);
-          state = isSelfContainedMathLine(line) ? "normal" : "math";
+          state = "math";
           break;
         }
-        if (line.includes("<!--")) {
+        if (COMMENT_OPEN_RE.test(line)) {
           startProtectedBlock(line);
           state = line.includes("-->") ? "normal" : "comment";
           break;

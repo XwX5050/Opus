@@ -1,7 +1,10 @@
 //! Document translation through an OpenAI-compatible chat completions API.
 //!
-//! The frontend splits a document into translatable segments and sends them
-//! here in batch; results are cached on disk per segment so re-translating an
+//! The frontend splits a document into translatable segments and sends one
+//! segment per request; each translation is a single chat completion whose
+//! user message is the raw segment text, and the model's plain-text answer is
+//! the translation — no JSON envelope to parse and no result count to
+//! validate. Results are cached on disk per segment so re-translating an
 //! unchanged document never calls the provider again. Cache writes reuse the
 //! sibling-temp + rename + directory-fsync discipline from `recovery`, and
 //! corrupt or missing entries are always treated as misses so a bad write can
@@ -13,11 +16,13 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 use tauri::Manager;
 
 /// Provider settings persisted from the settings dialog. Field names are
@@ -127,6 +132,21 @@ pub struct TranslationCache {
     dir: PathBuf,
 }
 
+/// Cap on the number of cache entries kept before the oldest ones are
+/// evicted. The cache is derived from live documents, so it never needs to be
+/// unbounded; the sweep keeps a long-running install from growing forever.
+pub const CACHE_ENTRY_LIMIT: usize = 5000;
+
+/// How old the previous prune scan must be before the cache directory is
+/// scanned again. The sweep is throttled so per-command calls do not pay for a
+/// `read_dir` of the whole cache on every translation.
+const CACHE_PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// Last prune-scan time per cache directory, shared process-wide so the
+/// throttle survives individual `TranslationCache` instances (one is created
+/// per command call).
+static LAST_CACHE_PRUNE: OnceLock<Mutex<HashMap<PathBuf, SystemTime>>> = OnceLock::new();
+
 impl TranslationCache {
     pub fn new(dir: PathBuf) -> Self {
         Self { dir }
@@ -179,23 +199,99 @@ impl TranslationCache {
         fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
+
+    /// Evicts the oldest cache entries once the directory holds more than
+    /// `CACHE_ENTRY_LIMIT` `.json` files, restoring the count to the limit.
+    /// Scans at most once per `CACHE_PRUNE_INTERVAL` per cache directory: the
+    /// wall-clock check happens up front so the directory is only read when
+    /// the previous scan is stale. Eviction is best-effort — read and remove
+    /// failures are logged, never surfaced — because a cache prune must not
+    /// break a translation.
+    pub fn prune_if_due(&self) {
+        let now = SystemTime::now();
+        let mut last_scans = LAST_CACHE_PRUNE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(previous) = last_scans.get(&self.dir) {
+            if now.duration_since(*previous).unwrap_or_default() < CACHE_PRUNE_INTERVAL {
+                return;
+            }
+        }
+        // Record the scan before doing it, so a failed sweep still counts as
+        // attempted and the next one waits out the interval.
+        last_scans.insert(self.dir.clone(), now);
+        drop(last_scans);
+        if let Err(error) = self.evict_oldest_entries(CACHE_ENTRY_LIMIT) {
+            log::warn!(
+                "failed to prune translation cache {}: {error}",
+                self.dir.display()
+            );
+        }
+    }
+
+    /// Removes the oldest `.json` entries (by modification time) until at
+    /// most `entry_limit` remain, returning how many were removed. Only files
+    /// with a `.json` extension are considered; anything else in the
+    /// directory is left untouched. A missing cache directory is a no-op.
+    fn evict_oldest_entries(&self, entry_limit: usize) -> Result<usize, io::Error> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error),
+        };
+        let mut candidates: Vec<(PathBuf, SystemTime)> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    return None;
+                }
+                Some((path, entry.metadata().ok()?.modified().ok()?))
+            })
+            .collect();
+        if candidates.len() <= entry_limit {
+            return Ok(0);
+        }
+        // Sort by mtime ascending; the stable sort keeps the removal order
+        // deterministic when timestamps tie.
+        candidates.sort_by_key(|(_, modified)| *modified);
+        let remove_count = candidates.len() - entry_limit;
+        let mut removed = 0;
+        for (path, _) in candidates.into_iter().take(remove_count) {
+            match fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(error) => {
+                    log::warn!(
+                        "failed to remove stale translation cache entry {}: {error}",
+                        path.display()
+                    )
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
-/// The system prompt asks for a JSON object with one translation per input
-/// string; Markdown structure and inline syntax survive the round trip.
+/// The system prompt asks for one plain-text translation of the user's
+/// message; Markdown structure and inline syntax survive the round trip.
 fn system_prompt(target_language: &str) -> String {
     format!(
-        "Translate each string in the user's JSON array into {target_language}. \
-         Preserve Markdown syntax, inline code, inline math ($...$), and link \
-         URLs exactly as they appear. Respond with only a JSON object of the \
-         form {{\"translations\": [...]}} with one translated string per input \
-         string, in the same order. Output nothing but the JSON."
+        "You are a professional translator. Translate the user's text into \
+         {target_language}. Write natural, fluent prose the way a native \
+         speaker would; avoid stiff word-for-word literal translation and \
+         preserve the tone of the original. Keep all Markdown syntax, inline \
+         code, inline and block math ($...$ and $$...$$), URLs, and HTML \
+         tags exactly as they appear, and do not translate code or formula \
+         content. Preserve the original line-break structure when the input \
+         spans multiple lines. Output only the translation: no explanations, \
+         no surrounding quotes, no prefixes or suffixes."
     )
 }
 
-/// The chat completions body: model plus a system prompt and the segments as
-/// a JSON array string in the user message.
-fn build_chat_body(model: &str, target_language: &str, segments: &[&str]) -> serde_json::Value {
+/// The chat completions body: model plus a system prompt and the segment to
+/// translate as the user message.
+fn build_chat_body(model: &str, target_language: &str, segment: &str) -> serde_json::Value {
     serde_json::json!({
         "model": model,
         "messages": [
@@ -205,29 +301,35 @@ fn build_chat_body(model: &str, target_language: &str, segments: &[&str]) -> ser
             },
             {
                 "role": "user",
-                "content": serde_json::to_string(segments).expect("strings serialize to JSON"),
+                "content": segment,
             },
         ],
     })
 }
 
-/// Translates `segments` in one chat completions request and decodes the
-/// `{"translations": [...]}` payload, failing when the response cannot be
-/// turned into exactly one string per input segment.
-async fn translate_batch(
+/// Translates one segment in a single chat completions request and returns
+/// the model's plain-text answer with stray surrounding whitespace trimmed.
+/// The response is not parsed further: whatever the model writes for this one
+/// segment is the translation, so a reply that splits the input into several
+/// sentences or paragraphs still counts as a single result.
+async fn translate_segment(
     client: &reqwest::Client,
     settings: &TranslationSettings,
-    segments: &[&str],
-) -> Result<Vec<String>, TranslateError> {
+    segment: &str,
+) -> Result<String, TranslateError> {
     let url = format!(
         "{}/chat/completions",
         settings.endpoint.trim_end_matches('/')
     );
-    let body = build_chat_body(&settings.model, &settings.target_language, segments);
+    let body = build_chat_body(&settings.model, &settings.target_language, segment);
     let response = client
         .post(&url)
         .bearer_auth(&settings.api_key)
         .json(&body)
+        // The client is shared process-wide, so the command's budget lives on
+        // the request instead of the client. A long translation may stream for
+        // a while, hence the generous timeout.
+        .timeout(Duration::from_secs(120))
         .send()
         .await
         .map_err(|source| TranslateError::Request { source })?;
@@ -249,42 +351,15 @@ async fn translate_batch(
         .ok_or_else(|| TranslateError::BadResponse {
             detail: "missing choices[0].message.content".into(),
         })?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(content).map_err(|error| TranslateError::BadResponse {
-            detail: format!("translations JSON is invalid: {error}"),
-        })?;
-    let translations = parsed
-        .get("translations")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| TranslateError::BadResponse {
-            detail: "missing translations array".into(),
-        })?;
-    let translated: Vec<String> = translations
-        .iter()
-        .map(|value| value.as_str().map(str::to_owned))
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| TranslateError::BadResponse {
-            detail: "translations entries must be strings".into(),
-        })?;
-    if translated.len() != segments.len() {
-        return Err(TranslateError::BadResponse {
-            detail: format!(
-                "expected {} translations, got {}",
-                segments.len(),
-                translated.len()
-            ),
-        });
-    }
-    Ok(translated)
+    Ok(content.trim().to_string())
 }
 
 /// Core translation flow, separated from the Tauri command so integration
 /// tests can drive it with a real client against a mock server. Consults the
-/// cache first; only uncached segments hit the provider. A batch response
-/// that cannot be decoded into the right number of strings degrades to one
-/// request per segment (some compatible providers only answer single-segment
-/// payloads reliably). Results are cached before being returned in original
-/// order; cache write failures are logged and never fail a translation.
+/// cache first; every uncached segment gets its own single chat completion
+/// request, and the plain-text answer is cached before being returned in
+/// original order. Cache write failures are logged and never fail a
+/// translation.
 pub async fn translate_segments_with_client(
     client: &reqwest::Client,
     settings: &TranslationSettings,
@@ -292,64 +367,29 @@ pub async fn translate_segments_with_client(
     cache: &TranslationCache,
 ) -> Result<Vec<String>, TranslateError> {
     validate_endpoint(&settings.endpoint)?;
-    let keys: Vec<String> = segments
-        .iter()
-        .map(|segment| {
-            TranslationCache::cache_key(&settings.model, &settings.target_language, segment)
-        })
-        .collect();
-    let mut translated: Vec<Option<String>> = vec![None; segments.len()];
-    let mut uncached: Vec<usize> = Vec::new();
-    for (index, key) in keys.iter().enumerate() {
-        if let Some(hit) = cache.get(key) {
-            translated[index] = Some(hit);
-        } else {
-            uncached.push(index);
+    // Best-effort housekeeping before anything is translated: sweeps the
+    // cache down to its cap, throttled to at most once an hour per directory.
+    cache.prune_if_due();
+    let mut translated = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+        if let Some(hit) = cache.get(&key) {
+            translated.push(hit);
+            continue;
         }
-    }
-    if !uncached.is_empty() {
-        let uncached_text: Vec<&str> = uncached
-            .iter()
-            .map(|&index| segments[index].as_str())
-            .collect();
-        let resolved = match translate_batch(client, settings, &uncached_text).await {
-            Ok(resolved) => resolved,
-            Err(TranslateError::BadResponse { .. }) => {
-                let mut resolved = Vec::with_capacity(uncached.len());
-                for &index in &uncached {
-                    let segment = segments[index].as_str();
-                    let single = translate_batch(client, settings, &[segment]).await?;
-                    resolved.push(single.into_iter().next().ok_or_else(|| {
-                        TranslateError::BadResponse {
-                            detail: "per-segment translation returned no result".into(),
-                        }
-                    })?);
-                }
-                resolved
-            }
-            Err(error) => return Err(error),
-        };
-        for (position, &index) in uncached.iter().enumerate() {
-            translated[index] = Some(resolved[position].clone());
+        let value = translate_segment(client, settings, segment).await?;
+        if let Err(error) = cache.store(&key, &value) {
+            log::warn!("failed to cache translation for segment {segment:?}: {error}");
         }
+        translated.push(value);
     }
-    for (index, key) in keys.iter().enumerate() {
-        if let Some(value) = translated[index].as_deref() {
-            if let Err(error) = cache.store(key, value) {
-                log::warn!("failed to cache translation for segment {index}: {error}");
-            }
-        }
-    }
-    Ok(translated
-        .into_iter()
-        .map(|value| value.expect("every segment was resolved"))
-        .collect())
+    Ok(translated)
 }
 
 /// Lists the model ids advertised by an OpenAI-compatible endpoint (GET
 /// {endpoint}/models, Bearer api_key), sorted by id. Separated from the Tauri
 /// command so integration tests can drive it with a real client against a mock
-/// server. Failure styles match `translate_batch`: transport problems, non-
+/// server. Failure styles match `translate_segment`: transport problems, non-
 /// success statuses, and malformed payloads are all `TranslateError`s.
 pub async fn list_translation_models_with_client(
     client: &reqwest::Client,
@@ -361,6 +401,9 @@ pub async fn list_translation_models_with_client(
     let response = client
         .get(&url)
         .bearer_auth(api_key)
+        // The client is shared process-wide; the settings dialog's model
+        // check gets a shorter budget than translation.
+        .timeout(Duration::from_secs(30))
         .send()
         .await
         .map_err(|source| TranslateError::Request { source })?;
@@ -398,6 +441,35 @@ pub async fn list_translation_models_with_client(
     Ok(models)
 }
 
+/// One process-wide client shared by every translation command so pooled
+/// connections survive across calls. Redirects are never followed: by default
+/// reqwest would honor a 307/308 reply from a loopback endpoint and forward
+/// the request — POST body and document text included — to whatever host the
+/// Location header names, bypassing `validate_endpoint`. With the no-redirect
+/// policy in place those replies come back untouched and surface as ordinary
+/// non-success statuses (`TranslateError::ResponseStatus`).
+static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Builds (once) and returns the process-wide client. rustls requires a
+/// process-wide crypto provider before any Client is built; installing the
+/// ring provider is idempotent, so every call does it and whichever command
+/// runs first wins without ordering problems. The build-and-set below keeps
+/// the fallible first build out of `get_or_init` (its `get_or_try_init`
+/// counterpart is not stable on the pinned toolchain).
+pub fn shared_client() -> Result<&'static reqwest::Client, String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    if let Some(client) = SHARED_CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("failed to build HTTP client: {error}"))?;
+    // A concurrent first caller may have installed theirs; reuse it so the
+    // pool stays a single owner.
+    Ok(SHARED_CLIENT.get_or_init(|| client))
+}
+
 /// Translates a batch of markdown segments via an OpenAI-compatible chat
 /// completions endpoint, caching results per segment under the app data
 /// directory.
@@ -412,14 +484,7 @@ pub async fn translate_segments(
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let cache = TranslationCache::new(data_dir.join("translation-cache"));
-    // rustls requires a process-wide crypto provider before any Client is
-    // built; installing the ring provider is idempotent across the app.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|error| format!("failed to build HTTP client: {error}"))?;
-    translate_segments_with_client(&client, &settings, &segments, &cache)
+    translate_segments_with_client(shared_client()?, &settings, &segments, &cache)
         .await
         .map_err(|error| error.to_string())
 }
@@ -434,14 +499,7 @@ pub async fn list_translation_models(
     endpoint: String,
     api_key: String,
 ) -> Result<Vec<String>, String> {
-    // rustls requires a process-wide crypto provider before any Client is
-    // built; installing the ring provider is idempotent across the app.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|error| format!("failed to build HTTP client: {error}"))?;
-    list_translation_models_with_client(&client, &endpoint, &api_key)
+    list_translation_models_with_client(shared_client()?, &endpoint, &api_key)
         .await
         .map_err(|error| error.to_string())
 }
@@ -489,17 +547,72 @@ mod tests {
     }
 
     #[test]
-    fn chat_body_carries_model_prompt_and_segments_as_json() {
-        let body = build_chat_body("m", "中文", &["a", "b"]);
+    fn chat_body_carries_model_prompt_and_segment_as_text() {
+        let body = build_chat_body("m", "中文", "hello **world**");
         assert_eq!(body["model"], "m");
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "system");
         let system = messages[0]["content"].as_str().unwrap();
         assert!(system.contains("中文"));
-        assert!(system.contains("$...$"));
         assert!(system.contains("Markdown"));
+        assert!(system.contains("inline code"));
+        assert!(system.contains("$...$"));
+        assert!(system.contains("HTML"));
+        assert!(system.contains("no surrounding quotes"));
         assert_eq!(messages[1]["role"], "user");
-        assert_eq!(messages[1]["content"], r#"["a","b"]"#);
+        assert_eq!(messages[1]["content"], "hello **world**");
+    }
+
+    #[test]
+    fn eviction_removes_the_oldest_entries_down_to_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TranslationCache::new(dir.path().join("translation-cache"));
+        std::fs::create_dir_all(cache.dir()).unwrap();
+        // Five entries with clearly distinct modification times, oldest first.
+        for i in 0..5u64 {
+            let path = cache.dir().join(format!("{i:064x}.json"));
+            std::fs::write(&path, "x").unwrap();
+            let times = fs::FileTimes::new()
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(i * 3600));
+            fs::File::open(&path).unwrap().set_times(times).unwrap();
+        }
+        // A non-json file must never be counted or removed.
+        std::fs::write(cache.dir().join("README"), "keep me").unwrap();
+
+        let removed = cache.evict_oldest_entries(3).unwrap();
+        assert_eq!(removed, 2, "the two oldest entries are evicted");
+        let mut remaining: Vec<String> = fs::read_dir(cache.dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                "0000000000000000000000000000000000000000000000000000000000000002.json",
+                "0000000000000000000000000000000000000000000000000000000000000003.json",
+                "0000000000000000000000000000000000000000000000000000000000000004.json",
+                "README",
+            ]
+        );
+
+        // Already at or under the limit: nothing is removed.
+        assert_eq!(cache.evict_oldest_entries(3).unwrap(), 0);
+        assert_eq!(cache.evict_oldest_entries(10).unwrap(), 0);
+    }
+
+    #[test]
+    fn eviction_is_a_no_op_for_missing_directories_and_never_removes_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TranslationCache::new(dir.path().join("translation-cache"));
+        // A cache directory that never existed is not an error.
+        assert_eq!(cache.evict_oldest_entries(10).unwrap(), 0);
+        // A directory that happens to end in .json is not a cache entry; the
+        // removal attempt fails and is logged, never fatal, and the directory
+        // survives.
+        std::fs::create_dir_all(cache.dir().join("dir.json")).unwrap();
+        assert_eq!(cache.evict_oldest_entries(0).unwrap(), 0);
+        assert!(cache.dir().join("dir.json").is_dir());
     }
 }

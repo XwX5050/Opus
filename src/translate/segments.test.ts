@@ -112,14 +112,24 @@ describe("splitMarkdownSegments", () => {
     expect(segments.at(-1)).toEqual({ kind: "translatable", text: "text\n" });
   });
 
-  it("protects one-line $$...$$ math blocks", () => {
+  it("treats one-line $$...$$ as ordinary translatable text", () => {
     const doc = "$$ E = mc^2 $$\n\nmore\n";
     const segments = splitMarkdownSegments(doc);
     expect(segments[0]).toEqual({
-      kind: "protected",
+      kind: "translatable",
       text: "$$ E = mc^2 $$\n",
     });
     expect(segments.at(-1)).toEqual({ kind: "translatable", text: "more\n" });
+  });
+
+  it("does not treat prose such as `$$ 500 元/人` as a math block", () => {
+    const doc = "$$ 500 元/人\n\n后面这段也要翻译\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(texts(segments, "translatable")).toEqual([
+      "$$ 500 元/人\n",
+      "后面这段也要翻译\n",
+    ]);
+    expect(joined(segments)).toBe(doc);
   });
 
   it("protects an unclosed display math block to the end of the document", () => {
@@ -147,6 +157,21 @@ describe("splitMarkdownSegments", () => {
     expect(splitMarkdownSegments(unclosed)).toEqual([
       { kind: "protected", text: unclosed },
     ]);
+  });
+
+  it("only treats a line-start `<!--` as a comment block opener", () => {
+    const doc = "text with <!-- inline marker\n\n<!--\n注释\n-->\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(texts(segments, "translatable")).toEqual([
+      "text with <!-- inline marker\n",
+    ]);
+    expect(
+      segments.some(
+        (segment) =>
+          segment.kind === "protected" && segment.text.includes("注释"),
+      ),
+    ).toBe(true);
+    expect(joined(segments)).toBe(doc);
   });
 
   it("splits CRLF documents losslessly", () => {

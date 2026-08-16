@@ -53,7 +53,7 @@ export const normalizeTranslationSettings = (
 export type TranslationViewState =
   | {
       readonly phase: "translating";
-      /** Partial translation shown while batches are still in flight. */
+      /** Partial translation shown while segments are still in flight. */
       readonly translatedText?: string;
       readonly completedBatches?: number;
       readonly totalBatches?: number;

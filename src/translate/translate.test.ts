@@ -71,43 +71,39 @@ describe("translateDocument", () => {
     expect(port.translateSegments).not.toHaveBeenCalled();
   });
 
-  it("translates a short document in a single call, passing settings through", async () => {
+  it("translates a short document in one call per segment, passing settings through", async () => {
     const doc = "hello\n\nworld\n";
     const port = echoPort();
     await expect(translateDocument(port, settings, doc)).resolves.toBe(
       "HELLO\n\nWORLD\n",
     );
-    expect(port.translateSegments).toHaveBeenCalledTimes(1);
-    expect(port.translateSegments).toHaveBeenCalledWith(settings, [
+    expect(port.translateSegments).toHaveBeenCalledTimes(2);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, [
       "hello\n",
+    ]);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(2, settings, [
       "world\n",
     ]);
   });
 
-  it("batches translatable blocks within the 1500-character budget", async () => {
+  it("sends every translatable segment in its own call regardless of size", async () => {
     const paras = Array.from({ length: 5 }, () => paragraph(700));
     const doc = paras.join("\n");
     const port = echoPort();
     await expect(translateDocument(port, settings, doc)).resolves.toBe(
       doc.toUpperCase(),
     );
-    expect(port.translateSegments).toHaveBeenCalledTimes(3);
-    expect(port.translateSegments).toHaveBeenNthCalledWith(
-      1,
-      settings,
-      paras.slice(0, 2),
-    );
-    expect(port.translateSegments).toHaveBeenNthCalledWith(
-      2,
-      settings,
-      paras.slice(2, 4),
-    );
-    expect(port.translateSegments).toHaveBeenNthCalledWith(3, settings, [
-      paras[4],
-    ]);
+    expect(port.translateSegments).toHaveBeenCalledTimes(5);
+    for (let index = 0; index < paras.length; index++) {
+      expect(port.translateSegments).toHaveBeenNthCalledWith(
+        index + 1,
+        settings,
+        [paras[index]],
+      );
+    }
   });
 
-  it("sends an over-budget single segment in its own batch", async () => {
+  it("sends an over-budget single segment in its own call like any other", async () => {
     const big = paragraph(5000);
     const small = paragraph(100);
     const doc = big + "\n" + small;
@@ -122,7 +118,7 @@ describe("translateDocument", () => {
     );
   });
 
-  it("keeps at most four translateSegments calls in flight", async () => {
+  it("keeps at most ten translateSegments calls in flight by default", async () => {
     const paras = Array.from({ length: 12 }, () => paragraph(700));
     const doc = paras.join("\n");
     let inFlight = 0;
@@ -146,8 +142,8 @@ describe("translateDocument", () => {
       ),
     };
     const running = translateDocument(port, settings, doc);
-    // The pool fills its four slots synchronously.
-    expect(pending).toHaveLength(4);
+    // The pool fills its ten slots synchronously.
+    expect(pending).toHaveLength(10);
 
     // Drain the pool; a new call only starts as a slot frees up.
     while (pending.length > 0) {
@@ -156,11 +152,50 @@ describe("translateDocument", () => {
       await Promise.resolve();
     }
     await expect(running).resolves.toBe(doc.toUpperCase());
-    expect(peak).toBe(4);
+    expect(peak).toBe(10);
+    expect(port.translateSegments).toHaveBeenCalledTimes(12);
+  });
+
+  it("honors an explicit concurrency cap below the default", async () => {
+    const paras = Array.from({ length: 6 }, () => paragraph(700));
+    const doc = paras.join("\n");
+    let inFlight = 0;
+    let peak = 0;
+    const pending: PendingCall[] = [];
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        (_settings: TranslationSettings, segments: string[]) => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          return new Promise<string[]>((resolve) => {
+            pending.push({
+              segments,
+              resolve: (value) => {
+                inFlight -= 1;
+                resolve(value);
+              },
+            });
+          });
+        },
+      ),
+    };
+    const running = translateDocument(port, settings, doc, {
+      concurrency: 2,
+    });
+    // The pool fills its two slots synchronously.
+    expect(pending).toHaveLength(2);
+
+    while (pending.length > 0) {
+      const entry = pending.shift()!;
+      entry.resolve(entry.segments.map((segment) => segment.toUpperCase()));
+      await Promise.resolve();
+    }
+    await expect(running).resolves.toBe(doc.toUpperCase());
+    expect(peak).toBe(2);
     expect(port.translateSegments).toHaveBeenCalledTimes(6);
   });
 
-  it("reassembles results in document order when batches finish out of order", async () => {
+  it("reassembles results in document order when segments finish out of order", async () => {
     const paras = Array.from({ length: 4 }, () => paragraph(700));
     const doc = paras.join("\n");
     const partials: string[] = [];
@@ -168,16 +203,16 @@ describe("translateDocument", () => {
     const running = translateDocument(port, settings, doc, {
       onPartial: (partial) => partials.push(partial.text),
     });
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(4);
 
-    // The second batch lands first: its paragraphs translate while the first
-    // batch's paragraphs still show the original text.
-    pending[1].resolve(
-      pending[1].segments.map((segment) => segment.toUpperCase()),
-    );
+    // The later segments land first: they translate while the earlier
+    // segments still show the original text.
+    pending[2].resolve([pending[2].segments[0].toUpperCase()]);
     await Promise.resolve();
-    expect(partials).toHaveLength(1);
-    expect(partials[0]).toBe(
+    pending[3].resolve([pending[3].segments[0].toUpperCase()]);
+    await Promise.resolve();
+    expect(partials).toHaveLength(2);
+    expect(partials[1]).toBe(
       paras[0] +
         "\n" +
         paras[1] +
@@ -187,15 +222,15 @@ describe("translateDocument", () => {
         paras[3].toUpperCase(),
     );
 
-    pending[0].resolve(
-      pending[0].segments.map((segment) => segment.toUpperCase()),
-    );
+    pending[0].resolve([pending[0].segments[0].toUpperCase()]);
+    await Promise.resolve();
+    pending[1].resolve([pending[1].segments[0].toUpperCase()]);
     await expect(running).resolves.toBe(doc.toUpperCase());
-    expect(partials).toHaveLength(2);
-    expect(partials[1]).toBe(doc.toUpperCase());
+    expect(partials).toHaveLength(4);
+    expect(partials[3]).toBe(doc.toUpperCase());
   });
 
-  it("reports every completed batch through onPartial with progress counts", async () => {
+  it("reports every completed segment through onPartial with progress counts", async () => {
     const paras = Array.from({ length: 6 }, () => paragraph(700));
     const doc = paras.join("\n");
     const partials: TranslationPartial[] = [];
@@ -203,19 +238,15 @@ describe("translateDocument", () => {
     await translateDocument(port, settings, doc, {
       onPartial: (partial) => partials.push(partial),
     });
-    expect(partials).toHaveLength(3);
+    expect(partials).toHaveLength(6);
     expect(partials.map((partial) => partial.completedBatches)).toEqual([
-      1, 2, 3,
+      1, 2, 3, 4, 5, 6,
     ]);
-    expect(partials[0].totalBatches).toBe(3);
-    expect(partials[1].text).toBe(
-      paras
-        .slice(0, 4)
-        .map((para) => para.toUpperCase())
-        .concat(paras.slice(4))
-        .join("\n"),
+    expect(partials[0].totalBatches).toBe(6);
+    expect(partials[0].text).toBe(
+      [paras[0].toUpperCase()].concat(paras.slice(1)).join("\n"),
     );
-    expect(partials[2].text).toBe(doc.toUpperCase());
+    expect(partials[5].text).toBe(doc.toUpperCase());
   });
 
   it("does not call onPartial when nothing is translatable", async () => {
@@ -262,6 +293,18 @@ describe("translateDocument", () => {
     ).resolves.toBe("译文one\n\n译文two\n");
   });
 
+  it("falls back to the original text when the model returns an empty result", async () => {
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        async (_settings: TranslationSettings, segments: string[]) =>
+          segments.map((segment) => (segment === "one\n" ? "" : "\n  \n")),
+      ),
+    };
+    await expect(
+      translateDocument(port, settings, "one\n\ntwo\n"),
+    ).resolves.toBe("one\n\ntwo\n");
+  });
+
   it("rejects with an AbortError when aborted before the first call", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -274,7 +317,7 @@ describe("translateDocument", () => {
     expect(port.translateSegments).not.toHaveBeenCalled();
   });
 
-  it("rejects with an AbortError and starts no new batches once aborted", async () => {
+  it("rejects with an AbortError and starts no new segments once aborted", async () => {
     const paras = Array.from({ length: 5 }, () => paragraph(700));
     const doc = paras.join("\n");
     const controller = new AbortController();
@@ -282,14 +325,14 @@ describe("translateDocument", () => {
     const running = translateDocument(port, settings, doc, {
       signal: controller.signal,
     });
-    // The pool fills immediately (three batches here); the abort only stops
-    // batches that have not started yet.
-    expect(started).toHaveLength(3);
+    // The pool fills immediately (all five segments here); the abort only
+    // stops segments that have not started yet.
+    expect(started).toHaveLength(5);
 
     controller.abort();
     for (const entry of pending) entry.resolve([]);
     await expect(running).rejects.toMatchObject({ name: "AbortError" });
-    expect(started).toHaveLength(3);
+    expect(started).toHaveLength(5);
   });
 
   it("propagates port errors", async () => {

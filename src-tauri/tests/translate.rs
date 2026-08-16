@@ -1,6 +1,6 @@
 use markdown_edit_lib::translate::{
-    list_translation_models_with_client, translate_segments_with_client, TranslationCache,
-    TranslationSettings,
+    list_translation_models_with_client, shared_client, translate_segments_with_client,
+    TranslationCache, TranslationSettings,
 };
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -163,9 +163,17 @@ fn http_status(status: u16, reason: &str) -> Vec<u8> {
     response
 }
 
-/// A chat completions response whose content is the given translations array.
-fn chat_response(translations: &[&str]) -> Vec<u8> {
-    let content = serde_json::json!({ "translations": translations }).to_string();
+/// A 307 Temporary Redirect whose Location points elsewhere; a client that
+/// follows redirects would make a second request against that target.
+fn http_redirect(location: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes()
+}
+
+/// A chat completions response whose content is a plain-text translation.
+fn chat_text_response(content: &str) -> Vec<u8> {
     let payload = serde_json::json!({
         "choices": [{ "message": { "role": "assistant", "content": content } }]
     });
@@ -181,8 +189,9 @@ fn settings(endpoint: &str) -> TranslationSettings {
     }
 }
 
-/// Installs the ring crypto provider (idempotent) and builds a client for
-/// the mock server, mirroring what the Tauri command does.
+/// A plain client for protocol tests. The production commands share one
+/// process-wide client via `shared_client()` (redirects disabled); that
+/// production client is exercised by the redirect tests below.
 fn client() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::new()
@@ -262,77 +271,103 @@ async fn full_cache_hit_never_touches_the_network() {
 }
 
 #[tokio::test]
-async fn uncached_segments_are_translated_in_one_request_and_then_cached() {
+async fn uncached_segments_are_translated_one_request_each_and_then_cached() {
     let dir = tempfile::tempdir().unwrap();
     let cache = TranslationCache::new(dir.path().join("translation-cache"));
     let server = MockServer::spawn();
     let settings = settings(&server.endpoint());
     let texts = ["one", "two"];
-    server.queue(chat_response(&["一", "二"]));
+    server.queue(chat_text_response("一"));
+    server.queue(chat_text_response("二"));
 
     let client = client();
     let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
         .await
         .unwrap();
     assert_eq!(result, ["一", "二"]);
-    assert_eq!(server.request_count(), 1);
+    // One plain-text chat completion per uncached segment.
+    assert_eq!(server.request_count(), 2);
 
-    let body: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
-    assert_eq!(body["model"], "test-model");
-    let messages = body["messages"].as_array().unwrap();
+    // The first request carries the new system prompt and the raw segment
+    // text as the user message — no JSON array envelope.
+    let first: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
+    assert_eq!(first["model"], "test-model");
+    let messages = first["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
     let system = messages[0]["content"].as_str().unwrap();
     assert!(system.contains("中文"));
     assert!(system.contains("Markdown"));
-    assert_eq!(messages[1]["content"], r#"["one","two"]"#);
+    assert!(system.contains("inline code"));
+    assert!(system.contains("$...$"));
+    assert!(system.contains("HTML"));
+    assert!(system.contains("no surrounding quotes"));
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[1]["content"], "one");
+    let second: serde_json::Value = serde_json::from_slice(&server.request_body(1)).unwrap();
+    assert_eq!(second["messages"][1]["content"], "two");
 
     // a second run is served entirely from the cache
     let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
         .await
         .unwrap();
     assert_eq!(result, ["一", "二"]);
+    assert_eq!(server.request_count(), 2);
+}
+
+#[tokio::test]
+async fn multi_sentence_output_for_a_single_segment_is_accepted_as_is() {
+    // Models sometimes split one paragraph into several sentences or lines.
+    // With the plain-text protocol there is no count to validate: the whole
+    // response is the translation for the segment.
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(chat_text_response("一、二、三"));
+
+    let client = client();
+    let result = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
+        .await
+        .unwrap();
+    assert_eq!(result, ["一、二、三"]);
     assert_eq!(server.request_count(), 1);
 }
 
 #[tokio::test]
-async fn batch_parse_failure_falls_back_to_one_request_per_segment() {
+async fn response_content_is_trimmed_to_strip_stray_whitespace() {
     let dir = tempfile::tempdir().unwrap();
     let cache = TranslationCache::new(dir.path().join("translation-cache"));
     let server = MockServer::spawn();
     let settings = settings(&server.endpoint());
-    let texts = ["one", "two"];
-    server.queue(http_response("not json"));
-    server.queue(chat_response(&["一"]));
-    server.queue(chat_response(&["二"]));
+    server.queue(chat_text_response("  \n你好，世界！\n  "));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
+    let result = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
         .await
         .unwrap();
-    assert_eq!(result, ["一", "二"]);
-    assert_eq!(server.request_count(), 3);
-    // per-segment requests carry a single-element array
-    let body: serde_json::Value = serde_json::from_slice(&server.request_body(1)).unwrap();
-    assert_eq!(body["messages"][1]["content"], r#"["one"]"#);
+    assert_eq!(result, ["你好，世界！"]);
+    assert_eq!(server.request_count(), 1);
 }
 
 #[tokio::test]
-async fn batch_length_mismatch_falls_back_to_one_request_per_segment() {
+async fn missing_choices_content_is_reported_as_a_bad_response() {
     let dir = tempfile::tempdir().unwrap();
     let cache = TranslationCache::new(dir.path().join("translation-cache"));
     let server = MockServer::spawn();
     let settings = settings(&server.endpoint());
-    let texts = ["one", "two"];
-    server.queue(chat_response(&["一", "二", "extra"]));
-    server.queue(chat_response(&["一"]));
-    server.queue(chat_response(&["二"]));
+    server.queue(http_response(r#"{"choices": []}"#));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
+    let error = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
         .await
-        .unwrap();
-    assert_eq!(result, ["一", "二"]);
-    assert_eq!(server.request_count(), 3);
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("missing choices[0].message.content"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(server.request_count(), 1);
 }
 
 #[tokio::test]
@@ -439,4 +474,79 @@ async fn list_models_rejects_insecure_endpoints_before_any_request() {
         .unwrap_err();
     assert!(error.to_string().contains("not allowed"));
     assert_eq!(server.request_count(), 0);
+}
+
+#[tokio::test]
+async fn redirects_are_never_followed_and_reported_as_errors() {
+    // A loopback endpoint must not be able to use 307 to forward the request
+    // (POST body with document text, bearer key) to an arbitrary host. The
+    // shared production client disables redirects, so the 307 itself is
+    // returned and reported as a non-success status instead of being followed.
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let forward_target = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(http_redirect(&format!(
+        "{}/evil",
+        forward_target.endpoint()
+    )));
+
+    let client = shared_client().unwrap();
+    let error = translate_segments_with_client(client, &settings, &segments(&["one"]), &cache)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("307"),
+        "the 307 response itself must be reported, got: {error}"
+    );
+    // Exactly one request reached the origin; nothing hit the redirect target.
+    assert_eq!(server.request_count(), 1);
+    assert_eq!(forward_target.request_count(), 0);
+}
+
+#[tokio::test]
+async fn list_models_redirects_are_reported_and_never_followed() {
+    let server = MockServer::spawn();
+    let forward_target = MockServer::spawn();
+    server.queue(http_redirect(&format!(
+        "{}/steal",
+        forward_target.endpoint()
+    )));
+
+    let client = shared_client().unwrap();
+    let error = list_translation_models_with_client(client, &server.endpoint(), "test-key")
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("307"),
+        "the 307 response itself must be reported, got: {error}"
+    );
+    assert_eq!(server.request_count(), 1);
+    assert_eq!(forward_target.request_count(), 0);
+}
+
+#[test]
+fn prune_if_due_evicts_overflow_once_per_interval() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("translation-cache");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    // Fill past the cap with plain files; the sweep only looks at the `.json`
+    // extension and the mtime, never the content.
+    for i in 0..(markdown_edit_lib::translate::CACHE_ENTRY_LIMIT + 3) {
+        std::fs::write(cache_dir.join(format!("{i}.json")), "x").unwrap();
+    }
+    let cache = TranslationCache::new(cache_dir.clone());
+
+    // The first call scans and evicts the overflow back to the cap.
+    cache.prune_if_due();
+    assert_eq!(std::fs::read_dir(&cache_dir).unwrap().count(), 5000);
+
+    // A second call within the interval is throttled: a fresh overflow stays
+    // in place until the next sweep.
+    for i in 0..2 {
+        std::fs::write(cache_dir.join(format!("extra-{i}.json")), "x").unwrap();
+    }
+    cache.prune_if_due();
+    assert_eq!(std::fs::read_dir(&cache_dir).unwrap().count(), 5002);
 }
