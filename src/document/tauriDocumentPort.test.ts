@@ -207,7 +207,7 @@ describe("tauri document port clipboard images and asset scopes", () => {
       expect(invoke).toHaveBeenCalledWith("save_clipboard_image", {
         path: "/notes/image-20260723-090507.png",
         bytes: [137, 80, 78, 71],
-        mime_type: "image/png",
+        mimeType: "image/png",
       });
       expect(result).toBe("image-20260723-090507.png");
     } finally {
@@ -230,7 +230,7 @@ describe("tauri document port clipboard images and asset scopes", () => {
     expect(invoke).toHaveBeenCalledWith("save_clipboard_image", {
       path: "/elsewhere/pic.jpg",
       bytes: [255, 216],
-      mime_type: "image/jpeg",
+      mimeType: "image/jpeg",
     });
     expect(result).toBe("/elsewhere/pic.jpg");
   });
@@ -268,9 +268,9 @@ describe("tauri document port clipboard images and asset scopes", () => {
     await port.acquireWorkspaceScope("ws-1", "/notes");
     await port.releaseAssetScope("tab-1");
     expect(invoke).toHaveBeenCalledTimes(3);
-    expect(invoke).toHaveBeenNthCalledWith(1, "acquire_document_scope", { consumer_id: "tab-1", path: "/notes/a.md" });
-    expect(invoke).toHaveBeenNthCalledWith(2, "acquire_workspace_scope", { consumer_id: "ws-1", root: "/notes" });
-    expect(invoke).toHaveBeenNthCalledWith(3, "release_asset_scope", { consumer_id: "tab-1" });
+    expect(invoke).toHaveBeenNthCalledWith(1, "acquire_document_scope", { consumerId: "tab-1", path: "/notes/a.md" });
+    expect(invoke).toHaveBeenNthCalledWith(2, "acquire_workspace_scope", { consumerId: "ws-1", root: "/notes" });
+    expect(invoke).toHaveBeenNthCalledWith(3, "release_asset_scope", { consumerId: "tab-1" });
   });
 
   it("exposes convertFileSrc through the preview URL helper", () => {
@@ -298,12 +298,12 @@ describe("tauri document port workspace commands", () => {
     ]);
   });
 
-  it("passes rename_entry's new name as snake case to_name", async () => {
+  it("passes rename_entry's new name as camel case toName", async () => {
     invoke.mockResolvedValue({ name: "renamed.md", path: "/ws/renamed.md", is_directory: false });
 
     const entry = await createTauriDocumentPort().renameEntry("/ws", "old.md", "renamed.md");
 
-    expect(invoke).toHaveBeenCalledWith("rename_entry", { root: "/ws", from: "old.md", to_name: "renamed.md" });
+    expect(invoke).toHaveBeenCalledWith("rename_entry", { root: "/ws", from: "old.md", toName: "renamed.md" });
     expect(entry).toEqual({ name: "renamed.md", path: "/ws/renamed.md", isDirectory: false });
   });
 
@@ -418,9 +418,9 @@ describe("tauri document port disk watching and recovery drafts", () => {
     await port.watchWorkspace("ws-1", "/notes");
     await port.unwatch("tab-1");
     expect(invoke).toHaveBeenCalledTimes(3);
-    expect(invoke).toHaveBeenNthCalledWith(1, "watch_document", { consumer_id: "tab-1", path: "/notes/a.md" });
-    expect(invoke).toHaveBeenNthCalledWith(2, "watch_workspace", { consumer_id: "ws-1", root: "/notes" });
-    expect(invoke).toHaveBeenNthCalledWith(3, "unwatch", { consumer_id: "tab-1" });
+    expect(invoke).toHaveBeenNthCalledWith(1, "watch_document", { consumerId: "tab-1", path: "/notes/a.md" });
+    expect(invoke).toHaveBeenNthCalledWith(2, "watch_workspace", { consumerId: "ws-1", root: "/notes" });
+    expect(invoke).toHaveBeenNthCalledWith(3, "unwatch", { consumerId: "tab-1" });
   });
 
   it("maps structured watch command errors", async () => {
@@ -831,7 +831,7 @@ describe("tauri document port translation", () => {
     ).rejects.toMatchObject({ code: "io", message: "boom" });
   });
 
-  it("invokes list_translation_models with a snake case api key", async () => {
+  it("invokes list_translation_models with a camel case api key", async () => {
     invoke.mockResolvedValue(["gpt-4o", "gpt-4o-mini"]);
     const result = await createTauriDocumentPort().listTranslationModels(
       "https://api.openai.com/v1",
@@ -839,7 +839,7 @@ describe("tauri document port translation", () => {
     );
     expect(invoke).toHaveBeenCalledWith("list_translation_models", {
       endpoint: "https://api.openai.com/v1",
-      api_key: "secret",
+      apiKey: "secret",
     });
     expect(result).toEqual(["gpt-4o", "gpt-4o-mini"]);
   });

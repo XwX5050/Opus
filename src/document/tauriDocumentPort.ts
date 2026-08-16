@@ -249,19 +249,19 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       });
       if (path === null) return null;
       try {
-        await invoke("save_clipboard_image", { path, bytes: Array.from(input.bytes), mime_type: input.mimeType });
+        await invoke("save_clipboard_image", { path, bytes: Array.from(input.bytes), mimeType: input.mimeType });
       } catch (error) { throw failure(error); }
       if (directory && path.startsWith(`${directory}/`)) return path.slice(directory.length + 1);
       return path;
     },
     async acquireDocumentScope(consumerId: string, path: string): Promise<void> {
-      try { await invoke("acquire_document_scope", { consumer_id: consumerId, path }); } catch (error) { throw failure(error); }
+      try { await invoke("acquire_document_scope", { consumerId, path }); } catch (error) { throw failure(error); }
     },
     async acquireWorkspaceScope(consumerId: string, root: string): Promise<void> {
-      try { await invoke("acquire_workspace_scope", { consumer_id: consumerId, root }); } catch (error) { throw failure(error); }
+      try { await invoke("acquire_workspace_scope", { consumerId, root }); } catch (error) { throw failure(error); }
     },
     async releaseAssetScope(consumerId: string): Promise<void> {
-      try { await invoke("release_asset_scope", { consumer_id: consumerId }); } catch (error) { throw failure(error); }
+      try { await invoke("release_asset_scope", { consumerId }); } catch (error) { throw failure(error); }
     },
     async chooseWorkspace(): Promise<WorkspaceRoot | null> {
       try {
@@ -285,19 +285,19 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       try { return directoryEntry(await invoke<DirectoryEntryDto>("create_markdown_file", { root, relative })); } catch (error) { throw failure(error); }
     },
     async renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry> {
-      try { return directoryEntry(await invoke<DirectoryEntryDto>("rename_entry", { root, from, to_name: toName })); } catch (error) { throw failure(error); }
+      try { return directoryEntry(await invoke<DirectoryEntryDto>("rename_entry", { root, from, toName })); } catch (error) { throw failure(error); }
     },
     async trashEntry(root: string, relative: string): Promise<void> {
       try { await invoke("trash_entry", { root, relative }); } catch (error) { throw failure(error); }
     },
     async watchDocument(consumerId: string, path: string): Promise<void> {
-      try { await invoke("watch_document", { consumer_id: consumerId, path }); } catch (error) { throw failure(error); }
+      try { await invoke("watch_document", { consumerId, path }); } catch (error) { throw failure(error); }
     },
     async watchWorkspace(consumerId: string, root: string): Promise<void> {
-      try { await invoke("watch_workspace", { consumer_id: consumerId, root }); } catch (error) { throw failure(error); }
+      try { await invoke("watch_workspace", { consumerId, root }); } catch (error) { throw failure(error); }
     },
     async unwatch(consumerId: string): Promise<void> {
-      try { await invoke("unwatch", { consumer_id: consumerId }); } catch (error) { throw failure(error); }
+      try { await invoke("unwatch", { consumerId }); } catch (error) { throw failure(error); }
     },
     async translateSegments(settings: TranslationSettings, segments: string[]): Promise<string[]> {
       try {
@@ -314,7 +314,7 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async listTranslationModels(endpoint: string, apiKey: string): Promise<string[]> {
       try {
-        return await invoke<string[]>("list_translation_models", { endpoint, api_key: apiKey });
+        return await invoke<string[]>("list_translation_models", { endpoint, apiKey });
       } catch (error) { throw failure(error); }
     },
     subscribeToDiskEvents(handler: (event: DiskEvent) => void): Promise<() => void> {
