@@ -4,7 +4,10 @@ import { EditorState } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
-import { frontmatterMarkdownExtension } from "./frontmatterExtension";
+import {
+  frontmatterMarkdownExtension,
+  maxFrontMatterLines,
+} from "./frontmatterExtension";
 import {
   hiddenFrontmatterDecorations,
   livePreviewExtension,
@@ -54,6 +57,52 @@ describe("frontmatterMarkdownExtension", () => {
   it("does not treat an unclosed opening delimiter as frontmatter", () => {
     const state = createState("---\ntext without closing delimiter\n");
     expect(treeString(state)).not.toContain("FrontMatter");
+  });
+
+  it("recognizes frontmatter whose closing delimiter sits exactly at the scan cap", () => {
+    const doc =
+      "---\n" +
+      "k: v\n".repeat(maxFrontMatterLines - 1) +
+      "---\nbody\n";
+    const state = createState(doc);
+    expect(treeString(state)).toContain("FrontMatter");
+  });
+
+  it("does not scan past the line cap; oversized frontmatter falls back to horizontal rules", () => {
+    const doc =
+      "---\n" + "k: v\n".repeat(maxFrontMatterLines) + "---\nbody\n";
+    const state = createState(doc);
+    const tree = treeString(state);
+    expect(tree).not.toContain("FrontMatter");
+    expect(tree).toContain("HorizontalRule");
+  });
+
+  it("keeps an unclosed opening delimiter on a huge document cheap to parse", () => {
+    const huge = "---\n" + "line without closing delimiter\n".repeat(100_000);
+    const createStateFor = (withFrontmatter: boolean) => {
+      const extensions = withFrontmatter
+        ? [GFM, frontmatterMarkdownExtension]
+        : [GFM];
+      const startedAt = performance.now();
+      const state = EditorState.create({
+        doc: huge,
+        extensions: [markdown({ extensions })],
+      });
+      syntaxTree(state).toString();
+      return performance.now() - startedAt;
+    };
+    // Warm up the JIT, then take the minimum of a few runs so a stray GC
+    // pause or scheduling hiccup cannot inflate the frontmatter side.
+    createStateFor(true);
+    createStateFor(false);
+    const withFrontmatter = Math.min(...[0, 1, 2].map(() => createStateFor(true)));
+    const withoutFrontmatter = Math.min(
+      ...[0, 1, 2].map(() => createStateFor(false)),
+    );
+    // The closing scan used to walk all 100k lines, adding ~160ms of parse
+    // time; bounded to maxFrontMatterLines it adds only a few ms, so this
+    // generous ceiling only trips when the scan regresses.
+    expect(withFrontmatter - withoutFrontmatter).toBeLessThan(100);
   });
 
   it("leaves a mid-document `---` after a paragraph as a setext heading", () => {

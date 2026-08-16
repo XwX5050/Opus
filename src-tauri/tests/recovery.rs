@@ -179,3 +179,63 @@ fn listing_an_empty_or_missing_store_is_empty() {
     let store = RecoveryStore::new(dir.path().join("recovery"));
     assert!(store.list_drafts().unwrap().is_empty());
 }
+
+#[test]
+fn listing_skips_text_decoding_so_odd_text_payloads_still_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let store = RecoveryStore::new(recovery_dir.clone());
+    std::fs::create_dir_all(&recovery_dir).unwrap();
+    // The listing path ignores the text field's value entirely, so a payload
+    // that is not a JSON string (which a full DraftRecord read rejects) still
+    // appears in the listing.
+    std::fs::write(
+        recovery_dir.join("document-1.json"),
+        r#"{"draft_id":"document-1","original_path":null,"title":"t","text":{"nested":[1,2,3]},"has_utf8_bom":false,"newline":"lf","saved_text_hash":"h","saved_version":null}"#,
+    )
+    .unwrap();
+
+    let listed = store.list_drafts().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].draft_id, "document-1");
+    assert_eq!(listed[0].title, "t");
+    assert_eq!(listed[0].saved_text_hash, "h");
+
+    // The full read still surfaces the corruption on demand.
+    let error = store.read_draft("document-1").unwrap_err();
+    assert!(matches!(
+        error,
+        markdown_edit_lib::recovery::RecoveryError::Corrupt { .. }
+    ));
+}
+
+#[test]
+fn orphaned_temp_files_are_removed_by_listing_but_nothing_else_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let store = RecoveryStore::new(recovery_dir.clone());
+    store
+        .write_draft(&draft("document-1", None, "one"))
+        .unwrap();
+    // A crash between temp creation and rename leaves a tempfile-shaped file.
+    std::fs::write(recovery_dir.join(".tmpAb3dE9"), "partial write").unwrap();
+    // Non-matching names survive: too long, unrelated content, or a temp
+    // name that is actually a directory.
+    std::fs::write(recovery_dir.join(".tmpAb3dE10"), "wrong length").unwrap();
+    std::fs::write(recovery_dir.join("notes.txt"), "unrelated").unwrap();
+    std::fs::create_dir(recovery_dir.join(".tmpXy12Zk")).unwrap();
+
+    let listed = store.list_drafts().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].draft_id, "document-1");
+
+    let mut names: Vec<_> = std::fs::read_dir(&recovery_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![".tmpAb3dE10", ".tmpXy12Zk", "document-1.json", "notes.txt"]
+    );
+}

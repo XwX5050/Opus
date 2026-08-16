@@ -1,7 +1,8 @@
 use markdown_edit_lib::asset_scope::AssetScopeRegistry;
 use markdown_edit_lib::document_commands::{
-    acquire_scoped, open_document_impl, save_document_impl, CommandError, SaveDocumentRequest,
-    SharedAssetScopes,
+    acquire_scoped, close_workspace_impl, create_markdown_file_impl, list_directory_impl,
+    open_document_impl, open_workspace_impl, rename_entry_impl, save_document_impl,
+    trash_entry_impl, CommandError, SaveDocumentRequest, SharedAssetScopes, SharedWorkspaceAnchor,
 };
 use markdown_edit_lib::document_io::Newline;
 
@@ -243,4 +244,131 @@ fn open_document_returns_canonical_path_when_opened_through_symlinked_directory(
     let opened = open_document_impl(link_dir.join("a.md")).unwrap();
 
     assert_eq!(opened.path, target.canonicalize().unwrap());
+}
+
+// --- workspace root anchoring (W5) ---
+
+fn is_permission_denied(error: &CommandError) -> bool {
+    error.code == "permission_denied"
+}
+
+/// A tempdir with an anchored `workspace` root and a sibling `stealth`
+/// directory that no command should ever reach. Paths are canonicalized so
+/// they equal the anchor `open_workspace` stores — the renderer always echoes
+/// the canonical root the open call returns, never the raw picker path.
+fn anchored_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("workspace");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.md"), b"a").unwrap();
+    let stealth = dir.path().join("stealth");
+    std::fs::create_dir_all(&stealth).unwrap();
+    std::fs::write(stealth.join("secret.md"), b"secret").unwrap();
+    let canonical = |path: std::path::PathBuf| std::fs::canonicalize(path).unwrap();
+    (dir, canonical(root), canonical(stealth))
+}
+
+#[test]
+fn workspace_commands_deny_roots_that_do_not_match_the_anchor() {
+    let (_dir, root, stealth) = anchored_fixture();
+    let anchor = SharedWorkspaceAnchor::default();
+    open_workspace_impl(&anchor, root.clone()).unwrap();
+
+    assert!(list_directory_impl(&anchor, root, std::path::PathBuf::new()).is_ok());
+    // A renderer-chosen root (here a sibling directory, in the wild "/") must
+    // be rejected by every workspace command before touching the filesystem.
+    assert!(is_permission_denied(
+        &list_directory_impl(&anchor, stealth.clone(), std::path::PathBuf::new()).unwrap_err()
+    ));
+    assert!(is_permission_denied(
+        &create_markdown_file_impl(&anchor, stealth.clone(), "evil.md".into()).unwrap_err()
+    ));
+    assert!(is_permission_denied(
+        &rename_entry_impl(
+            &anchor,
+            stealth.clone(),
+            "secret.md".into(),
+            "moved.md".into()
+        )
+        .unwrap_err()
+    ));
+    assert!(is_permission_denied(
+        &trash_entry_impl(&anchor, stealth.clone(), "secret.md".into()).unwrap_err()
+    ));
+    // The rejected attempts never reached the unanchored directory.
+    assert!(!stealth.join("evil.md").exists());
+    assert_eq!(std::fs::read(stealth.join("secret.md")).unwrap(), b"secret");
+}
+
+#[test]
+fn workspace_commands_fail_closed_before_any_workspace_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("workspace");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.md"), b"a").unwrap();
+    let anchor = SharedWorkspaceAnchor::default();
+    assert!(is_permission_denied(
+        &list_directory_impl(&anchor, root.clone(), std::path::PathBuf::new()).unwrap_err()
+    ));
+    assert!(is_permission_denied(
+        &create_markdown_file_impl(&anchor, root.clone(), "x.md".into()).unwrap_err()
+    ));
+    assert!(is_permission_denied(
+        &rename_entry_impl(&anchor, root.clone(), "a.md".into(), "y.md".into()).unwrap_err()
+    ));
+    assert!(is_permission_denied(
+        &trash_entry_impl(&anchor, root.clone(), "a.md".into()).unwrap_err()
+    ));
+    assert!(!root.join("x.md").exists());
+    assert!(root.join("a.md").exists());
+}
+
+#[test]
+fn close_workspace_clears_the_anchor() {
+    let (_dir, root, _) = anchored_fixture();
+    let anchor = SharedWorkspaceAnchor::default();
+    open_workspace_impl(&anchor, root.clone()).unwrap();
+    close_workspace_impl(&anchor);
+    assert!(is_permission_denied(
+        &list_directory_impl(&anchor, root, std::path::PathBuf::new()).unwrap_err()
+    ));
+}
+
+#[test]
+fn open_workspace_replaces_the_previous_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let first = std::fs::canonicalize(first).unwrap();
+    let second = std::fs::canonicalize(second).unwrap();
+    let anchor = SharedWorkspaceAnchor::default();
+    open_workspace_impl(&anchor, first.clone()).unwrap();
+    open_workspace_impl(&anchor, second.clone()).unwrap();
+    assert!(is_permission_denied(
+        &list_directory_impl(&anchor, first, std::path::PathBuf::new()).unwrap_err()
+    ));
+    assert!(list_directory_impl(&anchor, second, std::path::PathBuf::new()).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn anchored_commands_require_the_canonical_root() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = dir.path().join("link");
+    symlink(&real, &link).unwrap();
+    let anchor = SharedWorkspaceAnchor::default();
+    // open_workspace canonicalizes the root, so the anchor is canonical even
+    // when the user opened the workspace through a symlinked path. Only the
+    // canonical target matches afterwards.
+    open_workspace_impl(&anchor, link.clone()).unwrap();
+    assert!(is_permission_denied(
+        &list_directory_impl(&anchor, link, std::path::PathBuf::new()).unwrap_err()
+    ));
+    let canonical_real = std::fs::canonicalize(&real).unwrap();
+    assert!(list_directory_impl(&anchor, canonical_real, std::path::PathBuf::new()).is_ok());
 }

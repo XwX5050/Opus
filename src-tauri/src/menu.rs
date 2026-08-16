@@ -36,12 +36,20 @@ pub fn build_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<
         true,
         Some("CmdOrCtrl+Shift+O"),
     )?;
+    let save = MenuItem::with_id(manager, "menu.save", "保存", true, Some("CmdOrCtrl+S"))?;
     let save_as = MenuItem::with_id(
         manager,
         "menu.save_as",
         "另存为…",
         true,
         Some("CmdOrCtrl+Shift+S"),
+    )?;
+    let close_tab = MenuItem::with_id(
+        manager,
+        "menu.close_tab",
+        "关闭标签页",
+        true,
+        Some("CmdOrCtrl+W"),
     )?;
     let file_menu = Submenu::with_items(
         manager,
@@ -52,7 +60,10 @@ pub fn build_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<
             &open_files,
             &open_folder,
             &PredefinedMenuItem::separator(manager)?,
+            &save,
             &save_as,
+            &PredefinedMenuItem::separator(manager)?,
+            &close_tab,
         ],
     )?;
 

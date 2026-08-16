@@ -6,6 +6,11 @@ export const FrontMatter = "FrontMatter";
 const openingDelimiter = /^---[\t ]*\r?$/;
 const closingDelimiter = /^[\t ]*(?:---|\.\.\.)[\t ]*\r?$/;
 
+// YAML frontmatter blocks are small in practice; bounding the closing scan
+// keeps the block parser inside CodeMirror's incremental parse time budget
+// when an unclosed opening delimiter sits on top of a huge document.
+export const maxFrontMatterLines = 512;
+
 // BlockContext does not expose the document Input, so the wrapper below
 // captures it during advance() — the same approach as mathExtension.
 const activeInputs: Input[] = [];
@@ -17,7 +22,9 @@ const findClosingDelimiter = (
   firstLine: Line,
 ): { lineStart: number; delimiterTo: number } | null => {
   let lineStart = firstLine.text.length + 1;
-  while (lineStart < input.length) {
+  let scanned = 0;
+  while (lineStart < input.length && scanned < maxFrontMatterLines) {
+    scanned += 1;
     let lineEnd = lineStart;
     while (lineEnd < input.length && input.read(lineEnd, lineEnd + 1) !== "\n") {
       lineEnd += 1;

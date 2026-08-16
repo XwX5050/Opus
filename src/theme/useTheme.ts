@@ -59,6 +59,28 @@ export function useTheme(
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = resolved;
+
+    // Inside the Tauri webview, keep the native window background in sync
+    // with the resolved canvas color: WKWebView repaints lag behind live
+    // window resizes, so a mismatched NSWindow background would flash along
+    // the resized edge. `--canvas` is read after `data-theme` is applied so
+    // it reflects the resolved theme; this is a no-op in the browser, the
+    // dev demo, and jsdom tests. This lives in its own effect so unrelated
+    // editor-preference changes never re-sync the native window.
+    if ("__TAURI_INTERNALS__" in window) {
+      const canvas = getComputedStyle(document.documentElement)
+        .getPropertyValue("--canvas")
+        .trim();
+      if (canvas) {
+        void invoke("set_window_background", { color: canvas }).catch(() => {
+          // Background sync must never affect theming.
+        });
+      }
+    }
+  }, [resolved]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
     root.style.setProperty(
       "--editor-body-size",
       `${editorPreferences.bodySizePx}px`,
@@ -75,24 +97,7 @@ export function useTheme(
       "--editor-body-font",
       fontFamilyStack(editorPreferences.fontFamily),
     );
-
-    // Inside the Tauri webview, keep the native window background in sync
-    // with the resolved canvas color: WKWebView repaints lag behind live
-    // window resizes, so a mismatched NSWindow background would flash along
-    // the resized edge. `--canvas` is read after `data-theme` is applied so
-    // it reflects the resolved theme; this is a no-op in the browser, the
-    // dev demo, and jsdom tests.
-    if ("__TAURI_INTERNALS__" in window) {
-      const canvas = getComputedStyle(document.documentElement)
-        .getPropertyValue("--canvas")
-        .trim();
-      if (canvas) {
-        void invoke("set_window_background", { color: canvas }).catch(() => {
-          // Background sync must never affect theming.
-        });
-      }
-    }
-  }, [resolved, editorPreferences]);
+  }, [editorPreferences]);
 
   return resolved;
 }

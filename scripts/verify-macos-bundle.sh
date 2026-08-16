@@ -11,7 +11,7 @@
 #   4. release builds (Developer ID Application authority) pass Gatekeeper
 #      assessment (spctl --assess --type execute), which also proves
 #      notarization; ad-hoc/local signatures are labeled NON-RELEASE and
-#      skip Gatekeeper.
+#      skip Gatekeeper; any other signing authority fails the check.
 set -euo pipefail
 
 fail() {
@@ -55,9 +55,13 @@ if printf '%s\n' "$SIGNATURE_INFO" | grep -q '^Authority=Developer ID Applicatio
   spctl --assess --type execute --verbose=4 "$APP_PATH" \
     || fail "Gatekeeper assessment failed — notarize and staple the build first (docs/releasing.md)"
   echo "RELEASE: valid Developer ID signature; Gatekeeper assessment accepted (notarized)."
-else
-  echo "NON-RELEASE: no Developer ID authority on the signature (ad-hoc/local build)."
+elif printf '%s\n' "$SIGNATURE_INFO" | grep -q '^Signature=adhoc'; then
+  echo "NON-RELEASE: ad-hoc (local unsigned) build."
   echo "NON-RELEASE: skipping Gatekeeper assessment; do not distribute this build."
+else
+  # A signed-but-mis-signed bundle (self-signed, Apple Development, …) must
+  # never slip through as NON-RELEASE — that path is only for ad-hoc builds.
+  fail "signature is neither Developer ID Application nor ad-hoc; cannot classify this build"
 fi
 
 echo "OK: $APP_PATH"

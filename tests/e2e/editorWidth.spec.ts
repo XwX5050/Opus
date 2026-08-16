@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { E2eFixtureSpec } from "../../src/app/e2e";
 
 /**
  * Reading-column layout regression coverage (the proportional-scaling change
@@ -10,8 +11,9 @@ import { expect, test, type Page } from "@playwright/test";
  *
  * Fixture/seeding mirrors tests/e2e/notepad.spec.ts: the JSON fixture is
  * installed on window.__E2E_FIXTURE__ before the app loads, and the app
- * (VITE_E2E=1) builds a MemoryDocumentPort from it. The default "内容宽度"
- * preference (--editor-content-width) is 760px.
+ * (VITE_E2E=1) builds a MemoryDocumentPort from it. The fixture shape is the
+ * shell's E2eFixtureSpec (type-only import from src/app/e2e.ts). The default
+ * "内容宽度" preference (--editor-content-width) is 760px.
  *
  * Geometry is measured with getBoundingClientRect() (border boxes) plus the
  * scroller's clientWidth (excludes the scrollbar gutter), so margins are
@@ -20,29 +22,6 @@ import { expect, test, type Page } from "@playwright/test";
  * the vertical scrollbar takes space. Assertions tolerate a few px of slack
  * for scrollbar and rounding differences.
  */
-
-interface E2eFileSpec {
-  path: string;
-  text: string;
-}
-
-interface E2eSessionSpec {
-  recent: Array<{ path: string; kind: "file" | "folder" }>;
-  openPaths: string[];
-  activePath: string | null;
-  workspacePath: string | null;
-}
-
-interface E2eFixtureSpec {
-  files?: E2eFileSpec[];
-  session?: E2eSessionSpec | null;
-}
-
-declare global {
-  interface Window {
-    __E2E_FIXTURE__?: E2eFixtureSpec;
-  }
-}
 
 /** Installs the fixture before page scripts run, then loads the shell. */
 const seed = async (page: Page, fixture: E2eFixtureSpec) => {

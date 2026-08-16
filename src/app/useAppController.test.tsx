@@ -6,7 +6,7 @@ import {
   MemoryDocumentPort,
   pseudoTranslate,
 } from "../document/memoryDocumentPort";
-import type { DiskEvent, OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
+import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import type { TranslationSettings } from "../translate/types";
 import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
 import { useAppController } from "./useAppController";
@@ -47,6 +47,7 @@ class InspectableControllerPort implements DocumentPort {
   async releaseAssetScope() {}
   async chooseWorkspace() { return null; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
+      async closeWorkspace() {}
   async listDirectory() { return []; }
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
@@ -101,6 +102,7 @@ class ScopeAwareControllerPort implements DocumentPort {
   workspaceRoot: { path: string; title: string } | null = null;
   async chooseWorkspace() { return this.workspaceRoot; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
+      async closeWorkspace() {}
   async listDirectory() { return []; }
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
@@ -235,6 +237,7 @@ describe("useAppController", () => {
       async releaseAssetScope() {},
       async chooseWorkspace() { return null; },
       async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; },
+      async closeWorkspace() {},
       async listDirectory() { return []; },
       async listTranslationModels() { return []; },
       async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
@@ -660,6 +663,11 @@ describe("useAppController disk watching", () => {
         { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
       ]),
     );
+    // Same-parent rename: the asset scope already grants the /notes parent
+    // directory, so it is neither released nor re-acquired.
+    expect(port.scopeCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+    ]);
     hook.unmount();
   });
 
@@ -757,6 +765,41 @@ describe("useAppController scope and watch retargeting", () => {
       { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
       { kind: "unwatch", consumerId: tab.id },
       { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+    ]);
+    hook.unmount();
+  });
+
+  it("retargets the asset scope when a clean tab moves across directories", async () => {
+    const port = new MemoryDocumentPort(new Map([["/notes/a.md", memoryFile("/notes/a.md")]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+
+    act(() =>
+      port.emitDiskEvent({ kind: "moved", from: "/notes/a.md", to: "/other/renamed.md" }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        path: "/other/renamed.md",
+        status: "clean",
+      }),
+    );
+    // The document crossed a directory boundary, so the scope grant moves
+    // from /notes to /other — otherwise images beside the moved file would
+    // 403 on the asset protocol.
+    await waitFor(() =>
+      expect(port.scopeCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "release", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/other/renamed.md" },
+      ]),
+    );
+    expect(port.watchCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+      { kind: "unwatch", consumerId: tab.id },
+      { kind: "document", consumerId: tab.id, path: "/other/renamed.md" },
     ]);
     hook.unmount();
   });
@@ -1089,6 +1132,40 @@ describe("useAppController recovery drafts", () => {
     }
   });
 
+  it("forces a draft write at the maximum interval during continuous typing", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new MemoryDocumentPort(new Map([["/notes/a.md", draftableFile("/notes/a.md")]]));
+      const hook = renderHook(() => useAppController(port));
+      await act(() => hook.result.current.openPath("/notes/a.md"));
+      const id = hook.result.current.state.tabs[0].id;
+
+      // Keystrokes land every 1.5s, so the 2s idle debounce keeps re-arming
+      // and would never fire on its own.
+      act(() => hook.result.current.changeText(id, "typing-1"));
+      await act(async () => { vi.advanceTimersByTime(1500); });
+      act(() => hook.result.current.changeText(id, "typing-2"));
+      await act(async () => { vi.advanceTimersByTime(1500); });
+      act(() => hook.result.current.changeText(id, "typing-3"));
+      await act(async () => { vi.advanceTimersByTime(1500); });
+      expect(port.drafts).toHaveLength(0);
+
+      // The tab passes 5s of uninterrupted typing: the next change forces
+      // the write instead of waiting for a 2s pause that never comes.
+      act(() => hook.result.current.changeText(id, "typing-4"));
+      await act(async () => { vi.advanceTimersByTime(600); });
+      await act(async () => { hook.result.current.changeText(id, "typing-5"); });
+      expect(port.drafts).toHaveLength(1);
+      expect(port.drafts[0]).toMatchObject({
+        draftId: `draft-${id}`,
+        text: "typing-5",
+      });
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reschedules a draft write after a transient writeDraft failure", async () => {
     vi.useFakeTimers();
     try {
@@ -1173,7 +1250,17 @@ describe("useAppController recovery drafts", () => {
       status: "dirty",
     });
     expect(hook.result.current.recoveryDrafts).toEqual([]);
-    expect(port.drafts).toHaveLength(0);
+    // The restored content is backed up under the restored tab's own draft id
+    // right away, before the leftover draft is removed — a crash inside the
+    // 2s debounce window loses nothing.
+    expect(port.drafts).toHaveLength(1);
+    expect(port.drafts[0]).toMatchObject({
+      draftId: `draft-${tab.id}`,
+      originalPath: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved",
+      savedVersion: "v1",
+    });
     await waitFor(() =>
       expect(port.scopeCalls).toContainEqual({
         kind: "document",
@@ -1181,6 +1268,47 @@ describe("useAppController recovery drafts", () => {
         path: "/notes/a.md",
       }),
     );
+    hook.unmount();
+  });
+
+  it("keeps the leftover draft when the immediate restore write fails", async () => {
+    const leftover: RecoveryDraft = {
+      draftId: "draft-document-9",
+      originalPath: "/notes/a.md",
+      title: "a.md",
+      text: "unsaved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: "v1",
+    };
+    class FailingRestoreWritePort extends MemoryDocumentPort {
+      override async writeDraft(draft: RecoveryDraft): Promise<RecoveryDraftInfo> {
+        throw new DocumentPortError("io", "draft write failed");
+      }
+    }
+    const port = new FailingRestoreWritePort(
+      new Map([["/notes/a.md", draftableFile("/notes/a.md")]]),
+      { drafts: [leftover] },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    await act(() => hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]));
+
+    // The tab is restored in memory, but the leftover draft is still the only
+    // disk copy — it must not be discarded until the new write succeeds.
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/a.md",
+      text: "unsaved",
+      status: "dirty",
+    });
+    expect(hook.result.current.recoveryDrafts).toEqual([]);
+    expect(port.drafts).toHaveLength(1);
+    expect(port.drafts[0]).toMatchObject({
+      draftId: "draft-document-9",
+      text: "unsaved",
+    });
     hook.unmount();
   });
 
@@ -1217,6 +1345,15 @@ describe("useAppController sessions and recent items", () => {
     modifiedUnixMs: 1,
     version: `version:${path}`,
   });
+
+  /** Delays loadSession so tests can act inside the launch window. */
+  class GatedSessionPort extends MemoryDocumentPort {
+    sessionGate: Promise<void> = Promise.resolve();
+    override async loadSession(): Promise<PersistedSession | null> {
+      await this.sessionGate;
+      return super.loadSession();
+    }
+  }
 
   it("restores session tabs, the active tab, and the workspace on launch", async () => {
     const port = new MemoryDocumentPort(
@@ -1385,6 +1522,98 @@ describe("useAppController sessions and recent items", () => {
     expect(hook.result.current.workspace?.path).toBe("/notes");
     hook.unmount();
   });
+
+  it("merges recent entries added during the launch window with the session's", async () => {
+    let resolveGate!: () => void;
+    const port = new GatedSessionPort(
+      new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),
+      {
+        session: {
+          recent: [{ path: "/notes/old.md", kind: "file" }],
+          openPaths: [],
+          activePath: null,
+          workspacePath: null,
+        },
+      },
+    );
+    port.sessionGate = new Promise<void>((resolve) => { resolveGate = resolve; });
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    expect(hook.result.current.recent.map((entry) => entry.path)).toEqual([
+      "/notes/a.md",
+    ]);
+
+    await act(async () => { resolveGate(); });
+    // The session load merges instead of replacing: the launch-window entry
+    // survives, deduped, ahead of the persisted history.
+    await waitFor(() =>
+      expect(hook.result.current.recent.map((entry) => entry.path)).toEqual([
+        "/notes/a.md",
+        "/notes/old.md",
+      ]),
+    );
+    hook.unmount();
+  });
+
+  it("keeps a launch-window new document focused over the restored active tab", async () => {
+    let resolveGate!: () => void;
+    const port = new GatedSessionPort(
+      new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    port.sessionGate = new Promise<void>((resolve) => { resolveGate = resolve; });
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => { hook.result.current.newDocument(); });
+    const newId = hook.result.current.state.activeId!;
+    expect(hook.result.current.state.tabs.find((tab) => tab.id === newId)?.path).toBeNull();
+
+    await act(async () => { resolveGate(); });
+    await waitFor(() => expect(hook.result.current.state.tabs).toHaveLength(2));
+    // The restored session's active tab must not steal activation from the
+    // document the user created during the launch window.
+    expect(hook.result.current.state.activeId).toBe(newId);
+    hook.unmount();
+  });
+
+  it("keeps a workspace opened during the launch window over the session's", async () => {
+    let resolveGate!: () => void;
+    const port = new GatedSessionPort(
+      new Map([["/notes/a.md", sessionFile("/notes/a.md")]]),
+      {
+        workspace: { path: "/user", title: "user" },
+        session: {
+          recent: [],
+          openPaths: [],
+          activePath: null,
+          workspacePath: "/notes",
+        },
+      },
+    );
+    port.sessionGate = new Promise<void>((resolve) => { resolveGate = resolve; });
+    const hook = renderHook(() => useAppController(port));
+
+    await act(() => hook.result.current.openWorkspace());
+    expect(hook.result.current.workspace?.path).toBe("/user");
+
+    await act(async () => { resolveGate(); });
+    // The launch sequence completes and persists the session; neither the
+    // live workspace nor the persisted one may be the session's /notes.
+    await waitFor(() => expect(port.session?.workspacePath).toBe("/user"));
+    expect(hook.result.current.workspace?.path).toBe("/user");
+    expect(port.scopeCalls).toEqual([
+      { kind: "workspace", consumerId: "workspace:/user", root: "/user" },
+    ]);
+    hook.unmount();
+  });
 });
 
 describe("useAppController canonical paths", () => {
@@ -1548,7 +1777,7 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
-  it("surfaces partial translations and batch progress while translating", async () => {
+  it("surfaces partial translations and per-segment progress while translating", async () => {
     const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
     const doc = paras.join("\n");
     class SteppedTranslatePort extends InspectableControllerPort {
@@ -1577,11 +1806,12 @@ describe("useAppController translations", () => {
     expect(hook.result.current.translationOf(id)?.state).toEqual({
       phase: "translating",
     });
-    // Two batches (700-char paragraphs within the 1500-char budget).
-    expect(port.pending).toHaveLength(2);
+    // Four paragraphs translate as four separate segment requests.
+    expect(port.pending).toHaveLength(4);
 
-    // The first batch lands: the translating state carries the partial text
-    // with the unfinished paragraphs still as the original text, plus counts.
+    // The first segment lands: the translating state carries the partial
+    // text with the unfinished paragraphs still as the original text, plus
+    // counts.
     await act(async () => {
       port.pending[0].resolve(port.pending[0].segments.map(pseudoTranslate));
     });
@@ -1589,17 +1819,20 @@ describe("useAppController translations", () => {
       expect(hook.result.current.translationOf(id)?.state).toMatchObject({
         phase: "translating",
         completedBatches: 1,
-        totalBatches: 2,
+        totalBatches: 4,
       }),
     );
     const partial = hook.result.current.translationOf(id)!.state;
     if (partial.phase !== "translating") throw new Error("unreachable");
     expect(partial.translatedText).toBe(
-      paras.slice(0, 2).map(pseudoTranslate).concat(paras.slice(2)).join("\n"),
+      [pseudoTranslate(paras[0])].concat(paras.slice(1)).join("\n"),
     );
 
+    // The remaining segments land: the full translation arrives ready.
     await act(async () => {
       port.pending[1].resolve(port.pending[1].segments.map(pseudoTranslate));
+      port.pending[2].resolve(port.pending[2].segments.map(pseudoTranslate));
+      port.pending[3].resolve(port.pending[3].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),

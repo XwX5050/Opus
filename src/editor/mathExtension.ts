@@ -1,5 +1,10 @@
 import type { Input, PartialParse } from "@lezer/common";
-import type { BlockContext, Line, MarkdownExtension } from "@lezer/markdown";
+import type {
+  BlockContext,
+  InlineContext,
+  Line,
+  MarkdownExtension,
+} from "@lezer/markdown";
 
 export const InlineMath = "InlineMath";
 export const BlockMath = "BlockMath";
@@ -9,6 +14,22 @@ const backslash = 92;
 
 const isWhitespace = (character: number) =>
   character === 9 || character === 10 || character === 13 || character === 32;
+
+// A closing "$" directly followed by a digit or CJK ideograph most likely
+// belongs to a currency-style number ("US$5", "$5/件", "机器$5到$10元")
+// rather than to math, so such a quote must not close a formula.
+const isPriceLike = (character: number) =>
+  (character >= 48 && character <= 57) ||
+  (character >= 0xff10 && character <= 0xff19) ||
+  (character >= 0x3400 && character <= 0x4dbf) ||
+  (character >= 0x4e00 && character <= 0x9fff) ||
+  (character >= 0xf900 && character <= 0xfaff);
+
+interface InlineMathContext extends InlineContext {
+  // End offset of the InlineMath element most recently added on this line, so
+  // a "$" immediately following a closing "$" can open the next formula.
+  lastClosedMathEnd?: number;
+}
 
 const isIndependentDelimiterLine = (line: Line) =>
   line.text.slice(line.pos).match(/^\$\$[\t ]*\r?$/) !== null;
@@ -65,9 +86,7 @@ export const mathMarkdownExtension: MarkdownExtension = {
         if (
           next !== dollar ||
           (cx.char(pos - 1) === dollar &&
-            (cx.char(pos - 2) === dollar ||
-              cx.char(pos - 2) < 0 ||
-              isWhitespace(cx.char(pos - 2)))) ||
+            (cx as InlineMathContext).lastClosedMathEnd !== pos) ||
           cx.char(pos + 1) === dollar ||
           isWhitespace(cx.char(pos + 1))
         ) {
@@ -84,8 +103,10 @@ export const mathMarkdownExtension: MarkdownExtension = {
           if (
             character === dollar &&
             cx.char(cursor - 1) !== dollar &&
-            !isWhitespace(cx.char(cursor - 1))
+            !isWhitespace(cx.char(cursor - 1)) &&
+            !isPriceLike(cx.char(cursor + 1))
           ) {
+            (cx as InlineMathContext).lastClosedMathEnd = cursor + 1;
             return cx.addElement(cx.elt(InlineMath, pos, cursor + 1));
           }
         }

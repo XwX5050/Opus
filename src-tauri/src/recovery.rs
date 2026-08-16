@@ -3,9 +3,8 @@
 //! Dirty document snapshots live as one JSON file per draft inside the
 //! recovery directory (the app's data directory in production, an arbitrary
 //! directory in tests). Writes reuse the sibling-temp + rename discipline
-//! from `document_io` and additionally synchronize the directory itself —
-//! parent-directory durability for recovery records belongs to this phase,
-//! not the document write path. Draft files are the only files the store
+//! from `document_io` and, like the document write path, synchronize the
+//! directory itself so the rename is durable. Draft files are the only files the store
 //! ever writes; original documents are never touched.
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +42,27 @@ pub struct DraftInfo {
     pub saved_text_hash: String,
     pub saved_version: Option<String>,
     pub updated_unix_ms: u128,
+}
+
+/// The on-disk shape used by `list_drafts`. Mirrors `DraftRecord`'s fields
+/// but decodes `text` as `IgnoredAny`, so a listing never materializes the
+/// body — that is what keeps many-draft listings cheap even though each file
+/// carries the full text. `has_utf8_bom`/`newline` stay required, so a record
+/// missing them is still treated as corrupt exactly like a full read.
+#[derive(Deserialize)]
+// Fields `text`/`has_utf8_bom`/`newline` are consumed by serde alone (they
+// are decoded to validate the record shape, never read); the listed metadata
+// is the only part surfaced to callers.
+#[allow(dead_code)]
+struct StoredDraftInfo {
+    draft_id: String,
+    original_path: Option<PathBuf>,
+    title: String,
+    text: serde::de::IgnoredAny,
+    has_utf8_bom: bool,
+    newline: Newline,
+    saved_text_hash: String,
+    saved_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -162,9 +182,12 @@ impl RecoveryStore {
     }
 
     /// Lists all drafts, oldest information first by draft id for a
-    /// deterministic order. Corrupt files are skipped (and logged) rather
-    /// than failing the whole listing, so one bad write at crash time can
-    /// never block recovery of the remaining drafts.
+    /// deterministic order. Listings decode metadata only — the stored `text`
+    /// is skipped — so listing many drafts stays cheap. Corrupt files are
+    /// skipped (and logged) rather than failing the whole listing, so one bad
+    /// write at crash time can never block recovery of the remaining drafts.
+    /// Leftover temp files from a crash between write and rename are removed
+    /// as a side effect so they do not accumulate.
     pub fn list_drafts(&self) -> Result<Vec<DraftInfo>, RecoveryError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
@@ -184,16 +207,29 @@ impl RecoveryStore {
             })?;
             let path = entry.path();
             if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                // A crash between temp creation and rename leaves a
+                // tempfile-shaped file behind; remove those (and nothing
+                // else) so they do not accumulate on disk.
+                if is_orphaned_temp_file(&path)
+                    && entry.file_type().is_ok_and(|kind| kind.is_file())
+                {
+                    if let Err(error) = fs::remove_file(&path) {
+                        log::warn!(
+                            "failed to remove orphaned recovery temp {}: {error}",
+                            path.display()
+                        );
+                    }
+                }
                 continue;
             }
-            match read_stored(&path) {
-                Ok(draft) => {
+            match read_stored_info(&path) {
+                Ok(info) => {
                     let modified = entry
                         .metadata()
                         .ok()
                         .and_then(|metadata| modified_unix_ms(&metadata, &path).ok())
                         .unwrap_or(0);
-                    drafts.push(draft_info(&draft, modified));
+                    drafts.push(draft_info_from_stored(&info, modified));
                 }
                 Err(error) => log::warn!("skipping {error}"),
             }
@@ -226,6 +262,17 @@ impl RecoveryStore {
 }
 
 fn read_stored(path: &Path) -> Result<DraftRecord, RecoveryError> {
+    read_stored_any(path)
+}
+
+fn read_stored_info(path: &Path) -> Result<StoredDraftInfo, RecoveryError> {
+    read_stored_any(path)
+}
+
+/// Reads and decodes a stored draft into any deserializable shape, mapping
+/// filesystem and JSON failures onto `RecoveryError` the same way for both
+/// the full-record and the metadata-only read paths.
+fn read_stored_any<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, RecoveryError> {
     let bytes = fs::read(path).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             RecoveryError::NotFound {
@@ -244,6 +291,20 @@ fn read_stored(path: &Path) -> Result<DraftRecord, RecoveryError> {
     })
 }
 
+/// Matches the file names `tempfile::NamedTempFile::new_in` produces (`.tmp`
+/// plus exactly six ASCII alphanumerics) — the leftovers of a crash between
+/// temp creation and rename. The check is deliberately narrow so nothing but
+/// a tempfile-shaped name is ever considered for removal.
+fn is_orphaned_temp_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(rest) = name.strip_prefix(".tmp") else {
+        return false;
+    };
+    rest.len() == 6 && rest.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 fn draft_id_from_path(path: &Path) -> String {
     path.file_stem()
         .and_then(|stem| stem.to_str())
@@ -258,6 +319,17 @@ fn draft_info(draft: &DraftRecord, updated_unix_ms: u128) -> DraftInfo {
         title: draft.title.clone(),
         saved_text_hash: draft.saved_text_hash.clone(),
         saved_version: draft.saved_version.clone(),
+        updated_unix_ms,
+    }
+}
+
+fn draft_info_from_stored(stored: &StoredDraftInfo, updated_unix_ms: u128) -> DraftInfo {
+    DraftInfo {
+        draft_id: stored.draft_id.clone(),
+        original_path: stored.original_path.clone(),
+        title: stored.title.clone(),
+        saved_text_hash: stored.saved_text_hash.clone(),
+        saved_version: stored.saved_version.clone(),
         updated_unix_ms,
     }
 }

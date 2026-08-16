@@ -47,6 +47,16 @@ export function useAutomaticPerformanceMode(
     setScan({ tabId, text, mode: synchronousMode });
   }
 
+  // The single cache slot pins the scanned tab's entire text, so drop it as
+  // soon as that tab is no longer active — the last tab closed (tabId null)
+  // or the active tab switched to an out-of-band document. Otherwise a closed
+  // document's full text would stay referenced for the rest of the session.
+  // An in-band tab switch needs no explicit reset: the synchronous scan above
+  // already replaced the slot.
+  if (scan !== null && (tabId === null || cheap !== null)) {
+    setScan(null);
+  }
+
   // In-band edits re-evaluate once typing pauses; each keystroke resets
   // the timer, so the scan runs at most once per debounce window.
   useEffect(() => {

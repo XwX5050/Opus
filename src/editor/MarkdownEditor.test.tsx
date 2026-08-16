@@ -499,11 +499,12 @@ describe("MarkdownEditor", () => {
     });
     const view = editorView();
     const historyBefore = undoDepth(view.state);
+    const doc = view.state.doc;
 
     rendered.rerender(
       <MarkdownEditor
         {...rendered.props}
-        outlineNavigation={{ sequence: 1, from: 0, textFrom: 2 }}
+        outlineNavigation={{ sequence: 1, id: "alpha", from: 0, textFrom: 2, doc }}
       />,
     );
 
@@ -517,7 +518,7 @@ describe("MarkdownEditor", () => {
     rendered.rerender(
       <MarkdownEditor
         {...rendered.props}
-        outlineNavigation={{ sequence: 1, from: 0, textFrom: 2 }}
+        outlineNavigation={{ sequence: 1, id: "alpha", from: 0, textFrom: 2, doc }}
       />,
     );
     expect(view.state.selection.main.head).toBe(9);
@@ -525,7 +526,7 @@ describe("MarkdownEditor", () => {
     rendered.rerender(
       <MarkdownEditor
         {...rendered.props}
-        outlineNavigation={{ sequence: 2, from: 0, textFrom: 2 }}
+        outlineNavigation={{ sequence: 2, id: "alpha", from: 0, textFrom: 2, doc }}
       />,
     );
     expect(view.state.selection.main.head).toBe(2);
@@ -543,12 +544,13 @@ describe("MarkdownEditor", () => {
     const view = editorView();
     view.dispatch({ selection: { anchor: 9 } });
     outside.focus();
+    const doc = view.state.doc;
 
     rendered.rerender(
       <MarkdownEditor
         {...rendered.props}
         viewMode="reading"
-        outlineNavigation={{ sequence: 1, from: 0, textFrom: 2 }}
+        outlineNavigation={{ sequence: 1, id: "alpha", from: 0, textFrom: 2, doc }}
       />,
     );
 
@@ -561,6 +563,108 @@ describe("MarkdownEditor", () => {
     expect(view.state.doc.toString()).toBe("# Alpha\n\ntext");
 
     outside.remove();
+    scrollIntoView.mockRestore();
+  });
+
+  it("re-locates a stale outline navigation against the current document", async () => {
+    const onOutlineChange = vi.fn();
+    const onChange = vi.fn();
+    const rendered = renderEditor({
+      value: "# Alpha\n\ntext",
+      onChange,
+      onOutlineChange,
+    });
+    await waitFor(() => expect(onOutlineChange).toHaveBeenCalled());
+    const view = editorView();
+    const staleDoc = view.state.doc;
+    const stale = onOutlineChange.mock.calls.at(-1)?.[0][0];
+    // A structural edit above the heading shifts every downstream offset.
+    view.dispatch({ changes: { from: 0, insert: "intro\n\n" } });
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        outlineNavigation={{
+          sequence: 1,
+          id: stale.id,
+          from: stale.from,
+          textFrom: stale.textFrom,
+          doc: staleDoc,
+        }}
+      />,
+    );
+
+    expect(view.state.doc.toString()).toBe("intro\n\n# Alpha\n\ntext");
+    expect(view.state.selection.main.head).toBe(stale.textFrom + "intro\n\n".length);
+    expect(onChange).toHaveBeenLastCalledWith("intro\n\n# Alpha\n\ntext");
+  });
+
+  it("drops an outline navigation whose heading no longer exists", async () => {
+    const onOutlineChange = vi.fn();
+    const rendered = renderEditor({
+      value: "# Alpha\n\ntext",
+      onOutlineChange,
+      outlineNavigation: null,
+    });
+    await waitFor(() => expect(onOutlineChange).toHaveBeenCalled());
+    const view = editorView();
+    const staleDoc = view.state.doc;
+    const stale = onOutlineChange.mock.calls.at(-1)?.[0][0];
+    // Editing the heading text gives it a new id: the stale request cannot
+    // be re-located and must not move the selection.
+    view.dispatch({ changes: { from: 2, to: 7, insert: "Beta" } });
+    view.dispatch({ selection: { anchor: 5 } });
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        outlineNavigation={{
+          sequence: 1,
+          id: stale.id,
+          from: stale.from,
+          textFrom: stale.textFrom,
+          doc: staleDoc,
+        }}
+      />,
+    );
+
+    expect(view.state.doc.toString()).toBe("# Beta\n\ntext");
+    expect(view.state.selection.main.head).toBe(5);
+  });
+
+  it("refreshes a stale outline navigation in reading mode", async () => {
+    const scrollIntoView = vi.spyOn(EditorView, "scrollIntoView");
+    const onOutlineChange = vi.fn();
+    const rendered = renderEditor({
+      value: "# Alpha\n\ntext",
+      viewMode: "reading",
+      onOutlineChange,
+      outlineNavigation: null,
+    });
+    await waitFor(() => expect(onOutlineChange).toHaveBeenCalled());
+    const view = editorView();
+    const staleDoc = view.state.doc;
+    const stale = onOutlineChange.mock.calls.at(-1)?.[0][0];
+    view.dispatch({ changes: { from: 0, insert: "intro\n\n" } });
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        viewMode="reading"
+        outlineNavigation={{
+          sequence: 1,
+          id: stale.id,
+          from: stale.from,
+          textFrom: stale.textFrom,
+          doc: staleDoc,
+        }}
+      />,
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledWith(
+      stale.from + "intro\n\n".length,
+      { y: "start", yMargin: 24 },
+    );
     scrollIntoView.mockRestore();
   });
 

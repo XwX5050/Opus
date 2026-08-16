@@ -25,12 +25,18 @@ export default function RecoveryDialog({
   // The loaded source is keyed by draft id, so a slow readSource resolve for
   // a previously expanded draft can never surface under another draft.
   const [source, setSource] = useState<{ draftId: string; text: string } | null>(null);
+  // Self-incrementing request token: a slow resolve for a draft that is no
+  // longer the expanded one must not overwrite the expanded draft's source,
+  // so stale results are dropped instead of applied.
+  const sourceRequestRef = useRef(0);
 
   useEffect(() => {
     dialogRef.current?.focus();
   }, []);
 
   const toggleSource = (draftId: string) => {
+    sourceRequestRef.current += 1;
+    const request = sourceRequestRef.current;
     if (expandedId === draftId) {
       setExpandedId(null);
       setSource(null);
@@ -39,8 +45,14 @@ export default function RecoveryDialog({
     setExpandedId(draftId);
     setSource(null);
     void readSource(draftId).then(
-      (text) => setSource({ draftId, text }),
-      () => setSource({ draftId, text: "（无法读取草稿内容）" }),
+      (text) => {
+        if (request !== sourceRequestRef.current) return;
+        setSource({ draftId, text });
+      },
+      () => {
+        if (request !== sourceRequestRef.current) return;
+        setSource({ draftId, text: "（无法读取草稿内容）" });
+      },
     );
   };
 

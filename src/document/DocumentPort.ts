@@ -60,6 +60,8 @@ export interface DocumentPort {
   releaseAssetScope(consumerId: string): Promise<void>;
   chooseWorkspace(): Promise<WorkspaceRoot | null>;
   openWorkspacePath(path: string): Promise<WorkspaceRoot>;
+  /** Clears the backend workspace anchor; best-effort, no-op outside Tauri. */
+  closeWorkspace(): Promise<void>;
   listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>>;
   createMarkdownFile(root: string, relative: string): Promise<DirectoryEntry>;
   renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry>;

@@ -204,11 +204,15 @@ describe("tauri document port clipboard images and asset scopes", () => {
         defaultPath: "/notes/image-20260723-090507.png",
       }));
       expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("save_clipboard_image", {
+      const [command, payload] = invoke.mock.calls[0];
+      expect(command).toBe("save_clipboard_image");
+      expect(payload).toMatchObject({
         path: "/notes/image-20260723-090507.png",
-        bytes: [137, 80, 78, 71],
         mimeType: "image/png",
       });
+      // The typed array is forwarded as-is; Tauri's IPC serializes it
+      // without an Array.from copy.
+      expect(payload.bytes).toBe(bytes);
       expect(result).toBe("image-20260723-090507.png");
     } finally {
       vi.useRealTimers();
@@ -219,19 +223,19 @@ describe("tauri document port clipboard images and asset scopes", () => {
     mocks.save.mockResolvedValue("/elsewhere/pic.jpg");
     invoke.mockResolvedValue(undefined);
     const port = createTauriDocumentPort();
+    const bytes = new Uint8Array([255, 216]);
     const result = await port.saveClipboardImage({
-      bytes: new Uint8Array([255, 216]),
+      bytes,
       mimeType: "image/jpeg",
       documentPath: "/notes/a.md",
     });
     expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({
       defaultPath: expect.stringMatching(/^\/notes\/image-\d{8}-\d{6}\.jpg$/),
     }));
-    expect(invoke).toHaveBeenCalledWith("save_clipboard_image", {
-      path: "/elsewhere/pic.jpg",
-      bytes: [255, 216],
-      mimeType: "image/jpeg",
-    });
+    const [command, payload] = invoke.mock.calls[0];
+    expect(command).toBe("save_clipboard_image");
+    expect(payload).toMatchObject({ path: "/elsewhere/pic.jpg", mimeType: "image/jpeg" });
+    expect(payload.bytes).toBe(bytes);
     expect(result).toBe("/elsewhere/pic.jpg");
   });
 
@@ -567,18 +571,93 @@ describe("tauri document port session, window geometry, and close requests", () 
   });
 
   it("returns null when no session was persisted and round-trips a saved session", async () => {
-    const port = createTauriDocumentPort();
-    await expect(port.loadSession()).resolves.toBeNull();
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      await expect(port.loadSession()).resolves.toBeNull();
 
-    const session = {
-      recent: [{ path: "/notes/a.md", kind: "file" as const }],
-      openPaths: ["/notes/a.md"],
-      activePath: "/notes/a.md",
-      workspacePath: "/notes",
-    };
-    await port.saveSession(session);
-    expect(storeMocks.values.get("session")).toEqual(session);
-    await expect(port.loadSession()).resolves.toEqual(session);
+      const session = {
+        recent: [{ path: "/notes/a.md", kind: "file" as const }],
+        openPaths: ["/notes/a.md"],
+        activePath: "/notes/a.md",
+        workspacePath: "/notes",
+      };
+      await port.saveSession(session);
+      // Writes are debounced; nothing is persisted until the timer fires.
+      expect(storeMocks.values.has("session")).toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(storeMocks.values.get("session")).toEqual(session);
+      await expect(port.loadSession()).resolves.toEqual(session);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("collapses a burst of session saves into one debounced store write", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      const sessionFor = (path: string) => ({
+        recent: [],
+        openPaths: [path],
+        activePath: path,
+        workspacePath: null,
+      });
+      await port.saveSession(sessionFor("/notes/a.md"));
+      await port.saveSession(sessionFor("/notes/b.md"));
+      await port.saveSession(sessionFor("/notes/c.md"));
+      // Nothing is written until the burst settles.
+      expect(storeMocks.values.has("session")).toBe(false);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(storeMocks.values.has("session")).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      // The latest snapshot wins and only one store round trip happened,
+      // so an older snapshot can never land after a newer one.
+      expect(storeMocks.values.get("session")).toEqual(sessionFor("/notes/c.md"));
+      expect(storeMocks.load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(storeMocks.load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a pending debounced session save before destroying the window", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      const stop = await port.onCloseRequested(async () => {});
+      const session = { recent: [], openPaths: [], activePath: null, workspacePath: null };
+      await port.saveSession(session);
+      expect(storeMocks.values.has("session")).toBe(false);
+
+      await windowMocks.closeHandler!({ preventDefault: () => {} });
+
+      expect(storeMocks.values.get("session")).toEqual(session);
+      expect(windowMocks.destroyed).toBe(1);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes the pending session save even when the close-requested handler fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      await port.onCloseRequested(async () => {
+        throw new Error("flush failed");
+      });
+      const session = { recent: [], openPaths: [], activePath: null, workspacePath: null };
+      await port.saveSession(session);
+
+      await windowMocks.closeHandler!({ preventDefault: () => {} });
+
+      expect(storeMocks.values.get("session")).toEqual(session);
+      expect(windowMocks.destroyed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops malformed entries when loading a session", async () => {
@@ -610,31 +689,37 @@ describe("tauri document port session, window geometry, and close requests", () 
   });
 
   it("round-trips sidebar preferences and normalizes malformed ones to defaults", async () => {
-    const port = createTauriDocumentPort();
-    const session = {
-      recent: [],
-      openPaths: [],
-      activePath: null,
-      workspacePath: null,
-      sidebar: { collapsed: true, tabsSectionCollapsed: false, filesSectionCollapsed: true, width: 320 },
-    };
-    await port.saveSession(session);
-    await expect(port.loadSession()).resolves.toEqual(session);
+    vi.useFakeTimers();
+    try {
+      const port = createTauriDocumentPort();
+      const session = {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        sidebar: { collapsed: true, tabsSectionCollapsed: false, filesSectionCollapsed: true, width: 320 },
+      };
+      await port.saveSession(session);
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(port.loadSession()).resolves.toEqual(session);
 
-    storeMocks.values.set("session", {
-      recent: [],
-      openPaths: [],
-      activePath: null,
-      workspacePath: null,
-      sidebar: { collapsed: "yes", tabsSectionCollapsed: 1, width: "wide" },
-    });
-    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
-      recent: [],
-      openPaths: [],
-      activePath: null,
-      workspacePath: null,
-      sidebar: { collapsed: false, tabsSectionCollapsed: false, filesSectionCollapsed: false, width: 260 },
-    });
+      storeMocks.values.set("session", {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        sidebar: { collapsed: "yes", tabsSectionCollapsed: 1, width: "wide" },
+      });
+      await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        sidebar: { collapsed: false, tabsSectionCollapsed: false, filesSectionCollapsed: false, width: 260 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clamps persisted sidebar width and defaults a missing one", async () => {

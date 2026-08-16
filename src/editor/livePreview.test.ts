@@ -651,7 +651,7 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
-  it("toggles the document from reading mode while the widget stays fully rendered", () => {
+  it("keeps the document unchanged when a task checkbox is clicked in reading mode", () => {
     const doc = "- [ ] todo\n- [x] done\n\noutside";
     const view = createView(doc, true);
     const checkboxes = view.dom.querySelectorAll<HTMLInputElement>(
@@ -660,8 +660,37 @@ describe("livePreviewExtension", () => {
     expect(checkboxes).toHaveLength(2);
     checkboxes[0]!.click();
     checkboxes[1]!.click();
-    expect(view.state.doc.toString()).toBe("- [x] todo\n- [ ] done\n\noutside");
-    expect(view.dom.querySelectorAll(".cm-live-preview-task-checkbox")).toHaveLength(2);
+    // Widget handlers bypass CodeMirror's editing pipeline, so they must
+    // honor the read-only state themselves instead of dispatching edits.
+    expect(view.state.doc.toString()).toBe(doc);
+    const after = view.dom.querySelectorAll<HTMLInputElement>(
+      ".cm-live-preview-task-checkbox",
+    );
+    expect(after).toHaveLength(2);
+    expect([...after].map((checkbox) => checkbox.checked)).toEqual([false, true]);
+    view.destroy();
+  });
+
+  it("does not re-sync a checkbox detached before the post-click resync runs", async () => {
+    const view = createView("- [ ] todo\n\noutside");
+    const checkbox = view.dom.querySelector<HTMLInputElement>(
+      ".cm-live-preview-task-checkbox",
+    )!;
+    checkbox.click();
+    expect(view.state.doc.toString()).toBe("- [x] todo\n\noutside");
+    // A change elsewhere shifts the task and rebuilds its widget, detaching
+    // the node the click handler captured before the resync microtask runs.
+    // The stale range then reads as "[x]", which would flip the detached
+    // node if the guard did not stop the microtask first.
+    view.dispatch({ changes: { from: 0, insert: "xx[x]\n" } });
+    const rebuilt = view.dom.querySelector<HTMLInputElement>(
+      ".cm-live-preview-task-checkbox",
+    );
+    expect(checkbox.isConnected).toBe(false);
+    expect(rebuilt).not.toBe(checkbox);
+    expect(rebuilt!.checked).toBe(true);
+    await Promise.resolve();
+    expect(checkbox.checked).toBe(false);
     view.destroy();
   });
 

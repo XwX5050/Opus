@@ -1,5 +1,5 @@
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutlineHeading } from "./outline";
@@ -9,6 +9,7 @@ describe("outlinePublisherExtension", () => {
   let host: HTMLDivElement;
   let view: EditorView | null;
   let published: ReadonlyArray<ReadonlyArray<OutlineHeading>>;
+  let publishedDocs: Text[];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -16,6 +17,7 @@ describe("outlinePublisherExtension", () => {
     document.body.append(host);
     view = null;
     published = [];
+    publishedDocs = [];
   });
 
   afterEach(() => {
@@ -32,8 +34,9 @@ describe("outlinePublisherExtension", () => {
         extensions: [
           markdown(),
           outlinePublisherExtension(
-            (headings) => {
+            (headings, revision) => {
               published = [...published, headings];
+              publishedDocs = [...publishedDocs, revision];
             },
             { debounceMs: 120, parseSliceMs: 20 },
           ),
@@ -68,6 +71,21 @@ describe("outlinePublisherExtension", () => {
     expect(published).toHaveLength(1);
     expect(published[0][0].text).toBe("Final");
     expect(published[0][0].children[0].children[0].text).toBe("Three");
+  });
+
+  it("stamps every publish with the exact doc revision it was extracted from", async () => {
+    const editor = createView("# One");
+    await vi.runAllTimersAsync();
+
+    expect(publishedDocs).toHaveLength(1);
+    expect(publishedDocs[0]).toBe(editor.state.doc);
+
+    editor.dispatch({ changes: { from: 0, insert: "intro\n" } });
+    await vi.runAllTimersAsync();
+
+    const latest = publishedDocs.at(-1);
+    expect(latest).toBe(editor.state.doc);
+    expect(latest).not.toBe(publishedDocs[0]);
   });
 
   it("does not publish scheduled work after the editor is destroyed", async () => {

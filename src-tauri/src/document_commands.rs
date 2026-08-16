@@ -11,6 +11,12 @@ use tauri::Manager;
 pub type SharedAssetScopes = Mutex<AssetScopeRegistry>;
 pub type SharedWatchService = Mutex<WatchService>;
 
+/// The canonical root of the single workspace opened through `open_workspace`.
+/// Workspace commands reject any root that does not match this anchor, so an
+/// injected renderer can never steer the backend into an arbitrary directory
+/// (e.g. "/") it did not first open through the workspace flow.
+pub type SharedWorkspaceAnchor = Mutex<Option<PathBuf>>;
+
 #[derive(Debug, Serialize)]
 pub struct CommandError {
     pub code: String,
@@ -225,11 +231,13 @@ pub fn acquire_document_scope(
 
 #[tauri::command]
 pub fn acquire_workspace_scope(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
     app: tauri::AppHandle,
     scopes: tauri::State<'_, SharedAssetScopes>,
     consumer_id: String,
     root: PathBuf,
 ) -> Result<(), CommandError> {
+    assert_workspace_anchored(&anchor, &root)?;
     acquire_scoped(
         &scopes,
         &consumer_id,
@@ -284,50 +292,128 @@ fn map_workspace_error(error: WorkspaceError) -> CommandError {
     }
 }
 
-pub fn open_workspace_impl(root: PathBuf) -> Result<WorkspaceRootInfo, CommandError> {
-    workspace::open_workspace(&root).map_err(map_workspace_error)
+/// Every workspace command runs against the anchored root only: the root must
+/// equal the canonical path stored by `open_workspace`, otherwise the command
+/// is rejected. Nothing is anchored until a workspace is opened, so commands
+/// issued before `open_workspace` fail closed.
+fn assert_workspace_anchored(
+    anchor: &SharedWorkspaceAnchor,
+    root: &Path,
+) -> Result<(), CommandError> {
+    let anchored = anchor.lock().expect("workspace anchor poisoned");
+    let matches = anchored
+        .as_ref()
+        .is_some_and(|anchored| anchored.as_path() == root);
+    if !matches {
+        return Err(CommandError {
+            code: "permission_denied".into(),
+            message: "path is outside the open workspace".into(),
+        });
+    }
+    Ok(())
+}
+
+pub fn open_workspace_impl(
+    anchor: &SharedWorkspaceAnchor,
+    root: PathBuf,
+) -> Result<WorkspaceRootInfo, CommandError> {
+    let info = workspace::open_workspace(&root).map_err(map_workspace_error)?;
+    *anchor.lock().expect("workspace anchor poisoned") = Some(info.path.clone());
+    Ok(info)
+}
+
+/// Closes the workspace: no workspace command is accepted until the next
+/// `open_workspace`. Idempotent, so closing an already-closed workspace is a
+/// no-op.
+pub fn close_workspace_impl(anchor: &SharedWorkspaceAnchor) {
+    *anchor.lock().expect("workspace anchor poisoned") = None;
 }
 
 #[tauri::command]
-pub fn open_workspace(root: PathBuf) -> Result<WorkspaceRootInfo, CommandError> {
-    open_workspace_impl(root)
+pub fn open_workspace(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
+    root: PathBuf,
+) -> Result<WorkspaceRootInfo, CommandError> {
+    open_workspace_impl(&anchor, root)
+}
+
+#[tauri::command]
+pub fn close_workspace(anchor: tauri::State<'_, SharedWorkspaceAnchor>) {
+    close_workspace_impl(&anchor);
 }
 
 pub fn list_directory_impl(
+    anchor: &SharedWorkspaceAnchor,
     root: PathBuf,
     relative: PathBuf,
 ) -> Result<Vec<DirectoryEntry>, CommandError> {
+    assert_workspace_anchored(anchor, &root)?;
     workspace::list_directory(&root, &relative).map_err(map_workspace_error)
 }
 
 #[tauri::command]
 pub fn list_directory(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
     root: PathBuf,
     relative: PathBuf,
 ) -> Result<Vec<DirectoryEntry>, CommandError> {
-    list_directory_impl(root, relative)
+    list_directory_impl(&anchor, root, relative)
 }
 
-#[tauri::command]
-pub fn create_markdown_file(
+pub fn create_markdown_file_impl(
+    anchor: &SharedWorkspaceAnchor,
     root: PathBuf,
     relative: PathBuf,
 ) -> Result<DirectoryEntry, CommandError> {
+    assert_workspace_anchored(anchor, &root)?;
     workspace::create_markdown_file(&root, &relative).map_err(map_workspace_error)
 }
 
 #[tauri::command]
-pub fn rename_entry(
+pub fn create_markdown_file(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
+    root: PathBuf,
+    relative: PathBuf,
+) -> Result<DirectoryEntry, CommandError> {
+    create_markdown_file_impl(&anchor, root, relative)
+}
+
+pub fn rename_entry_impl(
+    anchor: &SharedWorkspaceAnchor,
     root: PathBuf,
     from: PathBuf,
     to_name: String,
 ) -> Result<DirectoryEntry, CommandError> {
+    assert_workspace_anchored(anchor, &root)?;
     workspace::rename_entry(&root, &from, &to_name).map_err(map_workspace_error)
 }
 
 #[tauri::command]
-pub fn trash_entry(root: PathBuf, relative: PathBuf) -> Result<(), CommandError> {
+pub fn rename_entry(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
+    root: PathBuf,
+    from: PathBuf,
+    to_name: String,
+) -> Result<DirectoryEntry, CommandError> {
+    rename_entry_impl(&anchor, root, from, to_name)
+}
+
+pub fn trash_entry_impl(
+    anchor: &SharedWorkspaceAnchor,
+    root: PathBuf,
+    relative: PathBuf,
+) -> Result<(), CommandError> {
+    assert_workspace_anchored(anchor, &root)?;
     workspace::trash_entry(&root, &relative).map_err(map_workspace_error)
+}
+
+#[tauri::command]
+pub fn trash_entry(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
+    root: PathBuf,
+    relative: PathBuf,
+) -> Result<(), CommandError> {
+    trash_entry_impl(&anchor, root, relative)
 }
 
 fn map_watch_error(error: WatchError) -> CommandError {
@@ -352,10 +438,12 @@ pub fn watch_document(
 
 #[tauri::command]
 pub fn watch_workspace(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
     service: tauri::State<'_, SharedWatchService>,
     consumer_id: String,
     root: PathBuf,
 ) -> Result<(), CommandError> {
+    assert_workspace_anchored(&anchor, &root)?;
     service
         .lock()
         .expect("watch service poisoned")

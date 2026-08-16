@@ -62,11 +62,37 @@ describe("checkUpdate", () => {
     expect(pluginCheck).not.toHaveBeenCalled();
   });
 
-  it("surfaces check failures as error", async () => {
+  it("surfaces check failures as error with the underlying reason", async () => {
     vi.stubEnv("DEV", false);
     stubTauriBridge();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(pluginCheck).mockRejectedValue(new Error("offline"));
-    expect(await checkUpdate()).toEqual({ status: "error" });
+    try {
+      expect(await checkUpdate()).toEqual({ status: "error", reason: "offline" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(pluginCheck).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates concurrent checks into a single plugin call", async () => {
+    vi.stubEnv("DEV", false);
+    stubTauriBridge();
+    let resolveCheck!: (update: Update | null) => void;
+    vi.mocked(pluginCheck).mockImplementation(
+      () =>
+        new Promise<Update | null>((resolve) => {
+          resolveCheck = resolve;
+        }),
+    );
+
+    const first = checkUpdate();
+    const second = checkUpdate();
+    await act(async () => {
+      resolveCheck(null);
+    });
+    await expect(first).resolves.toEqual({ status: "up-to-date" });
+    await expect(second).resolves.toEqual({ status: "up-to-date" });
     expect(pluginCheck).toHaveBeenCalledOnce();
   });
 

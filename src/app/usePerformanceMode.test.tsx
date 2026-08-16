@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PerformanceMode } from "../editor/performanceMode";
 import {
   MODE_REEVALUATION_DEBOUNCE_MS,
   useAutomaticPerformanceMode,
@@ -84,5 +85,39 @@ describe("useAutomaticPerformanceMode", () => {
     expect(result.current).toBe("full");
     rerender({ tabId: "tab-2", text: bandLightText });
     expect(result.current).toBe("light"); // tab switch: synchronous scan
+  });
+
+  it("drops the scan when the tab closes, so a reopened tab re-scans synchronously", () => {
+    // The props type is pinned so the null (no tab) cases type-check.
+    const { result, rerender } = renderHook<
+      PerformanceMode,
+      { tabId: string | null; text: string | null }
+    >(
+      ({ tabId, text }) => useAutomaticPerformanceMode(tabId, text),
+      { initialProps: { tabId: "tab-1", text: bandFullText } },
+    );
+    expect(result.current).toBe("full");
+    // Closing the last tab must release the cached text reference.
+    rerender({ tabId: null, text: null });
+    expect(result.current).toBe("full");
+    // The same id is reused for content that needs the opposite mode; a stale
+    // cache would serve "full" until the debounce, a reset scan is "light".
+    rerender({ tabId: "tab-1", text: bandLightText });
+    expect(result.current).toBe("light");
+  });
+
+  it("drops the scan when the active tab switches to an out-of-band document", () => {
+    const { result, rerender } = renderHook(
+      ({ tabId, text }) => useAutomaticPerformanceMode(tabId, text),
+      { initialProps: { tabId: "tab-1", text: bandFullText } },
+    );
+    expect(result.current).toBe("full");
+    // The scanned tab closed; a cheap document is now active.
+    rerender({ tabId: "tab-2", text: "tiny" });
+    expect(result.current).toBe("full");
+    // Returning to tab-1 with different content must re-scan instead of
+    // serving the cached mode from the closed document.
+    rerender({ tabId: "tab-1", text: bandLightText });
+    expect(result.current).toBe("light");
   });
 });

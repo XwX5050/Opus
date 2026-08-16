@@ -10,15 +10,35 @@ export interface TreeState {
   readonly failed: ReadonlySet<string>;
   /** Loaded listings keyed by directory path; only loaded nodes are stored. */
   readonly children: Readonly<Record<string, ReadonlyArray<DirectoryEntry>>>;
+  /**
+   * Listing generation per directory path. Listing results
+   * (`loadSucceeded`/`loadFailed`) capture the generation they were issued
+   * under; a disk invalidation or a rename bumps the generation so in-flight
+   * results for stale paths are discarded instead of landing as ghosts (or
+   * leaving `loading` stuck).
+   */
+  readonly epochs: Readonly<Record<string, number>>;
   readonly filter: string;
 }
 
 export type TreeAction =
   | { type: "workspaceOpened"; root: WorkspaceRoot }
   | { type: "loadRequested"; path: string }
-  | { type: "loadSucceeded"; path: string; children: ReadonlyArray<DirectoryEntry> }
-  | { type: "loadFailed"; path: string }
+  | {
+      type: "loadSucceeded";
+      path: string;
+      children: ReadonlyArray<DirectoryEntry>;
+      /** Generation captured when the listing request was issued. */
+      epoch: number;
+    }
+  | { type: "loadFailed"; path: string; epoch: number }
   | { type: "loadRetried"; path: string }
+  /**
+   * A disk event changed this directory's contents: drop its cached listing
+   * (and any failure/loading mark) so `pendingLoads` re-requests it. Expansion
+   * is untouched, so the user's open folders stay expanded.
+   */
+  | { type: "directoryInvalidated"; path: string }
   | { type: "directoryToggled"; path: string }
   | { type: "filterChanged"; filter: string }
   | { type: "entryCreated"; parentPath: string; entry: DirectoryEntry }
@@ -31,6 +51,7 @@ export const initialTreeState: TreeState = {
   loading: new Set(),
   failed: new Set(),
   children: {},
+  epochs: {},
   filter: "",
 };
 
@@ -83,9 +104,56 @@ const moveSubtree = (
   return {
     children,
     expanded: remap(state.expanded),
-    loading: remap(state.loading),
+    // In-flight requests for the old subtree are dropped, not remapped: their
+    // results are stale and would land as ghosts under the old keys. The
+    // `pendingLoads` pass re-requests the renamed path under a fresh epoch.
+    loading: dropSubtreeKeys(state.loading, from),
     failed: remap(state.failed),
   };
+};
+
+/** Bumps the listing generation of every path under `from` so in-flight
+ * results issued for the old subtree are discarded by the epoch guard. */
+const bumpEpochs = (
+  epochs: Readonly<Record<string, number>>,
+  from: string,
+): Readonly<Record<string, number>> => {
+  const next: Record<string, number> = {};
+  let bumped = false;
+  for (const [key, epoch] of Object.entries(epochs)) {
+    if (key === from || key.startsWith(`${from}/`)) {
+      next[key] = epoch + 1;
+      bumped = true;
+    } else {
+      next[key] = epoch;
+    }
+  }
+  // Ensure even a path with no tracked generation rejects a stale result.
+  if (!bumped) next[from] = 1;
+  return next;
+};
+
+/** Drops `path` and every descendant from a path set. */
+const dropSubtreeKeys = (
+  set: ReadonlySet<string>,
+  path: string,
+): ReadonlySet<string> => {
+  const next = new Set<string>();
+  for (const candidate of set) {
+    if (candidate !== path && !candidate.startsWith(`${path}/`)) next.add(candidate);
+  }
+  return next;
+};
+
+/** Drops one key from a record, reusing the input when it was absent. */
+const dropKey = <T>(
+  record: Readonly<Record<string, T>>,
+  key: string,
+): Readonly<Record<string, T>> => {
+  if (!(key in record)) return record;
+  const next: Record<string, T> = { ...record };
+  delete next[key];
+  return next;
 };
 
 /** Drops every cached listing below a removed entry. */
@@ -97,18 +165,11 @@ const dropSubtree = (
   for (const [key, entries] of Object.entries(state.children)) {
     if (key !== path && !key.startsWith(`${path}/`)) children[key] = entries;
   }
-  const keep = (set: ReadonlySet<string>): ReadonlySet<string> => {
-    const next = new Set<string>();
-    for (const candidate of set) {
-      if (candidate !== path && !candidate.startsWith(`${path}/`)) next.add(candidate);
-    }
-    return next;
-  };
   return {
     children,
-    expanded: keep(state.expanded),
-    loading: keep(state.loading),
-    failed: keep(state.failed),
+    expanded: dropSubtreeKeys(state.expanded, path),
+    loading: dropSubtreeKeys(state.loading, path),
+    failed: dropSubtreeKeys(state.failed, path),
   };
 };
 
@@ -118,19 +179,25 @@ export function treeReducer(state: TreeState, action: TreeAction): TreeState {
       return { ...initialTreeState, root: action.root };
     case "loadRequested":
       return { ...state, loading: withSet(state.loading, action.path, true) };
-    case "loadSucceeded":
+    case "loadSucceeded": {
+      // A rename or disk invalidation may have superseded this request; its
+      // result describes an older generation and must not land.
+      if ((state.epochs[action.path] ?? 0) !== action.epoch) return state;
       return {
         ...state,
         loading: withSet(state.loading, action.path, false),
         failed: withSet(state.failed, action.path, false),
         children: { ...state.children, [action.path]: [...action.children].sort(byName) },
       };
-    case "loadFailed":
+    }
+    case "loadFailed": {
+      if ((state.epochs[action.path] ?? 0) !== action.epoch) return state;
       return {
         ...state,
         loading: withSet(state.loading, action.path, false),
         failed: withSet(state.failed, action.path, true),
       };
+    }
     case "loadRetried":
       // Clearing the failure flag makes the directory eligible for
       // `pendingLoads` again, so the next render re-requests it.
@@ -165,6 +232,7 @@ export function treeReducer(state: TreeState, action: TreeAction): TreeState {
       return {
         ...state,
         ...subtree,
+        epochs: bumpEpochs(state.epochs, action.from),
         children: cached
           ? {
               ...subtree.children,
@@ -188,6 +256,21 @@ export function treeReducer(state: TreeState, action: TreeAction): TreeState {
               [action.parentPath]: cached.filter((entry) => entry.path !== action.path),
             }
           : subtree.children,
+      };
+    }
+    case "directoryInvalidated": {
+      // Bumping the generation discards any in-flight result for this path;
+      // clearing `loading` lets `pendingLoads` schedule a fresh listing
+      // immediately instead of waiting for the stale request to settle.
+      return {
+        ...state,
+        epochs: {
+          ...state.epochs,
+          [action.path]: (state.epochs[action.path] ?? 0) + 1,
+        },
+        children: dropKey(state.children, action.path),
+        loading: withSet(state.loading, action.path, false),
+        failed: withSet(state.failed, action.path, false),
       };
     }
   }

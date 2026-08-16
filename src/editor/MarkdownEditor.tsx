@@ -1,8 +1,10 @@
 import { useEffect, useRef } from "react";
+import { forceParsing } from "@codemirror/language";
 import {
   Annotation,
   Compartment,
   EditorState,
+  type Text,
   Transaction,
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -17,8 +19,15 @@ import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
 import { mathWidgetsExtension } from "./mathWidgets";
-import type { OutlineHeading } from "./outline";
-import { outlinePublisherExtension } from "./outlineExtension";
+import {
+  extractOutline,
+  findOutlineHeadingById,
+  type OutlineHeading,
+} from "./outline";
+import {
+  DEFAULT_PARSE_SLICE_MS,
+  outlinePublisherExtension,
+} from "./outlineExtension";
 import type { PerformanceMode } from "./performanceMode";
 import {
   focusMarkdownTableCell,
@@ -33,6 +42,29 @@ const externalValueSync = Annotation.define<boolean>();
 // editable raw Markdown until the user opts back into full rendering.
 const LIGHT_MODE_TABLE_CELL_LIMIT = 1_000;
 
+/**
+ * Resolves the position an outline navigation request points at, or null
+ * when the request cannot be honored. A request carrying the current
+ * document revision is used as-is; an older revision (the outline publishes
+ * on a debounce, so the panel can lag the document) is re-located by heading
+ * id against a freshly parsed tree. An incomplete parse or a vanished
+ * heading drops the click rather than land on obsolete offsets.
+ */
+const outlineNavigationTarget = (
+  view: EditorView,
+  request: OutlineNavigationRequest,
+): { from: number; textFrom: number } | null => {
+  if (request.doc === view.state.doc) {
+    return { from: request.from, textFrom: request.textFrom };
+  }
+  if (!forceParsing(view, view.state.doc.length, DEFAULT_PARSE_SLICE_MS)) {
+    return null;
+  }
+  const fresh = findOutlineHeadingById(extractOutline(view.state), request.id);
+  if (fresh === null) return null;
+  return { from: fresh.from, textFrom: fresh.textFrom };
+};
+
 export interface EditorImageDrop {
   readonly sequence: number;
   readonly paths: ReadonlyArray<string>;
@@ -42,8 +74,19 @@ export interface EditorImageDrop {
 
 export interface OutlineNavigationRequest {
   readonly sequence: number;
+  /**
+   * Heading id in the published tree; used to re-locate the heading after
+   * edits shifted the stored offsets.
+   */
+  readonly id: string;
   readonly from: number;
   readonly textFrom: number;
+  /**
+   * The document revision the offsets were extracted from. A request whose
+   * revision no longer matches the editor's doc is stale; it is either
+   * re-located against a fresh parse or dropped.
+   */
+  readonly doc: Text | null;
 }
 
 export interface TableFocusRequest extends TableCellEditRequest {
@@ -61,7 +104,10 @@ export interface MarkdownEditorProps {
   saveClipboardImage(input: ClipboardImageInput): Promise<string | null>;
   resolveImageUrl(path: string): string;
   imageDrop?: EditorImageDrop | null;
-  onOutlineChange?(headings: ReadonlyArray<OutlineHeading>): void;
+  onOutlineChange?(
+    headings: ReadonlyArray<OutlineHeading>,
+    doc: Text,
+  ): void;
   outlineNavigation?: OutlineNavigationRequest | null;
   onRequestTableEdit?(request: TableCellEditRequest): void;
   tableFocusRequest?: TableFocusRequest | null;
@@ -184,8 +230,8 @@ export default function MarkdownEditor({
               imageSupportRef.current.saveClipboardImage(input),
             getDocumentPath: () => documentPathRef.current,
           }),
-          outlinePublisherExtension((headings) =>
-            callbacksRef.current.onOutlineChange?.(headings),
+          outlinePublisherExtension((headings, doc) =>
+            callbacksRef.current.onOutlineChange?.(headings, doc),
           ),
           EditorView.contentAttributes.of({
             "aria-label": "Markdown 编辑器",
@@ -306,10 +352,10 @@ export default function MarkdownEditor({
       return;
     }
     consumedOutlineNavigationRef.current = outlineNavigation.sequence;
+    const target = outlineNavigationTarget(view, outlineNavigation);
+    if (target === null) return;
     const requestedPosition =
-      viewMode === "reading"
-        ? outlineNavigation.from
-        : outlineNavigation.textFrom;
+      viewMode === "reading" ? target.from : target.textFrom;
     const position = Math.min(
       view.state.doc.length,
       Math.max(0, requestedPosition),

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { E2eFixtureSpec } from "../../src/app/e2e";
 
 /**
  * Browser-shell E2E flows (plan Task 13, Step 1).
@@ -9,53 +10,11 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
  * can drive test hooks (updateFile/emitDiskEvent) and inspect writes. All
  * interactions go through the real CodeMirror DOM — no reducer calls.
  *
- * The fixture shape mirrors src/app/e2e.ts E2eFixtureSpec.
+ * The fixture shape and the window.__E2E_FIXTURE__ / __E2E_PORT__ types come
+ * from the shell itself (src/app/e2e.ts) via a type-only import: erased at
+ * runtime, the fixture still travels as JSON through addInitScript, but the
+ * shape can no longer drift from the app's expectations.
  */
-
-interface E2eFileSpec {
-  path: string;
-  text: string;
-  hasUtf8Bom?: boolean;
-  newline?: "lf" | "cr_lf";
-  version?: string;
-}
-
-interface E2eDraftSpec {
-  draftId: string;
-  originalPath: string | null;
-  title: string;
-  text: string;
-  hasUtf8Bom: boolean;
-  newline: "lf" | "cr_lf";
-  savedTextHash: string;
-  savedVersion: string | null;
-}
-
-interface E2eFixtureSpec {
-  files?: E2eFileSpec[];
-  session?: {
-    recent: Array<{ path: string; kind: "file" | "folder" }>;
-    openPaths: string[];
-    activePath: string | null;
-    workspacePath: string | null;
-    outline?: { width: number };
-  } | null;
-  drafts?: E2eDraftSpec[];
-  workspace?: { path: string; title: string } | null;
-  chosenPaths?: string[];
-  savePath?: string | null;
-}
-
-declare global {
-  interface Window {
-    __E2E_FIXTURE__?: E2eFixtureSpec;
-    __E2E_PORT__?: {
-      writes: ReadonlyArray<{ text: string }>;
-      updateFile(path: string, text: string, version: string, modifiedUnixMs?: number): void;
-      emitDiskEvent(event: { kind: string; path: string; modifiedUnixMs?: number; version?: string }): void;
-    };
-  }
-}
 
 /** Installs the fixture before page scripts run, then loads the shell. */
 const seed = async (page: Page, fixture: E2eFixtureSpec) => {
@@ -244,6 +203,64 @@ test("cancelling a dirty close keeps the tab and the edits", async ({
   await expect(page.getByRole("tab")).toHaveCount(1);
   await expect(page.locator(".tab-dirty")).toHaveCount(1);
   await expect(content).toContainText("未保存的修改");
+});
+
+test("saving on a dirty close persists the edits and drops the recovery draft", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [{ path: "/docs/notes.md", text: "原始内容\n" }],
+    session: sessionWith("/docs/notes.md"),
+  });
+
+  const content = editorContent(page);
+  await content.waitFor();
+  await content.click();
+  await page.keyboard.type(" 已保存的修改");
+  await expect(page.locator(".tab-dirty")).toHaveCount(1);
+  // The dirty tab persists a recovery draft after its 2s debounce.
+  await page.waitForFunction(() => (window.__E2E_PORT__?.drafts ?? []).length === 1);
+
+  await page.getByRole("button", { name: "关闭 notes.md" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("保存更改");
+  await dialog.getByRole("button", { name: "保存" }).click();
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  const writes = await page.evaluate(() =>
+    (window.__E2E_PORT__?.writes ?? []).map((write) => write.text),
+  );
+  expect(writes.at(-1)).toContain("原始内容");
+  expect(writes.at(-1)).toContain("已保存的修改");
+  // Saving made the tab clean, so its persisted draft is discarded too.
+  await page.waitForFunction(() => (window.__E2E_PORT__?.drafts ?? []).length === 0);
+});
+
+test("discarding a dirty close closes the tab and drops its recovery draft", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [{ path: "/docs/notes.md", text: "原始内容\n" }],
+    session: sessionWith("/docs/notes.md"),
+  });
+
+  const content = editorContent(page);
+  await content.waitFor();
+  await content.click();
+  await page.keyboard.type("未保存的修改");
+  await expect(page.locator(".tab-dirty")).toHaveCount(1);
+  await page.waitForFunction(() => (window.__E2E_PORT__?.drafts ?? []).length === 1);
+
+  await page.getByRole("button", { name: "关闭 notes.md" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("保存更改");
+  await dialog.getByRole("button", { name: "放弃" }).click();
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  // Discarding the unsaved buffer also discards its persisted draft.
+  await page.waitForFunction(() => (window.__E2E_PORT__?.drafts ?? []).length === 0);
 });
 
 test("types and pastes plain text into a Markdown table and saves exact source", async ({
@@ -619,7 +636,7 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
   await outline.getByRole("button", { name: "展开 第二章" }).click();
   await expect(outline.getByRole("treeitem", { name: "第二节" })).toBeVisible();
 
-  const resizer = page.getByRole("separator", { name: "调整大纲宽度" });
+  const resizer = page.getByRole("slider", { name: "调整大纲宽度" });
   const box = await resizer.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + 3, box!.y + 60);
@@ -766,6 +783,42 @@ test("surfaces an external conflict and keeps local edits", async ({
   await expect(content).not.toContainText("磁盘版本");
 });
 
+test("loads the disk version through the conflict dialog, replacing local edits", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [{ path: "/docs/conflict.md", text: "本地版本\n" }],
+    session: sessionWith("/docs/conflict.md"),
+  });
+
+  const content = editorContent(page);
+  await content.waitFor();
+  await content.click();
+  await page.keyboard.type(" 本地修改");
+  await expect(page.locator(".tab-dirty")).toHaveCount(1);
+
+  // Another process rewrites the file underneath the dirty tab.
+  await page.evaluate(() => {
+    window.__E2E_PORT__?.updateFile("/docs/conflict.md", "磁盘版本\n", "disk-v2", 2);
+    window.__E2E_PORT__?.emitDiskEvent({
+      kind: "changed",
+      path: "/docs/conflict.md",
+      modifiedUnixMs: 2,
+      version: "disk-v2",
+    });
+  });
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("文件已在磁盘上更改");
+  await dialog.getByRole("button", { name: "载入磁盘版本" }).click();
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(content).toContainText("磁盘版本");
+  await expect(content).not.toContainText("本地修改");
+  // Reloaded from disk, so the buffer matches the saved text again.
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+});
+
 test("offers recovery drafts on launch and restores one explicitly", async ({
   page,
 }) => {
@@ -793,4 +846,33 @@ test("offers recovery drafts on launch and restores one explicitly", async ({
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(editorContent(page)).toContainText("崩溃前未保存的内容");
   await expect(page.locator(".tab-dirty")).toHaveCount(1);
+});
+
+test("discarding a recovery draft removes it from the port and closes the dialog", async ({
+  page,
+}) => {
+  await seed(page, {
+    drafts: [
+      {
+        draftId: "draft-1",
+        originalPath: "/docs/lost.md",
+        title: "lost.md",
+        text: "崩溃前未保存的内容\n",
+        hasUtf8Bom: false,
+        newline: "lf",
+        savedTextHash: "hash-1",
+        savedVersion: "v1",
+      },
+    ],
+  });
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("恢复未保存的更改");
+  await dialog.getByRole("button", { name: "丢弃" }).click();
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // The draft is deleted on the port, not merely hidden in the dialog.
+  await page.waitForFunction(() => (window.__E2E_PORT__?.drafts ?? []).length === 0);
+  // Nothing was restored, so no tab appears.
+  await expect(page.getByRole("tab")).toHaveCount(0);
 });

@@ -85,6 +85,33 @@ describe("accessibility: roles and names", () => {
     expect(screen.getByRole("tabpanel")).not.toHaveAttribute("aria-labelledby");
   });
 
+  it("exposes side-panel resizers as sliders with labelled value ranges", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md")]]),
+      { workspace: { path: "/notes", title: "notes" } },
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+
+    // Width-carrying separators would be invalid ARIA; both resizers are
+    // sliders with a value range and keep their keyboard adjustment.
+    const sidebar = screen.getByRole("slider", { name: "调整侧栏宽度" });
+    expect(sidebar).toHaveAttribute("aria-orientation", "vertical");
+    expect(sidebar).toHaveAttribute("aria-valuenow", "260");
+    expect(sidebar).toHaveAttribute("aria-valuemin", "200");
+    // The max follows the window-aware clamp (jsdom 1024px → 40% = 410).
+    expect(sidebar).toHaveAttribute("aria-valuemax", "410");
+
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
+    const outline = screen.getByRole("slider", { name: "调整大纲宽度" });
+    expect(outline).toHaveAttribute("aria-orientation", "vertical");
+    expect(outline).toHaveAttribute("aria-valuenow", "300");
+    expect(outline).toHaveAttribute("aria-valuemin", "200");
+    expect(outline).toHaveAttribute("aria-valuemax", "410");
+  });
+
   it("exposes the workspace tree with a name and levelled items", async () => {
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(

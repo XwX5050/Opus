@@ -207,6 +207,11 @@ interface SearchableFieldProps {
   readonly onChange: (value: string) => void;
 }
 
+/** Cap on the number of options drawn at once: installed-font lists can hold
+ * hundreds of entries, and drawing them all on focus is wasted work. The
+ * keyboard and highlighting operate over this rendered subset. */
+const MAX_DROPDOWN_OPTIONS = 100;
+
 /**
  * Text field with a drawn, searchable option list. The native `<datalist>`
  * picker cannot be styled inside the dark WKWebView (its popup renders as an
@@ -227,6 +232,7 @@ function SearchableField({
 }: SearchableFieldProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
 
   const filtered = useMemo(() => {
     if (options === null) return null;
@@ -236,14 +242,31 @@ function SearchableField({
       : options.filter((name) => name.toLocaleLowerCase().includes(query));
   }, [options, value]);
 
-  // Keep the highlighted option inside the filtered list while typing.
+  // Only the first MAX_DROPDOWN_OPTIONS matches are drawn, so navigation and
+  // highlighting stay in sync with the rendered list.
+  const displayed = useMemo(
+    () => (filtered === null ? null : filtered.slice(0, MAX_DROPDOWN_OPTIONS)),
+    [filtered],
+  );
+
+  // Keep the highlighted option inside the rendered list while typing.
   useEffect(() => {
     setActiveIndex((current) =>
-      filtered === null
+      displayed === null
         ? 0
-        : Math.min(current, Math.max(filtered.length - 1, 0)),
+        : Math.min(current, Math.max(displayed.length - 1, 0)),
     );
-  }, [filtered]);
+  }, [displayed]);
+
+  // Keep the highlighted option visible while navigating with the keyboard.
+  useEffect(() => {
+    const active = listRef.current?.children[activeIndex] as
+      | HTMLElement
+      | undefined;
+    // jsdom leaves scrollIntoView unimplemented; the optional call makes the
+    // effect a no-op there.
+    active?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, displayed]);
 
   const select = (name: string) => {
     onChange(name);
@@ -251,7 +274,7 @@ function SearchableField({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (filtered === null) return;
+    if (displayed === null) return;
     if (event.key === "Escape") {
       if (open) {
         // Close only the list; the dialog handles Escape itself.
@@ -268,22 +291,22 @@ function SearchableField({
         setActiveIndex(0);
         return;
       }
-      if (filtered.length === 0) return;
+      if (displayed.length === 0) return;
       const delta = event.key === "ArrowDown" ? 1 : -1;
       setActiveIndex((current) =>
-        Math.min(filtered.length - 1, Math.max(0, current + delta)),
+        Math.min(displayed.length - 1, Math.max(0, current + delta)),
       );
       return;
     }
-    if (event.key === "Enter" && open && filtered.length > 0) {
+    if (event.key === "Enter" && open && displayed.length > 0) {
       event.preventDefault();
-      select(filtered[Math.min(activeIndex, filtered.length - 1)]);
+      select(displayed[Math.min(activeIndex, displayed.length - 1)]);
     }
   };
 
-  const listVisible = open && filtered !== null && filtered.length > 0;
+  const listVisible = open && displayed !== null && displayed.length > 0;
   const activeOptionId = listVisible
-    ? `${id}-option-${Math.min(activeIndex, filtered.length - 1)}`
+    ? `${id}-option-${Math.min(activeIndex, displayed.length - 1)}`
     : undefined;
 
   return (
@@ -305,7 +328,7 @@ function SearchableField({
         id={id}
         type="text"
         role={options === null ? undefined : "combobox"}
-        aria-expanded={options === null ? undefined : open}
+        aria-expanded={options === null ? undefined : listVisible}
         aria-controls={listVisible ? `${id}-listbox` : undefined}
         aria-activedescendant={listVisible ? activeOptionId : undefined}
         placeholder={options === null ? fallbackPlaceholder : searchPlaceholder}
@@ -328,11 +351,12 @@ function SearchableField({
       {listVisible && (
         <ul
           id={`${id}-listbox`}
+          ref={listRef}
           role="listbox"
           aria-label={listLabel}
           className="font-search-list"
         >
-          {filtered.map((name, index) => (
+          {displayed.map((name, index) => (
             <li
               key={name}
               id={`${id}-option-${index}`}

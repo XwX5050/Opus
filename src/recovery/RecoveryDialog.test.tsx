@@ -112,6 +112,35 @@ describe("RecoveryDialog", () => {
     expect(await screen.findByText("source of B")).toBeVisible();
   });
 
+  it("keeps the expanded draft's source when a slower read resolves late", async () => {
+    const user = userEvent.setup();
+    const resolvers = new Map<string, (text: string) => void>();
+    const readSource = vi.fn(
+      (draftId: string) =>
+        new Promise<string>((resolve) => resolvers.set(draftId, resolve)),
+    );
+    renderDialog(
+      [draft(), draft({ draftId: "draft-document-2", title: "b.md" })],
+      { readSource },
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "恢复未保存的更改" });
+    const toggles = within(dialog).getAllByRole("button", { name: "查看源码" });
+    // Expand A (its read stays pending), then expand B and let B's read
+    // land first: B is now showing its own source.
+    await user.click(toggles[0]);
+    await user.click(toggles[1]);
+    resolvers.get("draft-document-2")!("source of B");
+    expect(await screen.findByText("source of B")).toBeVisible();
+
+    // A's slow read then lands; it must not overwrite B's displayed source
+    // (which would flip B back to "载入中…").
+    resolvers.get("draft-document-1")!("source of A");
+    await act(async () => {});
+    expect(screen.queryByText("source of A")).not.toBeInTheDocument();
+    expect(screen.getByText("source of B")).toBeVisible();
+  });
+
   it("does not dismiss on Escape: every draft needs an explicit decision", async () => {
     const user = userEvent.setup();
     const props = renderDialog([draft()]);

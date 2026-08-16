@@ -121,11 +121,14 @@ pub struct ImageDropPayload {
     pub y: f64,
 }
 
-/// Splits natively dropped paths into `(images, rest)`: images are inserted
-/// into the editor as `![image](path)` references, everything else flows
-/// through the regular open-as-document pipeline.
+/// Splits natively dropped paths into `(images, rest)`: image *files* are
+/// inserted into the editor as `![image](path)` references, everything else
+/// (including image-named directories) flows through the regular
+/// open-as-document pipeline.
 pub fn partition_dropped_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    paths.into_iter().partition(|path| is_image_path(path))
+    paths.into_iter().partition(|path| {
+        is_image_path(path) && std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+    })
 }
 
 #[cfg(test)]
@@ -145,28 +148,29 @@ mod tests {
     }
 
     #[test]
-    fn partitions_dropped_paths_into_images_and_other_files() {
+    fn partitions_dropped_paths_into_image_files_and_everything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("photo.PNG");
+        std::fs::write(&photo, "x").unwrap();
+        let note = dir.path().join("note.md");
+        std::fs::write(&note, "x").unwrap();
+        let webp = dir.path().join("pic.webp");
+        std::fs::write(&webp, "x").unwrap();
+        // An image-named *directory* must not enter the image pipeline.
+        let image_named_dir = dir.path().join("folder.png");
+        std::fs::create_dir(&image_named_dir).unwrap();
+        // A missing path cannot be an image either, even with a matching
+        // extension; it keeps the open-as-document behavior.
+        let missing = dir.path().join("missing.PNG");
+
         let (images, rest) = partition_dropped_paths(vec![
-            PathBuf::from("/tmp/photo.PNG"),
-            PathBuf::from("/tmp/note.md"),
-            PathBuf::from("/tmp/pic.webp"),
-            PathBuf::from("/tmp/folder"),
-            PathBuf::from("/tmp/archive.tar.gz"),
+            photo.clone(),
+            note.clone(),
+            webp.clone(),
+            image_named_dir.clone(),
+            missing.clone(),
         ]);
-        assert_eq!(
-            images,
-            vec![
-                PathBuf::from("/tmp/photo.PNG"),
-                PathBuf::from("/tmp/pic.webp")
-            ]
-        );
-        assert_eq!(
-            rest,
-            vec![
-                PathBuf::from("/tmp/note.md"),
-                PathBuf::from("/tmp/folder"),
-                PathBuf::from("/tmp/archive.tar.gz"),
-            ]
-        );
+        assert_eq!(images, vec![photo, webp]);
+        assert_eq!(rest, vec![note, image_named_dir, missing]);
     }
 }

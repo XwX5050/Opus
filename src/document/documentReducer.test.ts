@@ -211,6 +211,32 @@ describe("documentReducer", () => {
     expect(state.activeId).toBe("same-id");
   });
 
+  it("keeps backslashes in macOS titles as legal filename characters", () => {
+    const state = reduce([
+      {
+        type: "fileOpened",
+        id: "doc-1",
+        file: openedFile({ path: "/notes/a\\b.md" }),
+        pathPlatform: "macos",
+      },
+    ]);
+
+    expect(state.tabs[0].title).toBe("a\\b.md");
+  });
+
+  it("splits Windows titles on either separator", () => {
+    const state = reduce([
+      {
+        type: "fileOpened",
+        id: "doc-1",
+        file: openedFile({ path: "C:\\Notes\\Sub\\a.md" }),
+        pathPlatform: "windows",
+      },
+    ]);
+
+    expect(state.tabs[0].title).toBe("a.md");
+  });
+
   it("marks an edited document dirty while retaining the saved text", () => {
     const state = reduce([
       { type: "fileOpened", id: "doc-1", file: openedFile() },
@@ -637,6 +663,77 @@ describe("documentReducer", () => {
     ]);
 
     expect(state.tabs[0]).toMatchObject({ text: "local edit", status: "missing" });
+  });
+
+  it("recreates a missing document in place with no expected version", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile({ path: "/notes/a.md" })]]),
+    );
+    port.removeFile("/notes/a.md");
+    const edited = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile({ path: "/notes/a.md" }) },
+      { type: "textChanged", id: "doc-1", text: "recreate me" },
+      { type: "externalMissing", id: "doc-1" },
+    ]);
+    const saving = documentReducer(edited, {
+      type: "saveRequested",
+      id: "doc-1",
+    });
+    const request = saving.tabs[0].pendingSave!;
+
+    expect(request).toMatchObject({
+      targetPath: "/notes/a.md",
+      expectedVersion: null,
+    });
+
+    const result = await port.write(request);
+    const saved = documentReducer(saving, {
+      type: "saveSucceeded",
+      requestId: request.requestId,
+      result,
+    });
+    expect(saved.tabs[0]).toMatchObject({
+      text: "recreate me",
+      savedText: "recreate me",
+      status: "clean",
+    });
+    expect((await port.openPath("/notes/a.md")).text).toBe("recreate me");
+  });
+
+  it("still refuses to overwrite a file another process recreated", async () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile({ path: "/notes/a.md" }) },
+      { type: "externalMissing", id: "doc-1" },
+    ]);
+    const request = documentReducer(state, {
+      type: "saveRequested",
+      id: "doc-1",
+    }).tabs[0].pendingSave!;
+    expect(request.expectedVersion).toBeNull();
+
+    // The file came back with different content before the write landed.
+    const port = new MemoryDocumentPort(
+      new Map([
+        [
+          "/notes/a.md",
+          openedFile({
+            path: "/notes/a.md",
+            version: "foreign-v1",
+            text: "someone else's file",
+          }),
+        ],
+      ]),
+    );
+
+    await expect(
+      port.write(
+        writeRequest({
+          targetPath: request.targetPath,
+          text: request.text,
+          expectedVersion: request.expectedVersion,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "conflict" });
   });
 
   it("keeps only the 20 most recently closed tabs", () => {
@@ -1318,6 +1415,67 @@ describe("documentReducer disk events", () => {
       version: "v1",
       status: "dirty",
     });
+    expect(state.activeId).toBe("doc-1");
+  });
+
+  it("keeps a dirty open tab when a restored draft targets its path", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "newer local edits" },
+      {
+        type: "documentRestored",
+        id: "doc-2",
+        draft: {
+          draftId: "draft-document-7",
+          originalPath: "/users/alice/notes/README.md",
+          title: "readme.md",
+          text: "older draft text",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: "hash",
+          savedVersion: "v1",
+        },
+      },
+    ]);
+
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]).toMatchObject({
+      id: "doc-1",
+      text: "newer local edits",
+      savedText: "saved",
+      status: "dirty",
+    });
+    expect(state.tabs[0].pendingSave).toBeUndefined();
+    expect(state.activeId).toBe("doc-1");
+  });
+
+  it("keeps a pending save when a restored draft targets its path", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "saveRequested", id: "doc-1" },
+      {
+        type: "documentRestored",
+        id: "doc-2",
+        draft: {
+          draftId: "draft-document-7",
+          originalPath: "/users/alice/notes/README.md",
+          title: "readme.md",
+          text: "draft text",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: "hash",
+          savedVersion: "v1",
+        },
+      },
+    ]);
+
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]).toMatchObject({
+      id: "doc-1",
+      text: "saved",
+      status: "clean",
+    });
+    expect(state.tabs[0].pendingSave).toBeDefined();
     expect(state.activeId).toBe("doc-1");
   });
 

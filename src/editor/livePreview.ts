@@ -540,6 +540,9 @@ const resyncTaskCheckboxAfterToggle = (
   to: number,
 ): void => {
   queueMicrotask(() => {
+    // The widget may have been rebuilt — and this node removed — before
+    // the microtask runs; never re-sync a detached checkbox.
+    if (!checkbox.isConnected) return;
     const source = view.state.sliceDoc(from, to);
     if (source === "[x]" || source === "[X]") {
       syncTaskCheckboxDom(checkbox, true);
@@ -587,6 +590,9 @@ class TaskCheckboxWidget extends WidgetType {
     syncTaskCheckboxDom(checkbox, this.checked);
     const toggle = (event: Event) => {
       event.preventDefault();
+      // Widget handlers bypass CodeMirror's editing pipeline, so the toggle
+      // must honor read-only views (reading mode, translation preview) itself.
+      if (view.state.readOnly) return;
       // A double-click fires two clicks; ignore the second one so the
       // checkbox does not toggle back in place.
       if ((event as MouseEvent).detail > 1) return;
@@ -600,6 +606,9 @@ class TaskCheckboxWidget extends WidgetType {
           insert: checked ? "[ ]" : "[x]",
         },
       });
+      // The dispatch may rebuild the widget and detach this node; the resync
+      // and the animations must not run against stale DOM.
+      if (!checkbox.isConnected) return;
       resyncTaskCheckboxAfterToggle(view, checkbox, this.from, this.to);
       animateTaskCheckboxPop(checkbox);
       animateTaskDoneReveal(checkbox);

@@ -70,6 +70,9 @@ export const reportEditorEditable = (): void => {
 const SESSION_STORE_FILE = "session.json";
 const sessionStore = () => Store.load(SESSION_STORE_FILE);
 
+// Debounce window for session persistence, mirroring window-geometry writes.
+const SESSION_SAVE_DEBOUNCE_MS = 500;
+
 const asStringArray = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
@@ -217,6 +220,30 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
   const openPath = async (path: string) => {
     try { return opened(await invoke<OpenDto>("open_document", { path })); } catch (error) { throw failure(error); }
   };
+  // Session writes are debounced: setting-dialog keystrokes fire one
+  // saveSession each, and every write is a Store.load + set + save round
+  // trip. A trailing-edge timer collapses a burst into a single write (the
+  // latest snapshot wins), and onCloseRequested flushes any pending save
+  // before the window is destroyed so the final change is never lost.
+  let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingSession: PersistedSession | null = null;
+  const flushSession = async (): Promise<void> => {
+    if (sessionSaveTimer) {
+      clearTimeout(sessionSaveTimer);
+      sessionSaveTimer = null;
+    }
+    const session = pendingSession;
+    pendingSession = null;
+    if (session === null) return;
+    try {
+      const store = await sessionStore();
+      await store.set("session", session);
+      await store.save();
+    } catch {
+      // Session persistence is best-effort; a failed flush must never
+      // block the window from closing.
+    }
+  };
   return {
     openPath,
     async chooseAndOpenFiles() {
@@ -249,7 +276,7 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       });
       if (path === null) return null;
       try {
-        await invoke("save_clipboard_image", { path, bytes: Array.from(input.bytes), mimeType: input.mimeType });
+        await invoke("save_clipboard_image", { path, bytes: input.bytes, mimeType: input.mimeType });
       } catch (error) { throw failure(error); }
       if (directory && path.startsWith(`${directory}/`)) return path.slice(directory.length + 1);
       return path;
@@ -277,6 +304,9 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async openWorkspacePath(path: string): Promise<WorkspaceRoot> {
       try { return workspaceRoot(await invoke<WorkspaceRootDto>("open_workspace", { root: path })); } catch (error) { throw failure(error); }
+    },
+    async closeWorkspace(): Promise<void> {
+      try { await invoke("close_workspace"); } catch (error) { throw failure(error); }
     },
     async listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>> {
       try { return (await invoke<DirectoryEntryDto[]>("list_directory", { root, relative })).map(directoryEntry); } catch (error) { throw failure(error); }
@@ -352,11 +382,11 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       } catch (error) { throw failure(error); }
     },
     async saveSession(session: PersistedSession): Promise<void> {
-      try {
-        const store = await sessionStore();
-        await store.set("session", session);
-        await store.save();
-      } catch (error) { throw failure(error); }
+      pendingSession = session;
+      if (sessionSaveTimer) clearTimeout(sessionSaveTimer);
+      sessionSaveTimer = setTimeout(() => {
+        void flushSession();
+      }, SESSION_SAVE_DEBOUNCE_MS);
     },
     onCloseRequested(handler: () => void | Promise<void>): Promise<() => void> {
       const win = getCurrentWindow();
@@ -369,6 +399,9 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
         } catch {
           // Best-effort flush; closing proceeds regardless.
         } finally {
+          // Persist any pending debounced session save before the window
+          // goes away, or the latest preference change would be dropped.
+          await flushSession();
           await win.destroy();
         }
       });

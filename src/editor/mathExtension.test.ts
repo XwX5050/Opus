@@ -52,8 +52,34 @@ describe("mathMarkdownExtension", () => {
     ["adjacent currency", "$5 and $6"],
     ["currency suffix", "US$5"],
     ["inline double dollars", "before $$x$$ after"],
+    ["leading double dollars", "$$x$$"],
+    ["embedded double dollars", "a$$x$$b"],
+    ["CJK price list", "价格 $5/件，$6/件"],
+    ["CJK price range", "机器$5到$10元"],
+    ["CJK price with unit", "价格$5元，优惠到$6元"],
+    ["math before CJK unit", "每件商品$x$元"],
+    ["math before digit", "$x$5"],
   ])("does not parse %s as inline math", (_label, doc) => {
     expect(nodesNamed(parse(doc), InlineMath)).toEqual([]);
+  });
+
+  it("parses adjacent formulas with touching delimiters", () => {
+    const doc = "$x$$y$";
+    const state = parse(doc);
+
+    expect(nodesNamed(state, InlineMath)).toEqual([
+      { from: 0, to: 3, source: "$x$" },
+      { from: 3, to: 6, source: "$y$" },
+    ]);
+  });
+
+  it("keeps math closed before CJK punctuation", () => {
+    const doc = "$x^2$。好";
+    const state = parse(doc);
+
+    expect(nodesNamed(state, InlineMath)).toEqual([
+      { from: 0, to: 5, source: "$x^2$" },
+    ]);
   });
 
   it("leaves dollar signs inside code spans and fenced code outside math nodes", () => {

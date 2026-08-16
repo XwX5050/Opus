@@ -35,6 +35,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -154,9 +155,25 @@ const restoreSessionStore = (bundleId) => {
     } else if (existsSync(payload.file)) {
       rmSync(payload.file);
     }
-  } finally {
-    rmSync(backupPath, { force: true });
+  } catch (error) {
+    // A broken backup may be the only copy of the user's session; never
+    // delete it blindly. Keep it aside for manual recovery and warn.
+    const detail = error instanceof Error ? error.message : String(error);
+    const corruptPath = `${backupPath}.corrupt`;
+    try {
+      renameSync(backupPath, corruptPath);
+      console.warn(
+        `failed to restore session store from backup (${detail}); ` +
+          `kept the backup as ${corruptPath} for manual recovery`,
+      );
+    } catch {
+      // Nothing more we can do — remove it rather than let it shadow the
+      // next backup.
+      rmSync(backupPath, { force: true });
+    }
+    return;
   }
+  rmSync(backupPath, { force: true });
 };
 
 // ---------- launch / quit ----------
@@ -215,6 +232,11 @@ export const assertNoLiveInstance = async (binaryPath, bundleId, { force = false
 };
 
 const quitGracefully = async (child, binaryPath, bundleId) => {
+  // The child may already have exited (e.g. the bundle lacked the perf-mark
+  // instrumentation); its "exit" event has already fired, so a listener
+  // attached now would never resolve and the harness would stall the full
+  // 8 s timeout below.
+  if (child.exitCode !== null) return;
   await tryExec("osascript", [
     "-e",
     `tell application id "${bundleId}" to quit`,
@@ -294,16 +316,37 @@ export const launchOnce = async ({
 
 // ---------- samples file ----------
 
+const emptySamples = () => ({ bundle: null, provenance: null, hot: [], cold: [], gatekeeperFirstLaunchMs: null });
+
 export const loadSamples = () => {
-  if (!existsSync(SAMPLES_FILE)) {
-    return { bundle: null, provenance: null, hot: [], cold: [], gatekeeperFirstLaunchMs: null };
+  // Callers mutate the returned object in place (store.cold.push, …), so
+  // every empty result must be a fresh object, never a shared one.
+  if (!existsSync(SAMPLES_FILE)) return emptySamples();
+  try {
+    return JSON.parse(readFileSync(SAMPLES_FILE, "utf8"));
+  } catch (error) {
+    // A truncated file means a previous run was killed mid-write; the old
+    // baseline is lost, but the harness must keep going — --cold and
+    // --gatekeeper would otherwise crash on the unparseable JSON.
+    console.warn(
+      `could not parse ${SAMPLES_FILE} (${error instanceof Error ? error.message : String(error)}); starting from empty samples`,
+    );
+    return emptySamples();
   }
-  return JSON.parse(readFileSync(SAMPLES_FILE, "utf8"));
 };
 
 const saveSamples = (samples) => {
   mkdirSync(path.dirname(SAMPLES_FILE), { recursive: true });
-  writeFileSync(SAMPLES_FILE, `${JSON.stringify(samples, null, 2)}\n`);
+  // Atomic write: a harness killed mid-write must leave, at worst, a stray
+  // temp file — never a truncated startup-samples.json that would break the
+  // next --cold/--gatekeeper run.
+  const tempPath = `${SAMPLES_FILE}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(samples, null, 2)}\n`);
+    renameSync(tempPath, SAMPLES_FILE);
+  } finally {
+    rmSync(tempPath, { force: true });
+  }
 };
 
 // ---------- measurement modes ----------
@@ -360,13 +403,31 @@ if (isMain) {
   const args = process.argv.slice(2);
   const option = (name, fallback) => {
     const index = args.indexOf(name);
-    return index === -1 ? fallback : args[index + 1];
+    if (index === -1) return fallback;
+    const value = args[index + 1];
+    if (value === undefined) throw new Error(`option ${name} requires a value`);
+    return value;
   };
-  const bundlePath = path.resolve(option("--bundle", DEFAULT_BUNDLE));
-  const fixturePath = path.resolve(option("--fixture", DEFAULT_FIXTURE));
   const cold = args.includes("--cold");
   const gatekeeper = args.includes("--gatekeeper");
   const force = args.includes("--force");
+  let bundlePath;
+  let fixturePath;
+  let samples;
+  try {
+    bundlePath = path.resolve(option("--bundle", DEFAULT_BUNDLE));
+    fixturePath = path.resolve(option("--fixture", DEFAULT_FIXTURE));
+    // A non-integer/zero sample count would run the loop zero times and
+    // quietly wipe the committed hot-start baseline — reject it up front.
+    const samplesRaw = option("--samples", "5");
+    samples = Number(samplesRaw);
+    if (!Number.isInteger(samples) || samples <= 0) {
+      throw new Error(`--samples must be a positive integer, got "${samplesRaw}"`);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
 
   if (!existsSync(bundlePath)) {
     console.error(`bundle not found: ${bundlePath}`);
@@ -415,7 +476,6 @@ if (isMain) {
       saveSamples(store);
       report("gatekeeper first launch", [sample.spawnToEditableMs], null);
     } else {
-      const samples = Number(option("--samples", "5"));
       const { samples: run, provenance } = await measureHotStarts({
         bundlePath,
         fixturePath,

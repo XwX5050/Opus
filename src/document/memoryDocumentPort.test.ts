@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MemoryDocumentPort } from "./memoryDocumentPort";
+import type { OpenedFile } from "./types";
 
 describe("MemoryDocumentPort clipboard images and asset scopes", () => {
   it("records clipboard image saves with copied bytes and returns the configured path", async () => {
@@ -282,5 +283,125 @@ describe("MemoryDocumentPort translation", () => {
     const second = await port.listTranslationModels("https://api.openai.com/v1", "k");
     expect(second).toEqual(["gpt-4o-mini", "gpt-4o"]);
     expect(port.translationModelCalls).toHaveLength(2);
+  });
+});
+
+describe("MemoryDocumentPort workspace operations", () => {
+  const openedFile = (path: string): OpenedFile => ({
+    path,
+    text: "saved",
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 100,
+    version: "v1",
+  });
+
+  it("refuses to rename a file onto an existing directory name", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      { directories: ["/notes/sub.md"], pathPlatform: "linux" },
+    );
+    await expect(port.renameEntry("/notes", "a.md", "sub.md")).rejects.toMatchObject({
+      code: "conflict",
+    });
+  });
+
+  it("rejects renaming a file out of its Markdown extension", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      { pathPlatform: "linux" },
+    );
+    await expect(port.renameEntry("/notes", "a.md", "a.txt")).rejects.toMatchObject({
+      code: "io",
+    });
+  });
+
+  it("treats renaming a file to its own name as a no-op success", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      { pathPlatform: "linux" },
+    );
+    await expect(port.renameEntry("/notes", "a.md", "a.md")).resolves.toEqual({
+      name: "a.md",
+      path: "/notes/a.md",
+      isDirectory: false,
+    });
+    await expect(port.openPath("/notes/a.md")).resolves.toMatchObject({ text: "saved" });
+  });
+
+  it("treats renaming a directory to its own name as a no-op success", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      directories: ["/notes/sub"],
+      pathPlatform: "linux",
+    });
+    await expect(port.renameEntry("/notes", "sub", "sub")).resolves.toEqual({
+      name: "sub",
+      path: "/notes/sub",
+      isDirectory: true,
+    });
+  });
+
+  it("refuses to create a Markdown file that collides with a directory", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      directories: ["/notes/new.md"],
+      pathPlatform: "linux",
+    });
+    await expect(port.createMarkdownFile("/notes", "new.md")).rejects.toMatchObject({
+      code: "conflict",
+    });
+  });
+
+  it("filters hidden entries out of directory listings", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/visible.md", openedFile("/notes/visible.md")],
+        ["/notes/.hidden.md", openedFile("/notes/.hidden.md")],
+        ["/notes/sub/inside.md", openedFile("/notes/sub/inside.md")],
+      ]),
+      { directories: ["/notes/.git", "/notes/sub"], pathPlatform: "linux" },
+    );
+    await expect(port.listDirectory("/notes", "")).resolves.toEqual([
+      { name: "sub", path: "/notes/sub", isDirectory: true },
+      { name: "visible.md", path: "/notes/visible.md", isDirectory: false },
+    ]);
+  });
+
+  it("rejects trashing the workspace root with permission_denied", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      { workspace: { path: "/notes", title: "notes" }, pathPlatform: "linux" },
+    );
+    await expect(port.trashEntry("/notes", "")).rejects.toMatchObject({
+      code: "permission_denied",
+    });
+    await expect(port.openPath("/notes/a.md")).resolves.toMatchObject({
+      path: "/notes/a.md",
+    });
+  });
+
+  it("keeps the files that opened and skips missing ones in chooseAndOpenFiles", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      {
+        chosenPaths: ["/notes/a.md", "/notes/missing.md"],
+        pathPlatform: "linux",
+      },
+    );
+    await expect(port.chooseAndOpenFiles()).resolves.toEqual([
+      expect.objectContaining({ path: "/notes/a.md" }),
+    ]);
+  });
+
+  it("clones the workspace option instead of holding it by reference", async () => {
+    const workspace = { path: "/notes", title: "notes" };
+    const port = new MemoryDocumentPort(new Map(), { workspace });
+    workspace.title = "mutated";
+    const chosen = await port.chooseWorkspace();
+    expect(chosen).toEqual({ path: "/notes", title: "notes" });
+    Reflect.set(chosen!, "title", "mutated again");
+    expect(await port.chooseWorkspace()).toEqual({
+      path: "/notes",
+      title: "notes",
+    });
   });
 });

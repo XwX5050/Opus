@@ -256,6 +256,10 @@ where
             }
         })?;
     }
+    // The rename above lands in the parent directory; syncing it makes the
+    // rename itself durable so a crash cannot resurrect the previous file
+    // version (same discipline as recovery drafts).
+    sync_parent_directory(&destination)?;
     Ok((modified, version))
 }
 
@@ -436,6 +440,14 @@ fn parent_directory(path: &Path) -> Result<&Path, DocumentIoError> {
     }
 }
 
+/// Syncs the parent directory of `path` so a completed rename is durable.
+fn sync_parent_directory(path: &Path) -> Result<(), DocumentIoError> {
+    let parent = parent_directory(path)?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| map_io_error(parent, error))
+}
+
 fn existing_mode_permissions(path: &Path) -> Result<Option<fs::Permissions>, DocumentIoError> {
     match fs::metadata(path) {
         Ok(metadata) => {
@@ -543,5 +555,34 @@ mod tests {
             temporary_mtime,
             modified_unix_ms(&temporary_file.metadata().unwrap(), &path).unwrap()
         );
+    }
+
+    #[test]
+    fn checked_write_syncs_the_parent_directory_and_reports_the_committed_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let (_, version) =
+            write_document_checked(&path, "hello\n", false, Newline::Lf, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\n");
+        // The post-rename directory sync is part of the write path: the
+        // parent fsync must still succeed after the write completed, and
+        // the on-disk version must match the one the write reported.
+        sync_parent_directory(&path).unwrap();
+        let (_, probed_version) = probe_version(&path).unwrap();
+        assert_eq!(probed_version, version);
+    }
+
+    #[test]
+    fn checked_write_syncs_the_directory_after_a_conflict_check_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let (_, first_version) =
+            write_document_checked(&path, "one\n", false, Newline::Lf, None).unwrap();
+        let (_, version) =
+            write_document_checked(&path, "two\n", false, Newline::Lf, Some(&first_version))
+                .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+        let (_, probed_version) = probe_version(&path).unwrap();
+        assert_eq!(probed_version, version);
     }
 }

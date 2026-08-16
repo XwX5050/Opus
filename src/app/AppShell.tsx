@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useGSAP } from "@gsap/react";
-import type { DocumentPort } from "../document/DocumentPort";
+import type { Text } from "@codemirror/state";
+import type { ClipboardImageInput, DocumentPort } from "../document/DocumentPort";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import {
-  clampSidebarWidth,
+  clampSidebarWidthToWindow,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   type RecentItem,
@@ -100,6 +101,54 @@ const splitRecentPath = (path: string): { name: string; parent: string } => {
   return { name: trimmed.slice(index + 1), parent: trimmed.slice(0, index) };
 };
 
+/**
+ * Resolves the on-disk location of a saved clipboard image. The save dialog
+ * returns paths relative to the document's parent directory when the pick
+ * stays inside it; the asset scope needs the absolute location.
+ */
+const resolveImageSavePath = (
+  input: ClipboardImageInput,
+  savedPath: string,
+): string | null => {
+  if (savedPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(savedPath)) {
+    return savedPath;
+  }
+  if (input.documentPath === null) return null;
+  const normalized = input.documentPath.replaceAll("\\", "/");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) return null;
+  const directory = normalized.slice(0, index);
+  return directory === "" ? `/${savedPath}` : `${directory}/${savedPath}`;
+};
+
+/**
+ * Wraps the clipboard-image save so the pasted image always lands inside an
+ * asset scope held by the tab. The save dialog defaults to the document's
+ * parent directory (already scoped non-recursively at open), but the pick
+ * can land in a subdirectory or anywhere else; without a scope the webview's
+ * asset protocol refuses the URL and the image breaks permanently. The
+ * backend grants a non-recursive scope over the saved file's own parent
+ * directory, and the tab's close flow releases every scope it holds.
+ */
+export const withAssetScopeForSavedImage = (
+  port: Pick<DocumentPort, "saveClipboardImage" | "acquireDocumentScope">,
+  consumerId: string,
+): ((input: ClipboardImageInput) => Promise<string | null>) => {
+  return async (input) => {
+    const path = await port.saveClipboardImage(input);
+    if (path === null) return null;
+    const absolute = resolveImageSavePath(input, path);
+    if (absolute !== null) {
+      try {
+        await port.acquireDocumentScope(consumerId, absolute);
+      } catch {
+        // Best-effort: a failed scope grant must not drop the pasted image.
+      }
+    }
+    return path;
+  };
+};
+
 export default function AppShell({
   port,
   subscribeToEvents = null,
@@ -133,16 +182,20 @@ export default function AppShell({
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineResizing, setOutlineResizing] = useState(false);
-  // Live width while dragging; committed to sidebarPreferences (which
-  // persists the session) only on pointerup, not on every move.
-  const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
+  // Drag-resize writes the live width straight to the panel elements instead
+  // of re-rendering the whole shell on every pointermove; the final width is
+  // committed to the preferences (which persist the session) once, on
+  // pointerup or restored on pointercancel.
+  const sidebarRailRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const sidebarResizeRef = useRef<{
     pointerId: number;
     startX: number;
     startWidth: number;
     lastWidth: number;
   } | null>(null);
-  const [outlineDragWidth, setOutlineDragWidth] = useState<number | null>(null);
+  const outlineRailRef = useRef<HTMLDivElement>(null);
+  const outlineRef = useRef<HTMLElement>(null);
   const outlineResizeRef = useRef<{
     pointerId: number;
     startX: number;
@@ -150,7 +203,16 @@ export default function AppShell({
     lastWidth: number;
   } | null>(null);
   // Sidebar drag-resize: pointer capture keeps move/up events on the handle
-  // even when the pointer leaves it; width is clamped on every move.
+  // even when the pointer leaves it; width is clamped on every move and
+  // applied to the panel DOM directly, so dragging never re-renders the shell.
+  const applyDragWidth = (
+    rail: HTMLDivElement | null,
+    panel: HTMLElement | null,
+    width: number,
+  ) => {
+    if (rail) rail.style.width = `${width}px`;
+    if (panel) panel.style.width = `${width}px`;
+  };
   const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     sidebarResizeRef.current = {
@@ -165,9 +227,12 @@ export default function AppShell({
   const moveSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = sidebarResizeRef.current;
     if (drag === null || event.pointerId !== drag.pointerId) return;
-    const width = clampSidebarWidth(drag.startWidth + (event.clientX - drag.startX));
+    const width = clampSidebarWidthToWindow(
+      drag.startWidth + (event.clientX - drag.startX),
+      window.innerWidth,
+    );
     drag.lastWidth = width;
-    setSidebarDragWidth(width);
+    applyDragWidth(sidebarRailRef.current, sidebarRef.current, width);
   };
   const endSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = sidebarResizeRef.current;
@@ -175,10 +240,18 @@ export default function AppShell({
     sidebarResizeRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     setSidebarResizing(false);
-    setSidebarDragWidth(null);
     if (drag.lastWidth !== sidebar.width) {
       setSidebar((current) => ({ ...current, width: drag.lastWidth }));
     }
+  };
+  const cancelSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = sidebarResizeRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    sidebarResizeRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setSidebarResizing(false);
+    // A cancelled drag restores the committed width and persists nothing.
+    applyDragWidth(sidebarRailRef.current, sidebarRef.current, sidebar.width);
   };
   const onSidebarResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = 16;
@@ -187,7 +260,7 @@ export default function AppShell({
     const delta = event.key === "ArrowRight" ? step : -step;
     setSidebar((current) => ({
       ...current,
-      width: clampSidebarWidth(current.width + delta),
+      width: clampSidebarWidthToWindow(current.width + delta, window.innerWidth),
     }));
   };
   const startOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -204,11 +277,12 @@ export default function AppShell({
   const moveOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = outlineResizeRef.current;
     if (drag === null || event.pointerId !== drag.pointerId) return;
-    const width = clampSidebarWidth(
+    const width = clampSidebarWidthToWindow(
       drag.startWidth + (drag.startX - event.clientX),
+      window.innerWidth,
     );
     drag.lastWidth = width;
-    setOutlineDragWidth(width);
+    applyDragWidth(outlineRailRef.current, outlineRef.current, width);
   };
   const endOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = outlineResizeRef.current;
@@ -216,19 +290,33 @@ export default function AppShell({
     outlineResizeRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     setOutlineResizing(false);
-    setOutlineDragWidth(null);
     if (drag.lastWidth !== outline.width) {
       setOutline({ width: drag.lastWidth });
     }
+  };
+  const cancelOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = outlineResizeRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    outlineResizeRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setOutlineResizing(false);
+    // A cancelled drag restores the committed width and persists nothing.
+    applyDragWidth(outlineRailRef.current, outlineRef.current, outline.width);
   };
   const onOutlineResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const delta = event.key === "ArrowLeft" ? 16 : -16;
     setOutline((current) => ({
-      width: clampSidebarWidth(current.width + delta),
+      width: clampSidebarWidthToWindow(current.width + delta, window.innerWidth),
     }));
   };
+  // The resizers' ARIA max follows the same window-aware clamp used while
+  // dragging, so the keyboard range matches what a drag can reach.
+  const windowSidebarMaxWidth = clampSidebarWidthToWindow(
+    SIDEBAR_MAX_WIDTH,
+    window.innerWidth,
+  );
   // While dragging, force the resize cursor and block text selection
   // anywhere under the pointer.
   useEffect(() => {
@@ -276,6 +364,11 @@ export default function AppShell({
   const [outlinesByTab, setOutlinesByTab] = useState<
     ReadonlyMap<string, ReadonlyArray<OutlineHeading>>
   >(new Map());
+  // The doc revision each published outline was extracted from; navigation
+  // requests carry it so the editor can reject stale offsets.
+  const [outlineDocsByTab, setOutlineDocsByTab] = useState<
+    ReadonlyMap<string, Text>
+  >(new Map());
   const [collapsedOutlineIdsByTab, setCollapsedOutlineIdsByTab] = useState<
     ReadonlyMap<string, ReadonlySet<string>>
   >(new Map());
@@ -302,6 +395,7 @@ export default function AppShell({
     setForceFullTabs(prune);
     setDismissedPerfTabs(prune);
     setOutlinesByTab((current) => pruneTabMap(current, open));
+    setOutlineDocsByTab((current) => pruneTabMap(current, open));
     setCollapsedOutlineIdsByTab((current) => pruneTabMap(current, open));
     setTableFocusRequest((current) =>
       current && !open.has(current.tabId) ? null : current
@@ -316,10 +410,16 @@ export default function AppShell({
   const publishOutline = (
     tabId: string,
     headings: ReadonlyArray<OutlineHeading>,
+    doc: Text,
   ) => {
     setOutlinesByTab((current) => {
       const next = new Map(current);
       next.set(tabId, headings);
+      return next;
+    });
+    setOutlineDocsByTab((current) => {
+      const next = new Map(current);
+      next.set(tabId, doc);
       return next;
     });
     // A collapse marker is only meaningful while the heading still owns
@@ -378,8 +478,10 @@ export default function AppShell({
     setOutlineNavigation({
       tabId,
       sequence: outlineSequenceRef.current,
+      id: heading.id,
       from: heading.from,
       textFrom: heading.textFrom,
+      doc: outlineDocsByTab.get(tabId) ?? null,
     });
   };
   const requestTableEdit = (request: TableCellEditRequest) => {
@@ -624,11 +726,20 @@ export default function AppShell({
   // Manual check from the settings dialog. An available update hands off to
   // the existing update dialog (which yields to the open settings dialog and
   // appears after it closes); the other outcomes are reported inline in the
-  // settings dialog through updateCheckState.
+  // settings dialog through updateCheckState. A result resolving after the
+  // shell unmounted is dropped, mirroring the startup check's guard.
+  const updateCheckDisposedRef = useRef(false);
+  useEffect(() => {
+    updateCheckDisposedRef.current = false;
+    return () => {
+      updateCheckDisposedRef.current = true;
+    };
+  }, []);
   const checkForUpdates = () => {
     if (updateCheckState === "checking") return;
     setUpdateCheckState("checking");
     void checkUpdate().then((result) => {
+      if (updateCheckDisposedRef.current) return;
       if (result.status === "update") {
         setUpdateCheckState("idle");
         setUpdateOffer(result.offer);
@@ -697,8 +808,14 @@ export default function AppShell({
       case "menu.open_folder":
         openWorkspaceFromUser();
         break;
+      case "menu.save":
+        if (active) void controller.save(active.id);
+        break;
       case "menu.save_as":
         if (active) void controller.saveAs(active.id);
+        break;
+      case "menu.close_tab":
+        if (active) closeTab(active.id);
         break;
       case "menu.settings":
         // Like the header button, remember the current focus so the dialog
@@ -948,18 +1065,20 @@ export default function AppShell({
         {sidebarAvailable && (
           <>
           <div
+            ref={sidebarRailRef}
             className="sidebar-rail"
             data-motion-panel="sidebar"
             data-collapsed={sidebar.collapsed}
-            style={{ width: sidebar.collapsed ? 0 : sidebarDragWidth ?? sidebar.width }}
+            style={{ width: sidebar.collapsed ? 0 : sidebar.width }}
           >
           <aside
+            ref={sidebarRef}
             id="app-sidebar"
             aria-label="侧栏"
             aria-hidden={sidebar.collapsed ? true : undefined}
             inert={sidebar.collapsed ? true : undefined}
             className="sidebar"
-            style={{ width: sidebarDragWidth ?? sidebar.width }}
+            style={{ width: sidebar.width }}
           >
             {controller.state.tabs.length > 0 && (
               <section className="sidebar-section">
@@ -1021,18 +1140,18 @@ export default function AppShell({
           </div>
           {!sidebar.collapsed && (
           <div
-            role="separator"
+            role="slider"
             aria-orientation="vertical"
             aria-label="调整侧栏宽度"
             aria-valuenow={sidebar.width}
             aria-valuemin={SIDEBAR_MIN_WIDTH}
-            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            aria-valuemax={windowSidebarMaxWidth}
             tabIndex={0}
             className="sidebar-resizer"
             onPointerDown={startSidebarResize}
             onPointerMove={moveSidebarResize}
             onPointerUp={endSidebarResize}
-            onPointerCancel={endSidebarResize}
+            onPointerCancel={cancelSidebarResize}
             onKeyDown={onSidebarResizerKeyDown}
           />
           )}
@@ -1145,10 +1264,12 @@ export default function AppShell({
             onToggleReading={() => controller.toggleReading(active.id)}
             viewMode={translationShown ? "reading" : viewMode}
             documentPath={active.path}
-            saveClipboardImage={(input) => port.saveClipboardImage(input)}
+            saveClipboardImage={withAssetScopeForSavedImage(port, active.id)}
             resolveImageUrl={tauriImagePreviewUrl}
             imageDrop={imageDrop}
-            onOutlineChange={(headings) => publishOutline(active.id, headings)}
+            onOutlineChange={(headings, doc) =>
+              publishOutline(active.id, headings, doc)
+            }
             outlineNavigation={
               outlineNavigation?.tabId === active.id
                 ? outlineNavigation
@@ -1217,38 +1338,38 @@ export default function AppShell({
           <>
             {outlineOpen && (
               <div
-                role="separator"
+                role="slider"
                 aria-orientation="vertical"
                 aria-label="调整大纲宽度"
                 aria-valuenow={outline.width}
                 aria-valuemin={SIDEBAR_MIN_WIDTH}
-                aria-valuemax={SIDEBAR_MAX_WIDTH}
+                aria-valuemax={windowSidebarMaxWidth}
                 tabIndex={0}
                 className="outline-resizer"
                 onPointerDown={startOutlineResize}
                 onPointerMove={moveOutlineResize}
                 onPointerUp={endOutlineResize}
-                onPointerCancel={endOutlineResize}
+                onPointerCancel={cancelOutlineResize}
                 onKeyDown={onOutlineResizerKeyDown}
               />
             )}
             <div
+              ref={outlineRailRef}
               className="outline-rail"
               data-motion-panel="outline"
               data-collapsed={!outlineOpen}
               style={{
-                width: outlineOpen
-                  ? outlineDragWidth ?? outline.width
-                  : 0,
+                width: outlineOpen ? outline.width : 0,
               }}
             >
               <aside
+                ref={outlineRef}
                 id="app-outline"
                 aria-label="大纲侧栏"
                 aria-hidden={!outlineOpen ? true : undefined}
                 inert={!outlineOpen ? true : undefined}
                 className="outline-sidebar"
-                style={{ width: outlineDragWidth ?? outline.width }}
+                style={{ width: outline.width }}
               >
                 <OutlinePanel
                   headings={activeOutline}

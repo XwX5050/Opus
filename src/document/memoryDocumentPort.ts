@@ -133,6 +133,7 @@ export class MemoryDocumentPort implements DocumentPort {
     this.#options = {
       ...options,
       chosenPaths: options.chosenPaths ? [...options.chosenPaths] : undefined,
+      workspace: options.workspace ? { ...options.workspace } : undefined,
     };
     for (const directory of options.directories ?? []) {
       this.#directories.set(this.#key(directory), directory);
@@ -203,7 +204,14 @@ export class MemoryDocumentPort implements DocumentPort {
     const paths =
       this.#options.chosenPaths ??
       [...this.#files.values()].map((file) => file.path);
-    return Promise.all(paths.map((path) => this.openPath(path)));
+    // Mirror the real port's report-and-continue: a missing path must not
+    // fail the whole dialog, only that one file.
+    const results = await Promise.allSettled(
+      paths.map((path) => this.openPath(path)),
+    );
+    return results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
   }
 
   async openPath(path: string): Promise<OpenedFile> {
@@ -308,7 +316,7 @@ export class MemoryDocumentPort implements DocumentPort {
   }
 
   async chooseWorkspace(): Promise<WorkspaceRoot | null> {
-    return this.#options.workspace ?? null;
+    return this.#options.workspace ? { ...this.#options.workspace } : null;
   }
 
   async openWorkspacePath(path: string): Promise<WorkspaceRoot> {
@@ -319,6 +327,9 @@ export class MemoryDocumentPort implements DocumentPort {
     const name = directory.split("/").at(-1) ?? directory;
     return { path: directory, title: name };
   }
+
+  /** No-op: the in-memory port has no backend workspace anchor to clear. */
+  async closeWorkspace(): Promise<void> {}
 
   #resolveDirectory(root: string, relative: string): string {
     if (!relative && !this.#directories.has(this.#key(root))) {
@@ -355,6 +366,9 @@ export class MemoryDocumentPort implements DocumentPort {
       if (key === this.#key(directory) || !key.startsWith(prefix)) return;
       const rest = path.slice(directory.length + 1);
       const segment = rest.split("/")[0];
+      // The real backend skips every hidden entry (any name starting with
+      // ".") when listing a directory.
+      if (segment.startsWith(".")) return;
       if (rest.includes("/")) {
         const childPath = `${directory}/${segment}`;
         if (!directories.has(this.#key(childPath))) {
@@ -397,7 +411,12 @@ export class MemoryDocumentPort implements DocumentPort {
     const parent = this.#resolveDirectory(root, parentRelative);
     const name = relative.split("/").at(-1) ?? relative;
     const path = `${parent}/${name}`;
-    if (this.#files.has(this.#key(path))) {
+    // The real backend's create_new refuses the target whether an existing
+    // entry there is a file or a directory.
+    if (
+      this.#files.has(this.#key(path)) ||
+      this.#directories.has(this.#key(path))
+    ) {
       throw new DocumentPortError("conflict", `Already exists: ${path}`);
     }
     this.#files.set(this.#key(path), {
@@ -424,8 +443,24 @@ export class MemoryDocumentPort implements DocumentPort {
     const toPath = `${parent}${toName}`;
     const file = this.#files.get(this.#key(fromPath));
     if (file) {
-      if (this.#files.has(this.#key(toPath))) {
+      // As in the real backend, a Markdown file cannot be renamed out of its
+      // extension, the target must not collide with a file or a directory,
+      // and renaming to the current name succeeds as a no-op.
+      if (!/\.(md|markdown)$/i.test(toName)) {
+        throw new DocumentPortError(
+          "io",
+          `Files must keep a .md or .markdown extension: ${toPath}`,
+        );
+      }
+      if (
+        toPath !== fromPath &&
+        (this.#files.has(this.#key(toPath)) ||
+          this.#directories.has(this.#key(toPath)))
+      ) {
         throw new DocumentPortError("conflict", `Already exists: ${toPath}`);
+      }
+      if (toPath === fromPath) {
+        return { name: toName, path: toPath, isDirectory: false };
       }
       this.#files.delete(this.#key(fromPath));
       this.#files.set(this.#key(toPath), { ...file, path: toPath });
@@ -434,6 +469,9 @@ export class MemoryDocumentPort implements DocumentPort {
     const directory = this.#directories.get(this.#key(fromPath));
     if (!directory) {
       throw new DocumentPortError("not_found", `Entry not found: ${fromPath}`);
+    }
+    if (toPath === fromPath) {
+      return { name: toName, path: toPath, isDirectory: true };
     }
     if (
       this.#directories.has(this.#key(toPath)) ||
@@ -469,8 +507,16 @@ export class MemoryDocumentPort implements DocumentPort {
       return;
     }
     const directory = this.#directories.get(this.#key(path));
-    if (!directory || directory === root) {
+    if (!directory) {
       throw new DocumentPortError("not_found", `Entry not found: ${path}`);
+    }
+    // The workspace root itself is never a valid trash target; the real
+    // backend rejects it as OutsideRoot, which maps to permission_denied.
+    if (this.#key(directory) === this.#key(root)) {
+      throw new DocumentPortError(
+        "permission_denied",
+        `The workspace root cannot be trashed: ${path}`,
+      );
     }
     const oldPrefix = `${directory}/`;
     for (const [key, candidate] of [...this.#directories]) {

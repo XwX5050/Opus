@@ -149,15 +149,30 @@ export const normalizePathKey = (
   return normalizePosixPath(path.normalize("NFC")).toLocaleLowerCase("en-US");
 };
 
-const titleFromPath = (path: string): string => {
-  const normalized = path.replaceAll("\\", "/");
-  return normalized.slice(normalized.lastIndexOf("/") + 1) || path;
+/**
+ * Basename split on the platform's path separators. Backslashes are ordinary
+ * filename characters on macOS and Linux, so only Windows treats them as
+ * separators — mirroring `normalizePathKey`.
+ */
+const titleFromPath = (
+  path: string,
+  platform: PathPlatform = "macos",
+): string => {
+  const lastSeparator =
+    platform === "windows"
+      ? Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+      : path.lastIndexOf("/");
+  return path.slice(lastSeparator + 1) || path;
 };
 
-const snapshotFromFile = (id: string, file: OpenedFile): DocumentSnapshot => ({
+const snapshotFromFile = (
+  id: string,
+  file: OpenedFile,
+  platform: PathPlatform = "macos",
+): DocumentSnapshot => ({
   id,
   path: file.path,
-  title: titleFromPath(file.path),
+  title: titleFromPath(file.path, platform),
   text: file.text,
   savedText: file.text,
   hasUtf8Bom: file.hasUtf8Bom,
@@ -238,7 +253,7 @@ export const documentReducer = (
       }
       return {
         ...state,
-        tabs: [...state.tabs, snapshotFromFile(action.id, action.file)],
+        tabs: [...state.tabs, snapshotFromFile(action.id, action.file, platform)],
         activeId: activate ? action.id : state.activeId,
       };
     }
@@ -268,7 +283,15 @@ export const documentReducer = (
         action.target ??
         (document.path === null
           ? null
-          : { path: document.path, expectedVersion: document.version });
+          : {
+              path: document.path,
+              // The file is gone, so the stored version is stale and a CAS
+              // check would reject this save forever. An unconditional write
+              // recreates the file but still refuses to overwrite a file
+              // another process has recreated in the meantime.
+              expectedVersion:
+                document.status === "missing" ? null : document.version,
+            });
       if (!target) return state;
 
       const platform = action.pathPlatform ?? "macos";
@@ -347,7 +370,7 @@ export const documentReducer = (
       return replaceTab(state, document.id, (tab) => ({
         ...tab,
         path: action.result.path,
-        title: titleFromPath(action.result.path),
+        title: titleFromPath(action.result.path, platform),
         savedText,
         modifiedUnixMs: action.result.modifiedUnixMs,
         version: action.result.version,
@@ -423,7 +446,7 @@ export const documentReducer = (
       return replaceTab(state, tab.id, (document) => ({
         ...document,
         path: action.to,
-        title: titleFromPath(action.to),
+        title: titleFromPath(action.to, platform),
       }));
     }
 
@@ -445,6 +468,11 @@ export const documentReducer = (
       if (existing) {
         // Session restore may already have reopened the file from disk; merge
         // the draft's unsaved text into that tab instead of duplicating it.
+        // A dirty tab or one with a write in flight holds newer buffer content
+        // than the draft, so the merge is skipped to keep that buffer intact.
+        if (existing.status === "dirty" || existing.pendingSave) {
+          return { ...state, activeId: existing.id };
+        }
         const tabs = state.tabs.map((tab): DocumentSnapshot =>
           tab.id === existing.id
             ? {

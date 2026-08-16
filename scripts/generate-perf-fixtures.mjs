@@ -10,8 +10,15 @@
  * Re-running always produces byte-identical files (fixed seed).
  */
 import { mkdir, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const OUT_DIR = new URL("../tests/perf/generated/", import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so paths with spaces or escaped
+// characters resolve to the real directory.
+const OUT_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../tests/perf/generated",
+);
 const MIB = 1024 * 1024;
 
 /** mulberry32: small, deterministic PRNG. */
@@ -86,8 +93,8 @@ const fixtures = [
 await mkdir(OUT_DIR, { recursive: true });
 for (const fixture of fixtures) {
   const { text, bytes, lines } = generate(fixture);
-  const path = `${OUT_DIR}${fixture.name}`;
-  await writeFile(path, text, "utf8");
+  const outputPath = path.join(OUT_DIR, fixture.name);
+  await writeFile(outputPath, text, "utf8");
   console.log(
     `${fixture.name}: ${(bytes / MIB).toFixed(2)} MiB, ${lines.toLocaleString("en-US")} lines`,
   );

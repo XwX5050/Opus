@@ -24,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(document_commands::SharedAssetScopes::default())
+        .manage(document_commands::SharedWorkspaceAnchor::default())
         .invoke_handler(tauri::generate_handler![
             document_commands::open_document,
             document_commands::save_document,
@@ -32,6 +33,7 @@ pub fn run() {
             document_commands::acquire_workspace_scope,
             document_commands::release_asset_scope,
             document_commands::open_workspace,
+            document_commands::close_workspace,
             document_commands::list_directory,
             document_commands::create_markdown_file,
             document_commands::rename_entry,

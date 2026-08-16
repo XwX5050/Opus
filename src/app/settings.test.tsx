@@ -422,6 +422,103 @@ describe("settings: installed font enumeration", () => {
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
   });
+
+  it("caps the drawn font list at 100 options", async () => {
+    const fonts = Array.from({ length: 150 }, (_, index) => `Font ${index}`);
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_installed_fonts") {
+        return Promise.resolve(fonts);
+      }
+      return Promise.reject(new Error(`unmocked command: ${command}`));
+    });
+    stubTauriBridge();
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    await waitFor(() =>
+      expect(input).toHaveAttribute("placeholder", "搜索已安装字体…"),
+    );
+    await user.click(input);
+
+    const listbox = within(dialog).getByRole("listbox", { name: "已安装字体" });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(100);
+    // Sorted names: "Font 9" sorts last among the 150 and must be cut.
+    expect(within(listbox).getByRole("option", { name: "Font 0" })).toBeInTheDocument();
+    expect(within(listbox).queryByRole("option", { name: "Font 9" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("scrolls the highlighted option into view while navigating", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_installed_fonts") {
+        return Promise.resolve(["Songti SC", "PingFang SC", "LXGW WenKai"]);
+      }
+      return Promise.reject(new Error(`unmocked command: ${command}`));
+    });
+    stubTauriBridge();
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    await waitFor(() =>
+      expect(input).toHaveAttribute("placeholder", "搜索已安装字体…"),
+    );
+    await user.click(input);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // ArrowDown moves the highlight to the second option, which must scroll
+    // itself into view.
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  });
+
+  it("reports the combobox as collapsed when the filter has no matches", async () => {
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_installed_fonts") {
+        return Promise.resolve(["PingFang SC"]);
+      }
+      return Promise.reject(new Error(`unmocked command: ${command}`));
+    });
+    stubTauriBridge();
+
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    render(<AppShell port={port} />);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
+
+    const input = within(dialog).getByLabelText("自定义字体");
+    await waitFor(() =>
+      expect(input).toHaveAttribute("placeholder", "搜索已安装字体…"),
+    );
+    await user.click(input);
+    expect(input).toHaveAttribute("aria-expanded", "true");
+
+    // A filter with no matches draws no listbox, so the combobox must not
+    // claim to be expanded.
+    await user.type(input, "zzz");
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+  });
 });
 
 describe("settings: manual update check", () => {
@@ -512,6 +609,9 @@ describe("settings: manual update check", () => {
   it("reports a failed manual check", async () => {
     vi.stubEnv("DEV", false);
     stubTauriBridge();
+    // The check failure is logged for diagnostics; the dialog only shows the
+    // generic hint, so silence the log in this test.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     let call = 0;
     vi.mocked(pluginCheck).mockImplementation(() => {
       // First call is the startup check; the manual check fails.
@@ -533,6 +633,7 @@ describe("settings: manual update check", () => {
     await waitFor(() =>
       expect(within(dialog).getByText("检查失败，请稍后重试")).toBeInTheDocument(),
     );
+    errorSpy.mockRestore();
   });
 
   it("hands a found update to the update dialog after settings closes", async () => {

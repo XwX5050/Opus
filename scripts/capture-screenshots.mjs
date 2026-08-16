@@ -11,9 +11,16 @@
  */
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const BASE_URL = process.env.DEMO_URL ?? "http://localhost:1420";
-const OUT_DIR = new URL("../docs/screenshots/", import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so paths with spaces or escaped
+// characters resolve to the real directory.
+const OUT_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../docs/screenshots",
+);
 
 await mkdir(OUT_DIR, { recursive: true });
 
@@ -32,7 +39,7 @@ try {
     await page.waitForSelector(".katex");
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(300);
-    await page.screenshot({ path: `${OUT_DIR}${theme}.png` });
+    await page.screenshot({ path: path.join(OUT_DIR, `${theme}.png`) });
     console.log(`captured ${theme}.png`);
     await page.close();
   }

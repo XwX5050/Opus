@@ -368,7 +368,8 @@ const measureProcessMetrics = async (metrics) => {
 // ---------- main ----------
 
 const fixtureDir = path.join(ROOT, "tests/perf/generated");
-if (!existsSync(path.join(fixtureDir, "pressure-10mb.md"))) {
+const REQUIRED_FIXTURES = ["regular-1mb.md", "light-2mb.md", "pressure-10mb.md"];
+if (REQUIRED_FIXTURES.some((name) => !existsSync(path.join(fixtureDir, name)))) {
   console.log("fixtures missing — running generate-perf-fixtures.mjs");
   execSync("node scripts/generate-perf-fixtures.mjs", { cwd: ROOT, stdio: "inherit" });
 }

@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EDITOR_PREFERENCES } from "./preferences";
 import { useTheme } from "./useTheme";
 
+const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
+
 type MediaListener = (event: { matches: boolean }) => void;
 
 class MockMediaQueryList {
@@ -76,6 +80,8 @@ beforeEach(() => {
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.className = "";
   document.documentElement.removeAttribute("style");
+  tauriMocks.invoke.mockReset();
+  tauriMocks.invoke.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -168,5 +174,41 @@ describe("useTheme", () => {
     const style = document.documentElement.style;
     expect(style.getPropertyValue("--editor-body-size")).toBe("20px");
     expect(style.getPropertyValue("--editor-content-width")).toBe("640px");
+  });
+
+  it("syncs the native window background only when the resolved theme changes", () => {
+    installMatchMedia(true, false);
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    // `--canvas` normally comes from app.css (not loaded in jsdom); pin a
+    // value so the background-sync IPC is observable.
+    document.documentElement.style.setProperty("--canvas", "#101014");
+
+    const { rerender } = renderProbe("dark");
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("set_window_background", {
+      color: "#101014",
+    });
+
+    // An editor-preferences-only change must not trigger the sync.
+    rerender(
+      createElement(Probe, {
+        preference: "dark",
+        editorPreferences: {
+          bodySizePx: 20,
+          lineHeight: 1.5,
+          contentWidthPx: 640,
+          fontFamily: "monospace",
+        },
+      }),
+    );
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+
+    // A resolved-theme change re-syncs.
+    rerender(createElement(Probe, { preference: "light" }));
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(2);
+    expect(tauriMocks.invoke).toHaveBeenLastCalledWith(
+      "set_window_background",
+      { color: "#101014" },
+    );
   });
 });

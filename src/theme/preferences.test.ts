@@ -182,4 +182,14 @@ describe("fontFamilyStack", () => {
     expect(fontFamilyStack('Evil"Font')).not.toContain('Evil"Font');
     expect(fontFamilyStack('Evil"Font')).toContain('"EvilFont"');
   });
+
+  it("strips control characters that would invalidate the font declaration", () => {
+    expect(fontFamilyStack("Evil\nFont")).toBe(
+      '"EvilFont", -apple-system, "PingFang SC", sans-serif',
+    );
+    expect(fontFamilyStack("Line\rBreak")).toContain('"LineBreak"');
+    expect(fontFamilyStack("Tab\tFont")).not.toContain("\t");
+    expect(fontFamilyStack("A\u0000B")).toContain('"AB"');
+    expect(fontFamilyStack("A\u001FB")).toContain('"AB"');
+  });
 });

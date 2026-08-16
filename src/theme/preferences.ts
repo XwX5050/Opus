@@ -145,8 +145,9 @@ export const fontFamilyStack = (choice: string): string => {
       return `-apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif`;
     default: {
       // A user-entered installed font name; quotes inside could break out of
-      // the CSS string, so strip them before quoting.
-      const safe = choice.replace(/["\\]/g, "");
+      // the CSS string, so strip them — and control characters, which would
+      // quietly invalidate the whole `font` declaration — before quoting.
+      const safe = choice.replace(/["\\\x00-\x1F]/g, "");
       return `"${safe}", -apple-system, "PingFang SC", sans-serif`;
     }
   }

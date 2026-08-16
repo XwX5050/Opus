@@ -24,9 +24,11 @@ export interface E2eFileSpec {
 }
 
 export interface E2eFixtureSpec {
-  // NOTE: this interface is duplicated structurally in
-  // tests/e2e/notepad.spec.ts (Playwright serializes the fixture as JSON, so
-  // it cannot import app types); keep the two in sync when changing fields.
+  // Specs (tests/e2e/*.spec.ts) `import type { E2eFixtureSpec }` from this
+  // module and rely on the Window augmentation below, so the fixture shape
+  // and the port's test hooks share one source of truth. Type-only imports
+  // are erased at runtime: the fixture object itself still travels as JSON
+  // through page.addInitScript.
   readonly files?: ReadonlyArray<E2eFileSpec>;
   readonly session?: PersistedSession | null;
   readonly drafts?: ReadonlyArray<RecoveryDraft>;

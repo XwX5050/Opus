@@ -164,3 +164,19 @@ export const collectOutlineIds = (
 export const collectOutlineParentIds = (
   headings: ReadonlyArray<OutlineHeading>,
 ): ReadonlySet<string> => collectIds(headings, false);
+
+/**
+ * Locates a heading by id inside a tree. Ids derive from the heading path
+ * text, so a heading whose text changed carries a new id and is not found.
+ */
+export const findOutlineHeadingById = (
+  headings: ReadonlyArray<OutlineHeading>,
+  id: string,
+): OutlineHeading | null => {
+  for (const heading of headings) {
+    if (heading.id === id) return heading;
+    const found = findOutlineHeadingById(heading.children, id);
+    if (found) return found;
+  }
+  return null;
+};

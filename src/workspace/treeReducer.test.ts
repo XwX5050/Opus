@@ -35,7 +35,12 @@ const draftsChildren: DirectoryEntry[] = [
 
 const opened = () => treeReducer(initialTreeState, { type: "workspaceOpened", root });
 const loaded = () =>
-  treeReducer(opened(), { type: "loadSucceeded", path: root.path, children: topLevel });
+  treeReducer(opened(), {
+    type: "loadSucceeded",
+    path: root.path,
+    children: topLevel,
+    epoch: 0,
+  });
 
 describe("treeReducer", () => {
   it("starts empty and requests the root listing after a workspace opens", () => {
@@ -69,6 +74,7 @@ describe("treeReducer", () => {
       type: "loadSucceeded",
       path: "/notes/drafts",
       children: draftsChildren,
+      epoch: 0,
     });
     expect(pendingLoads(withChildren)).toEqual([]);
   });
@@ -79,6 +85,7 @@ describe("treeReducer", () => {
       type: "loadSucceeded",
       path: "/notes/drafts",
       children: draftsChildren,
+      epoch: 0,
     });
 
     const collapsed = treeReducer(state, { type: "directoryToggled", path: "/notes/drafts" });
@@ -96,6 +103,7 @@ describe("treeReducer", () => {
       type: "loadSucceeded",
       path: "/notes/drafts",
       children: draftsChildren,
+      epoch: 0,
     });
 
     const rows = visibleRows(state);
@@ -117,6 +125,7 @@ describe("treeReducer", () => {
       type: "loadSucceeded",
       path: "/notes/drafts",
       children: draftsChildren,
+      epoch: 0,
     });
 
     const filtered = treeReducer(state, { type: "filterChanged", filter: "GAM" });
@@ -133,7 +142,7 @@ describe("treeReducer", () => {
     state = treeReducer(state, { type: "loadRequested", path: "/notes/drafts" });
     expect(pendingLoads(state)).toEqual([]);
 
-    state = treeReducer(state, { type: "loadFailed", path: "/notes/drafts" });
+    state = treeReducer(state, { type: "loadFailed", path: "/notes/drafts", epoch: 0 });
     expect(pendingLoads(state)).toEqual([]);
 
     state = treeReducer(state, { type: "directoryToggled", path: "/notes/drafts" });
@@ -176,6 +185,7 @@ describe("treeReducer", () => {
       type: "loadSucceeded",
       path: "/notes/drafts",
       children: draftsChildren,
+      epoch: 0,
     });
 
     state = treeReducer(state, {
@@ -206,6 +216,7 @@ describe("treeReducer", () => {
       type: "loadSucceeded",
       path: "/notes/drafts",
       children: draftsChildren,
+      epoch: 0,
     });
 
     state = treeReducer(state, {
@@ -221,5 +232,99 @@ describe("treeReducer", () => {
     ]);
     expect(state.children["/notes/drafts"]).toBeUndefined();
     expect(state.expanded.has("/notes/drafts")).toBe(false);
+  });
+
+  it("re-requests a cached listing after a disk invalidation, keeping it expanded", () => {
+    let state = treeReducer(loaded(), { type: "directoryToggled", path: "/notes/drafts" });
+    state = treeReducer(state, {
+      type: "loadSucceeded",
+      path: "/notes/drafts",
+      children: draftsChildren,
+      epoch: 0,
+    });
+    expect(pendingLoads(state)).toEqual([]);
+
+    state = treeReducer(state, { type: "directoryInvalidated", path: "/notes/drafts" });
+
+    expect(state.children["/notes/drafts"]).toBeUndefined();
+    expect(state.expanded.has("/notes/drafts")).toBe(true);
+    expect(pendingLoads(state)).toEqual(["/notes/drafts"]);
+  });
+
+  it("re-requests a previously failed directory after a disk invalidation", () => {
+    let state = treeReducer(loaded(), { type: "directoryToggled", path: "/notes/drafts" });
+    state = treeReducer(state, { type: "loadRequested", path: "/notes/drafts" });
+    state = treeReducer(state, { type: "loadFailed", path: "/notes/drafts", epoch: 0 });
+    expect(pendingLoads(state)).toEqual([]);
+
+    state = treeReducer(state, { type: "directoryInvalidated", path: "/notes/drafts" });
+
+    expect(state.failed.has("/notes/drafts")).toBe(false);
+    expect(pendingLoads(state)).toEqual(["/notes/drafts"]);
+  });
+
+  it("discards an in-flight result superseded by a disk invalidation", () => {
+    let state = treeReducer(loaded(), { type: "directoryToggled", path: "/notes/drafts" });
+    state = treeReducer(state, { type: "loadRequested", path: "/notes/drafts" });
+    state = treeReducer(state, { type: "directoryInvalidated", path: "/notes/drafts" });
+    expect(state.loading.has("/notes/drafts")).toBe(false);
+
+    // The stale request lands with the generation it was issued under.
+    state = treeReducer(state, {
+      type: "loadSucceeded",
+      path: "/notes/drafts",
+      children: draftsChildren,
+      epoch: 0,
+    });
+    expect(state.children["/notes/drafts"]).toBeUndefined();
+    expect(pendingLoads(state)).toEqual(["/notes/drafts"]);
+
+    // The replacement request (current generation) applies normally.
+    state = treeReducer(state, {
+      type: "loadSucceeded",
+      path: "/notes/drafts",
+      children: draftsChildren,
+      epoch: 1,
+    });
+    expect(state.children["/notes/drafts"]).toEqual(draftsChildren);
+    expect(pendingLoads(state)).toEqual([]);
+  });
+
+  it("renaming an in-flight directory re-requests it and discards the stale result", () => {
+    let state = treeReducer(loaded(), { type: "directoryToggled", path: "/notes/drafts" });
+    state = treeReducer(state, { type: "loadRequested", path: "/notes/drafts" });
+    expect(pendingLoads(state)).toEqual([]);
+
+    state = treeReducer(state, {
+      type: "entryRenamed",
+      parentPath: "/notes",
+      from: "/notes/drafts",
+      entry: dir("/notes/published"),
+    });
+
+    // The in-flight mark is dropped instead of remapped, so the renamed
+    // directory is requested again rather than leaving `loading` stuck.
+    expect(state.loading.has("/notes/drafts")).toBe(false);
+    expect(state.loading.has("/notes/published")).toBe(false);
+    expect(pendingLoads(state)).toEqual(["/notes/published"]);
+
+    // The stale result for the old path is discarded, not cached.
+    state = treeReducer(state, {
+      type: "loadSucceeded",
+      path: "/notes/drafts",
+      children: draftsChildren,
+      epoch: 0,
+    });
+    expect(state.children["/notes/drafts"]).toBeUndefined();
+    expect(pendingLoads(state)).toEqual(["/notes/published"]);
+
+    state = treeReducer(state, {
+      type: "loadSucceeded",
+      path: "/notes/published",
+      children: draftsChildren,
+      epoch: 0,
+    });
+    expect(state.children["/notes/published"]).toEqual(draftsChildren);
+    expect(pendingLoads(state)).toEqual([]);
   });
 });

@@ -10,6 +10,7 @@ import type {
   DocumentPort,
   WorkspaceRoot,
 } from "../document/DocumentPort";
+import type { DiskEvent } from "../document/types";
 import {
   initialTreeState,
   pendingLoads,
@@ -34,6 +35,33 @@ const errorMessage = (error: unknown): string =>
 
 // Path math assumes POSIX separators — deliberate: this is a macOS-only app.
 const parentPathOf = (path: string): string => path.slice(0, path.lastIndexOf("/"));
+
+/**
+ * The directory listings a disk event may have changed: the parent of the
+ * affected path (both parents for a move), restricted to the workspace so
+ * document events outside the root are ignored. The re-list reads disk
+ * truth, so `changed` and `missing` map the same way.
+ */
+const affectedDirectories = (
+  event: DiskEvent,
+  root: string,
+): ReadonlyArray<string> => {
+  const parents =
+    event.kind === "moved"
+      ? [parentPathOf(event.from), parentPathOf(event.to)]
+      : [parentPathOf(event.path)];
+  return [...new Set(parents)].filter(
+    (dir) => dir === root || dir.startsWith(`${root}/`),
+  );
+};
+
+/**
+ * True when `name` is a single path component. The backend resolves create
+ * targets as arbitrary relative paths, so a name with separators would be
+ * created in a subdirectory while the tree row lands in the current listing.
+ */
+const isPlainName = (name: string): boolean =>
+  name.length > 0 && !name.includes("/") && name !== "." && name !== "..";
 
 function NameInput({
   defaultValue = "",
@@ -90,6 +118,9 @@ export default function FileSidebar({
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const rootPathRef = useRef(root.path);
   const mountedRef = useRef(true);
+  // Read the committed listing generations when issuing requests and when
+  // mapping disk events to directories, without re-subscribing on render.
+  const stateRef = useRef(state);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -97,6 +128,12 @@ export default function FileSidebar({
       mountedRef.current = false;
     };
   }, []);
+
+  // Keep stateRef current for the request/disk effects, which must observe
+  // the same committed state their render was produced from.
+  useEffect(() => {
+    stateRef.current = state;
+  });
 
   // Reset the tree whenever a different workspace opens.
   useEffect(() => {
@@ -118,20 +155,55 @@ export default function FileSidebar({
       inFlightRef.current.add(path);
       dispatch({ type: "loadRequested", path });
       const relative = path === rootPath ? "" : path.slice(rootPath.length + 1);
+      // Capture the listing generation so a result that settles after a
+      // rename or disk invalidation is discarded by the reducer.
+      const epoch = stateRef.current.epochs[path] ?? 0;
       const settled = () => {
         inFlightRef.current.delete(path);
         return mountedRef.current && rootPathRef.current === rootPath;
       };
       port.listDirectory(rootPath, relative).then(
         (children) => {
-          if (settled()) dispatch({ type: "loadSucceeded", path, children });
+          if (settled()) dispatch({ type: "loadSucceeded", path, children, epoch });
         },
         () => {
-          if (settled()) dispatch({ type: "loadFailed", path });
+          if (settled()) dispatch({ type: "loadFailed", path, epoch });
         },
       );
     }
   }, [state, port, root.path]);
+
+  // Keep the tree in step with disk changes inside the workspace. The
+  // backend watch_workspace stream reaches every subscriber (including the
+  // controller, which only acts on open documents), so filter to paths
+  // under this root and invalidate exactly the affected parent listings.
+  useEffect(() => {
+    if (!state.root) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | null = null;
+    void port
+      .subscribeToDiskEvents((event) => {
+        if (disposed) return;
+        for (const dir of affectedDirectories(event, root.path)) {
+          // A listing may be in flight for that directory under the old
+          // in-flight token; drop it so the invalidation's reload is
+          // scheduled immediately instead of waiting for the stale request.
+          inFlightRef.current.delete(dir);
+          dispatch({ type: "directoryInvalidated", path: dir });
+        }
+      })
+      .then((created) => {
+        if (disposed) created();
+        else unsubscribe = created;
+      })
+      .catch(() => {
+        // Watching is best-effort; the sidebar works without disk events.
+      });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [port, root.path, state.root]);
 
   const rows = visibleRows(state);
   const activeRow =
@@ -202,6 +274,13 @@ export default function FileSidebar({
   const relativeOf = (path: string): string => path.slice(root.path.length + 1);
 
   const commitCreate = async (name: string) => {
+    // The backend creates at an arbitrary relative path, so a name with
+    // separators would create a file in a subdirectory while the tree row
+    // lands in the current listing. Require a single path component.
+    if (!isPlainName(name)) {
+      setError("文件名不能为空或包含路径分隔符");
+      return;
+    }
     // Create next to the active row, but only inside a directory whose
     // listing is already loaded — otherwise the new file would be invisible.
     const parent =

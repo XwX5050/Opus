@@ -23,6 +23,6 @@
     "store:allow-set",
     "store:allow-save",
     "updater:default",
-    "process:default"
+    "process:allow-restart"
   ]
 }

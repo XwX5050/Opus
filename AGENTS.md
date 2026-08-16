@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.3` (kept in sync across `package.json`,
+- Version: `0.1.6` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first)
 - UI language: Chinese (`zh-CN`); code, comments, and docs are in English
@@ -113,9 +113,10 @@ Rust/Tauri backend.
   `TranslationSettings` (endpoint, API key, model, target language) and the
   per-tab `TranslationViewState`; `segments.ts` splits Markdown into
   translatable paragraph blocks and protected blocks (frontmatter, fenced
-  code, display math, HTML comments); `translate.ts` batches segments within
-  a character budget and calls `DocumentPort.translateSegments` per batch.
-  The backend `src-tauri/src/translate.rs` translates through an
+  code, display math, HTML comments); `translate.ts` issues one
+  `DocumentPort.translateSegments` call per segment through a bounded
+  concurrency pool and surfaces incremental results via `onPartial`. The
+  backend `src-tauri/src/translate.rs` translates through an
   OpenAI-compatible chat completions endpoint via reqwest (rustls) and caches
   results per segment on disk.
 - `src/theme/`: CSS tokens, app styles, theme hook, and editor/theme

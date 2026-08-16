@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DocumentPortError } from "../document/DocumentPort";
@@ -300,5 +300,132 @@ describe("FileSidebar", () => {
     );
     expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
+
+  it("re-lists the affected parent when disk events change the workspace", async () => {
+    const { port } = renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+    const initialCalls = port.listCalls.length;
+
+    // A file created outside the app appears after a changed event.
+    const created = await port.createMarkdownFile("/notes", "delta.md");
+    port.emitDiskEvent({ kind: "changed", path: created.path, modifiedUnixMs: 1, version: "v1" });
+    await screen.findByRole("treeitem", { name: "delta.md" });
+
+    // A file deleted outside the app disappears after a missing event.
+    port.removeFile("/notes/alpha.md");
+    port.emitDiskEvent({ kind: "missing", path: "/notes/alpha.md" });
+    await waitFor(() =>
+      expect(screen.queryByRole("treeitem", { name: "alpha.md" })).not.toBeInTheDocument(),
+    );
+
+    // A rename reported as moved updates both sides of the listing.
+    const renamed = await port.renameEntry("/notes", "Beta.markdown", "renamed.md");
+    port.emitDiskEvent({ kind: "moved", from: "/notes/Beta.markdown", to: renamed.path });
+    await screen.findByRole("treeitem", { name: "renamed.md" });
+    expect(screen.queryByRole("treeitem", { name: "Beta.markdown" })).not.toBeInTheDocument();
+
+    // Every event re-listed the affected parent directory.
+    expect(port.listCalls.length).toBeGreaterThan(initialCalls);
+  });
+
+  it("keeps an expanded directory expanded when a disk event reloads it", async () => {
+    const user = userEvent.setup();
+    const { port } = renderSidebar();
+    await user.click(await screen.findByRole("treeitem", { name: "drafts" }));
+    await screen.findByRole("treeitem", { name: "gamma.md" });
+    const callsBefore = port.listCalls.length;
+
+    // A change inside the expanded directory invalidates exactly that
+    // listing; the folder stays expanded and its children reload.
+    await act(async () => {
+      port.updateFile("/notes/drafts/gamma.md", "edited", "v2");
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/drafts/gamma.md",
+        modifiedUnixMs: 2,
+        version: "v2",
+      });
+    });
+
+    await waitFor(() =>
+      expect(port.listCalls.length).toBeGreaterThan(callsBefore),
+    );
+    expect(await screen.findByRole("treeitem", { name: "gamma.md" })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: "drafts" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("ignores disk events outside the workspace root", async () => {
+    const { port } = renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+    const calls = [...port.listCalls];
+
+    port.emitDiskEvent({ kind: "changed", path: "/other/x.md", modifiedUnixMs: 1, version: "v1" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(port.listCalls).toEqual(calls);
+  });
+
+  it("rejects create names containing a path separator", async () => {
+    const user = userEvent.setup();
+    const { port } = renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    await user.click(screen.getByRole("button", { name: "新建文件" }));
+    const input = screen.getByRole("textbox", { name: "文件名" });
+    await user.type(input, "sub/deep.md{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/路径分隔符/);
+    // Nothing landed in the tree or in the backing store.
+    expect(screen.queryByRole("treeitem", { name: "sub/deep.md" })).not.toBeInTheDocument();
+    const listing = await port.listDirectory("/notes", "");
+    expect(listing.map((entry) => entry.name)).not.toContain("sub/deep.md");
+    // The input stays open so the user can correct the name.
+    expect(screen.getByRole("textbox", { name: "文件名" })).toBeInTheDocument();
+  });
+
+  it("reloads a renamed directory whose listing was in flight", async () => {
+    const user = userEvent.setup();
+    const port = makePort();
+    // Hold the "drafts" listing so the rename lands while it is in flight.
+    let releaseListing!: () => void;
+    const original = port.listDirectory.bind(port);
+    vi.spyOn(port, "listDirectory").mockImplementation(
+      async (rootPath: string, relative: string) => {
+        if (relative === "drafts") {
+          await new Promise<void>((resolve) => {
+            releaseListing = resolve;
+          });
+        }
+        return original(rootPath, relative);
+      },
+    );
+    renderSidebar(port);
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    await user.click(screen.getByRole("treeitem", { name: "drafts" }));
+    const draftsRow = screen.getByRole("treeitem", { name: "drafts" });
+    await user.click(within(draftsRow).getByRole("button", { name: "重命名" }));
+    const input = screen.getByRole("textbox", { name: "文件名" });
+    await user.clear(input);
+    await user.type(input, "published{Enter}");
+
+    // The rename dropped the stale in-flight token, so the renamed directory
+    // is re-requested immediately and its listing renders.
+    await screen.findByRole("treeitem", { name: "gamma.md" });
+    expect(screen.queryByRole("treeitem", { name: "drafts" })).not.toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: "published" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    // The stale listing settling later is discarded, not applied.
+    releaseListing();
+    await waitFor(() =>
+      expect(screen.getByRole("treeitem", { name: "gamma.md" })).toBeInTheDocument(),
+    );
   });
 });

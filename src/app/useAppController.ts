@@ -69,6 +69,11 @@ export interface SaveFailure {
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/** Recovery draft cadence: fired 2s after the last change, forced at worst
+ * every 5s of continuous typing so a crash-loss window never grows unbounded. */
+const DRAFT_DEBOUNCE_MS = 2000;
+const DRAFT_MAX_PENDING_MS = 5000;
+
 /** Disk-event paths are canonical; tab paths are user-supplied. */
 const findTabByPath = (
   state: DocumentState,
@@ -78,6 +83,17 @@ const findTabByPath = (
   return state.tabs.find(
     (tab) => tab.path !== null && normalizePathKey(tab.path) === key,
   );
+};
+
+/**
+ * Canonical-path parent key used to compare asset-scope coverage. Disk-event
+ * paths are canonical and the reducer's moved target keeps the event's path,
+ * so a lexical parent comparison is exact.
+ */
+const parentPathKey = (path: string): string => {
+  const normalized = path.replaceAll("\\", "/");
+  const index = normalized.lastIndexOf("/");
+  return normalizePathKey(index <= 0 ? "/" : normalized.slice(0, index));
 };
 
 /**
@@ -157,13 +173,17 @@ export function useAppController(
   const draftSignatures = useRef(
     new Map<string, { status: DocumentSnapshot["status"]; text: string }>(),
   );
+  // When each tab's pending-draft window began. Every keystroke re-arms the
+  // 2s idle debounce, so this caps how long continuous typing can postpone a
+  // write: once the window exceeds DRAFT_MAX_PENDING_MS the draft is forced.
+  const draftPendingSince = useRef(new Map<string, number>());
   // Session saves are suppressed until the persisted session has been loaded,
   // so a slow load can never be overwritten by the empty launch state.
   const sessionLoadedRef = useRef(false);
   // Bumped on every explicit user open (Finder/drag-drop open events, file
-  // picker, reopen). If any explicit open has happened by the time session
-  // restore finishes, that document keeps focus instead of the restored
-  // session's active tab.
+  // picker, new document, reopen). If any explicit open has happened by the
+  // time session restore finishes, that document keeps focus instead of the
+  // restored session's active tab.
   const explicitOpenVersionRef = useRef(0);
   // Per-consumer promise chain serializing backend scope operations, so a
   // release (or a re-acquire after close→reopen with the same tab ID) can
@@ -560,6 +580,10 @@ export function useAppController(
   }, [addOpenedFiles, isCurrent, port]);
 
   const newDocument = useCallback(() => {
+    // A new document is an explicit user action: it claims launch-window
+    // focus the same way an explicit open does, so a restored session's
+    // active tab must not steal activation from it.
+    explicitOpenVersionRef.current += 1;
     dispatch({ type: "newDocument", id: nextId() });
   }, [dispatch, nextId]);
 
@@ -805,7 +829,10 @@ export function useAppController(
     workspacePathRef.current = null;
     setWorkspace(null);
     releaseScope(`workspace:${previous}`);
-  }, [releaseScope]);
+    // Best-effort: clear the backend workspace anchor so later workspace
+    // commands with the stale root are rejected.
+    void port.closeWorkspace().catch(() => {});
+  }, [port, releaseScope]);
 
   useEffect(() => {
     if (!subscribeToEvents) return;
@@ -857,7 +884,12 @@ export function useAppController(
       if (!tab || tab.status !== "clean" || tab.pendingSave) return;
       const next = dispatch({ type: "externalMoved", from: event.from, to: event.to });
       const moved = next.tabs.find((candidate) => candidate.id === tab.id);
-      if (moved && moved.path !== null && moved.path !== tab.path) {
+      if (
+        moved &&
+        moved.path !== null &&
+        tab.path !== null &&
+        moved.path !== tab.path
+      ) {
         if (watchedIds.current.delete(moved.id)) {
           enqueueScopeOperation(moved.id, async () => {
             try {
@@ -866,6 +898,14 @@ export function useAppController(
               // Watch release is best-effort.
             }
           });
+        }
+        // The asset scope grants the document's parent directory, so it only
+        // needs a release/re-acquire when the move crossed a directory
+        // boundary; a same-parent rename keeps the existing grant, which
+        // already covers the new path.
+        if (parentPathKey(moved.path) !== parentPathKey(tab.path)) {
+          releaseScope(moved.id);
+          acquireDocumentScope(moved);
         }
         watchConsumer(moved.id, moved.path, "document");
       }
@@ -883,7 +923,7 @@ export function useAppController(
     // Echoes of our own completed saves carry the version we just wrote.
     if (tab.version !== null && tab.version === event.version) return;
     void reloadFromDisk(tab.id);
-  }, [dispatch, enqueueScopeOperation, port, reloadFromDisk, watchConsumer]);
+  }, [acquireDocumentScope, dispatch, enqueueScopeOperation, port, releaseScope, reloadFromDisk, watchConsumer]);
 
   useEffect(() => {
     let disposed = false;
@@ -903,11 +943,11 @@ export function useAppController(
   }, [handleDiskEvent, port]);
 
   // Recovery drafts: while a tab holds content that closing would lose, a
-  // snapshot is persisted 2 seconds after the last change; once the tab is
-  // clean or closed, its draft is discarded. Each tab's debounce is keyed by
-  // its draft-relevant content (status + text, compared by identity), so
-  // typing in one tab never resets (and thereby starves) another dirty
-  // tab's timer.
+  // snapshot is persisted 2 seconds after the last change (and at worst
+  // every 5 seconds of continuous typing); once the tab is clean or closed,
+  // its draft is discarded. Each tab's debounce is keyed by its
+  // draft-relevant content (status + text, compared by identity), so typing
+  // in one tab never resets (and thereby starves) another dirty tab's timer.
   useEffect(() => {
     const needing = new Map(
       state.tabs
@@ -917,6 +957,7 @@ export function useAppController(
     for (const id of [...draftSignatures.current.keys()]) {
       if (!needing.has(id)) {
         draftSignatures.current.delete(id);
+        draftPendingSince.current.delete(id);
         const timer = draftTimers.current.get(id);
         if (timer) {
           clearTimeout(timer);
@@ -947,8 +988,9 @@ export function useAppController(
       draftSignatures.current.set(id, signature);
       const existing = draftTimers.current.get(id);
       if (existing) clearTimeout(existing);
-      draftTimers.current.set(id, setTimeout(() => {
+      const write = () => {
         draftTimers.current.delete(id);
+        draftPendingSince.current.delete(id);
         const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
         if (!tab || !needsRecoveryDraft(tab)) return;
         persistedDraftIds.current.add(id);
@@ -958,7 +1000,17 @@ export function useAppController(
           // debounce instead of starving this tab after a transient failure.
           draftSignatures.current.delete(id);
         });
-      }, 2000));
+      };
+      // Every keystroke re-arms the 2s idle timer, so continuous typing must
+      // force a write once the tab has been pending past the maximum window;
+      // otherwise a crash-loss window would grow without bound.
+      const pendingSince = draftPendingSince.current.get(id) ?? Date.now();
+      if (Date.now() - pendingSince >= DRAFT_MAX_PENDING_MS) {
+        write();
+      } else {
+        draftPendingSince.current.set(id, pendingSince);
+        draftTimers.current.set(id, setTimeout(write, DRAFT_DEBOUNCE_MS));
+      }
     }
   }, [port, state]);
 
@@ -975,6 +1027,7 @@ export function useAppController(
   const flushDrafts = useCallback(async () => {
     for (const timer of draftTimers.current.values()) clearTimeout(timer);
     draftTimers.current.clear();
+    draftPendingSince.current.clear();
     const writes = stateRef.current.tabs
       .filter(needsRecoveryDraft)
       .map((tab) => {
@@ -1015,7 +1068,21 @@ export function useAppController(
       if (!isCurrent(generation)) return;
       sessionLoadedRef.current = true;
       if (session) {
-        setRecent(session.recent);
+        // Recent entries recorded while the session was still loading
+        // (Finder opens, drag-drop) must survive: merge instead of replacing,
+        // so the persisted history is applied without clobbering newer items.
+        setRecent((current) => {
+          const merged = [...current];
+          for (const entry of session.recent) {
+            if (!merged.some(
+              (existing) =>
+                normalizePathKey(existing.path) === normalizePathKey(entry.path),
+            )) {
+              merged.push(entry);
+            }
+          }
+          return merged.slice(0, 10);
+        });
         setThemeState(normalizeThemePreference(session.theme));
         setEditorPreferencesState(
           normalizeEditorPreferences(session.editorPreferences),
@@ -1036,7 +1103,10 @@ export function useAppController(
       if (!isCurrent(generation)) return;
       if (drafts.length) setRecoveryDrafts(drafts);
 
-      if (session?.workspacePath) {
+      // A workspace the user explicitly opened during the launch window
+      // (folder picker, drag-drop, recent entry) wins over the persisted
+      // one — restore only fills the gap when no workspace is open yet.
+      if (session?.workspacePath && workspacePathRef.current === null) {
         try {
           const root = await port.openWorkspacePath(session.workspacePath);
           if (isCurrent(generation)) openWorkspaceRoot(root);
@@ -1155,8 +1225,26 @@ export function useAppController(
       setRecoveryDrafts((current) =>
         current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
       );
-      // The restored tab re-persists itself under its own draft id.
-      void port.discardDraft(info.draftId).catch(() => {});
+      // A restored tab is dirty, so its own debounce would eventually write a
+      // draft — but a crash inside that 2s window would lose the recovery
+      // copy entirely, since the leftover draft is gone by then. Persist the
+      // restored tab's draft immediately, and only discard the leftover once
+      // the new copy is safely on disk.
+      let leftoverDiscardable = true;
+      if (added && needsRecoveryDraft(added)) {
+        persistedDraftIds.current.add(added.id);
+        try {
+          await port.writeDraft(draftFromSnapshot(added));
+        } catch {
+          // The immediate write failed: the leftover draft stays as the only
+          // disk copy and resurfaces in the recovery dialog next launch.
+          persistedDraftIds.current.delete(added.id);
+          leftoverDiscardable = false;
+        }
+      }
+      if (leftoverDiscardable) {
+        void port.discardDraft(info.draftId).catch(() => {});
+      }
     } catch (caught) {
       if (isCurrent(generation)) setError(errorMessage(caught));
     }

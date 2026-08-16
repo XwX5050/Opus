@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { E2eFixtureSpec } from "../../src/app/e2e";
 
 /**
  * Browser-shell E2E flows for the document translation feature.
@@ -15,41 +16,11 @@ import { expect, test, type Page } from "@playwright/test";
  * The toolbar button's aria-label contract is fixed: 翻译文档 → 取消翻译
  * (while translating) → 显示原文 (translation shown) → 显示译文 (original
  * shown again).
+ *
+ * The fixture shape and the window.__E2E_FIXTURE__ / __E2E_PORT__ types come
+ * from the shell itself (src/app/e2e.ts) via a type-only import: erased at
+ * runtime, the fixture still travels as JSON through addInitScript.
  */
-
-interface E2eFileSpec {
-  path: string;
-  text: string;
-}
-
-interface E2eTranslationSettingsSpec {
-  endpoint: string;
-  apiKey: string;
-  model: string;
-  targetLanguage: string;
-}
-
-interface E2eSessionSpec {
-  recent: Array<{ path: string; kind: "file" | "folder" }>;
-  openPaths: string[];
-  activePath: string | null;
-  workspacePath: string | null;
-  translationSettings?: E2eTranslationSettingsSpec;
-}
-
-interface E2eFixtureSpec {
-  files?: E2eFileSpec[];
-  session?: E2eSessionSpec | null;
-}
-
-declare global {
-  interface Window {
-    __E2E_FIXTURE__?: E2eFixtureSpec;
-    __E2E_PORT__?: {
-      translationCallCount: number;
-    };
-  }
-}
 
 /** Installs the fixture before page scripts run, then loads the shell. */
 const seed = async (page: Page, fixture: E2eFixtureSpec) => {
@@ -62,7 +33,7 @@ const seed = async (page: Page, fixture: E2eFixtureSpec) => {
 /** Session with the translation settings preconfigured (apiKey present). */
 const sessionWithTranslation = (
   ...paths: string[]
-): E2eSessionSpec => ({
+): E2eFixtureSpec["session"] => ({
   recent: [],
   openPaths: paths,
   activePath: paths.at(-1) ?? null,
@@ -130,8 +101,10 @@ test("translates a document, forces reading mode, and toggles back without new A
   // The success banner clears once the translation completes.
   await expect(page.locator(".translation-banner")).toHaveCount(0);
 
-  // The whole document translated in exactly one new batch call.
-  expect(await translationCallCount(page)).toBe(1);
+  // The per-segment protocol issues exactly one new call per translatable
+  // segment: two paragraphs here (frontmatter and the fenced code block are
+  // protected).
+  expect(await translationCallCount(page)).toBe(2);
 
   // Back to the original: restored verbatim, no full-width letters anywhere.
   const toggle = page.getByRole("button", { name: "显示原文", exact: true });
@@ -145,9 +118,10 @@ test("translates a document, forces reading mode, and toggles back without new A
     page.getByRole("button", { name: "显示译文", exact: true }),
   ).toBeVisible();
 
-  // Showing the translation again reuses the in-memory session result.
+  // Showing the translation again reuses the in-memory session result: the
+  // same segments hit the cache, so no new calls are issued.
   await page.getByRole("button", { name: "显示译文", exact: true }).click();
   await expect(content).toContainText("Ｈｅｌｌｏ Ｏｐｕｓ, 第一段文字。");
-  expect(await translationCallCount(page)).toBe(1);
+  expect(await translationCallCount(page)).toBe(2);
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
 });

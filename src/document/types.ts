@@ -110,8 +110,36 @@ export interface RecentItem {
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 480;
 
+/**
+ * Share of the window width a single panel may occupy at most once the
+ * clamp is aware of the viewport. Two open panels at this cap together leave
+ * the editor roughly a fifth of the window, even at the macOS minimum window
+ * width (680px), so a narrow window cannot squeeze it to nothing.
+ */
+export const SIDEBAR_WINDOW_WIDTH_FRACTION = 0.4;
+
 export const clampSidebarWidth = (width: number): number =>
   Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+
+/**
+ * Window-aware variant of `clampSidebarWidth` used at drag/keyboard resize
+ * time: the fixed upper bound additionally shrinks with the current window
+ * width (never below the fixed minimum), so the resizers cannot push both
+ * panels past the editor. Restored/preferences widths keep the plain clamp.
+ */
+export const clampSidebarWidthToWindow = (
+  width: number,
+  windowWidth: number,
+): number =>
+  clampSidebarWidth(
+    Math.min(
+      width,
+      Math.max(
+        SIDEBAR_MIN_WIDTH,
+        Math.round(windowWidth * SIDEBAR_WINDOW_WIDTH_FRACTION),
+      ),
+    ),
+  );
 
 /**
  * Sidebar collapse and width preferences persisted with the session. Collapse

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
-import type { DirectoryEntry, DocumentPort, SavedFile, WorkspaceRoot } from "../document/DocumentPort";
+import type { ClipboardImageInput, DirectoryEntry, DocumentPort, SavedFile, WorkspaceRoot } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import {
   MemoryDocumentPort,
@@ -11,7 +11,16 @@ import {
 } from "../document/memoryDocumentPort";
 import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import type { TranslationSettings } from "../translate/types";
-import AppShell from "./AppShell";
+import { checkUpdate, type UpdateCheckResult } from "./updates";
+import AppShell, { withAssetScopeForSavedImage } from "./AppShell";
+
+vi.mock("./updates", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./updates")>();
+  return {
+    ...actual,
+    checkUpdate: vi.fn().mockResolvedValue({ status: "unsupported" }),
+  };
+});
 
 const file = (path: string, text = "saved"): OpenedFile => ({
   path,
@@ -69,6 +78,7 @@ class InspectablePort implements DocumentPort {
   async releaseAssetScope() {}
   async chooseWorkspace(): Promise<WorkspaceRoot | null> { return null; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
+      async closeWorkspace() {}
   async listDirectory() { return []; }
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
@@ -327,13 +337,15 @@ describe("AppShell", () => {
     const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
     expect(outline).toHaveStyle({ width: "300px" });
 
-    const resizer = screen.getByRole("separator", { name: "调整大纲宽度" });
+    const resizer = screen.getByRole("slider", { name: "调整大纲宽度" });
     fireEvent.pointerDown(resizer, { pointerId: 2, button: 0, clientX: 1000 });
     expect(document.body).toHaveClass("outline-resizing");
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 950 });
     expect(outline).toHaveStyle({ width: "350px" });
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 0 });
-    expect(outline).toHaveStyle({ width: "480px" });
+    // The upper bound shrank with the jsdom window (1024px → 40% = 410px);
+    // drags beyond it stop at the window-aware cap instead of 480.
+    expect(outline).toHaveStyle({ width: "410px" });
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 2000 });
     expect(outline).toHaveStyle({ width: "200px" });
     fireEvent.pointerUp(resizer, { pointerId: 2 });
@@ -347,6 +359,36 @@ describe("AppShell", () => {
 
     fireEvent.keyDown(resizer, { key: "ArrowRight" });
     expect(outline).toHaveStyle({ width: "200px" });
+  });
+
+  it("restores the committed width when an outline drag is cancelled without persisting", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
+    const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
+    expect(outline).toHaveStyle({ width: "300px" });
+
+    const resizer = screen.getByRole("slider", { name: "调整大纲宽度" });
+    fireEvent.pointerDown(resizer, { pointerId: 3, button: 0, clientX: 1000 });
+    fireEvent.pointerMove(resizer, { pointerId: 3, clientX: 950 });
+    expect(outline).toHaveStyle({ width: "350px" });
+    fireEvent.pointerCancel(resizer, { pointerId: 3 });
+
+    // Cancelling snaps back to the committed width and persists nothing.
+    expect(outline).toHaveStyle({ width: "300px" });
+    expect(document.body).not.toHaveClass("outline-resizing");
+    expect(port.session?.outline).toEqual({ width: 300 });
   });
 
   it("keeps the outline open and branch state independent across tabs", async () => {
@@ -1059,7 +1101,7 @@ describe("AppShell workspace drawer", () => {
     );
   });
 
-  it("resizes the sidebar by dragging the separator and clamps to the bounds", async () => {
+  it("resizes the sidebar by dragging the slider and clamps to the bounds", async () => {
     const user = userEvent.setup();
     const port = workspacePort();
     render(<AppShell port={port} />);
@@ -1067,7 +1109,7 @@ describe("AppShell workspace drawer", () => {
     const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
     expect(sidebar).toHaveStyle({ width: "260px" });
 
-    const resizer = screen.getByRole("separator", { name: "调整侧栏宽度" });
+    const resizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
     fireEvent.pointerDown(resizer, { pointerId: 1, button: 0, clientX: 300 });
     expect(document.body.classList.contains("sidebar-resizing")).toBe(true);
 
@@ -1075,9 +1117,9 @@ describe("AppShell workspace drawer", () => {
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 340 });
     expect(sidebar).toHaveStyle({ width: "300px" });
 
-    // Out-of-range deltas clamp to [200, 480].
+    // Out-of-range deltas clamp to [200, window-aware cap (1024px → 410px)].
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 3000 });
-    expect(sidebar).toHaveStyle({ width: "480px" });
+    expect(sidebar).toHaveStyle({ width: "410px" });
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: -500 });
     expect(sidebar).toHaveStyle({ width: "200px" });
 
@@ -1088,14 +1130,78 @@ describe("AppShell workspace drawer", () => {
     await waitFor(() => expect(port.session?.sidebar?.width).toBe(200));
   });
 
-  it("hides the resize separator while the sidebar is collapsed", async () => {
+  it("shrinks both panel caps with the window so the editor keeps room", async () => {
+    // 760px window ≈ the macOS minimum; without a window-aware clamp the two
+    // panels could each reach 480 and squeeze the editor to nothing.
+    const viewport = vi.spyOn(window, "innerWidth", "get").mockReturnValue(760);
+    try {
+      const user = userEvent.setup();
+      const port = new MemoryDocumentPort(
+        new Map([["/notes/alpha.md", file("/notes/alpha.md")]]),
+        {
+          workspace: { path: "/notes", title: "notes" },
+          session: {
+            recent: [],
+            openPaths: ["/notes/alpha.md"],
+            activePath: "/notes/alpha.md",
+            workspacePath: "/notes",
+          },
+        },
+      );
+      render(<AppShell port={port} />);
+      await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+      const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+      const sidebarResizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
+      expect(sidebarResizer).toHaveAttribute("aria-valuemax", "304");
+      fireEvent.pointerDown(sidebarResizer, { pointerId: 6, button: 0, clientX: 300 });
+      fireEvent.pointerMove(sidebarResizer, { pointerId: 6, clientX: 3000 });
+      expect(sidebar).toHaveStyle({ width: "304px" });
+      fireEvent.pointerUp(sidebarResizer, { pointerId: 6 });
+      await waitFor(() => expect(port.session?.sidebar?.width).toBe(304));
+
+      // The outline obeys the same window-aware cap and persists it too.
+      await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
+      const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
+      const outlineResizer = screen.getByRole("slider", { name: "调整大纲宽度" });
+      expect(outlineResizer).toHaveAttribute("aria-valuemax", "304");
+      fireEvent.pointerDown(outlineResizer, { pointerId: 7, button: 0, clientX: 600 });
+      fireEvent.pointerMove(outlineResizer, { pointerId: 7, clientX: 0 });
+      expect(outline).toHaveStyle({ width: "304px" });
+      fireEvent.pointerUp(outlineResizer, { pointerId: 7 });
+      await waitFor(() => expect(port.session?.outline?.width).toBe(304));
+    } finally {
+      viewport.mockRestore();
+    }
+  });
+
+  it("restores the committed width when a sidebar drag is cancelled without persisting", async () => {
+    const user = userEvent.setup();
+    const port = workspacePort();
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+    const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
+    expect(sidebar).toHaveStyle({ width: "260px" });
+
+    const resizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
+    fireEvent.pointerDown(resizer, { pointerId: 4, button: 0, clientX: 300 });
+    fireEvent.pointerMove(resizer, { pointerId: 4, clientX: 340 });
+    expect(sidebar).toHaveStyle({ width: "300px" });
+    fireEvent.pointerCancel(resizer, { pointerId: 4 });
+
+    // Cancelling snaps back to the committed width and persists nothing.
+    expect(sidebar).toHaveStyle({ width: "260px" });
+    expect(document.body).not.toHaveClass("sidebar-resizing");
+    expect(port.session?.sidebar?.width).toBe(260);
+  });
+
+  it("hides the resize slider while the sidebar is collapsed", async () => {
     const user = userEvent.setup();
     render(<AppShell port={workspacePort()} />);
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
-    await screen.findByRole("separator", { name: "调整侧栏宽度" });
+    await screen.findByRole("slider", { name: "调整侧栏宽度" });
 
     await user.click(screen.getByRole("button", { name: "收起侧栏" }));
-    expect(screen.queryByRole("separator", { name: "调整侧栏宽度" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "调整侧栏宽度" })).not.toBeInTheDocument();
   });
 
   it("keeps the restored whole-sidebar collapse when the session reopens a workspace", async () => {
@@ -1262,7 +1368,15 @@ describe("AppShell recent items and recovery", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /a\.md.*未保存/ })).toBeVisible();
     expect(editor()).toHaveTextContent("unsaved recovery");
-    expect(port.drafts).toHaveLength(0);
+    // The leftover draft is replaced by the restored tab's own draft, which
+    // is persisted immediately — no 2s debounce window where a crash would
+    // lose the recovery copy.
+    expect(port.drafts).toHaveLength(1);
+    expect(port.drafts[0]).toMatchObject({
+      text: "unsaved recovery",
+      title: "a.md",
+    });
+    expect(port.drafts[0].draftId).not.toBe("draft-document-9");
   });
 });
 
@@ -1511,6 +1625,60 @@ describe("AppShell conflict and save-failure dialogs", () => {
       expect(port.writes[0]).toMatchObject({ targetPath: "/notes/copy.md" });
     });
 
+    it("saves the active document on menu.save and ignores it without an active tab", async () => {
+      const user = userEvent.setup();
+      const menu = menuSubscriber();
+      const port = new InspectablePort([file("/notes/a.md", "saved")]);
+      render(<AppShell port={port} subscribeToMenuActions={menu.subscribe} />);
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      // No active tab yet: the action is ignored.
+      menu.emit("menu.save");
+      expect(port.writes).toHaveLength(0);
+
+      await user.click(screen.getByRole("button", { name: "打开文件" }));
+      await screen.findByRole("tab", { name: /a\.md/ });
+      act(() => replaceEditorText("changed"));
+      menu.emit("menu.save");
+
+      await waitFor(() => expect(port.writes).toHaveLength(1));
+      expect(port.writes[0]).toMatchObject({
+        targetPath: "/notes/a.md",
+        text: "changed",
+      });
+    });
+
+    it("closes the active tab on menu.close_tab and prompts for dirty documents", async () => {
+      const user = userEvent.setup();
+      const menu = menuSubscriber();
+      const port = new InspectablePort([
+        file("/notes/a.md", "a"),
+        file("/notes/b.md", "b"),
+      ]);
+      render(<AppShell port={port} subscribeToMenuActions={menu.subscribe} />);
+      await waitFor(() => expect(menu.subscribe).toHaveBeenCalled());
+
+      // No active tab yet: the action is ignored.
+      menu.emit("menu.close_tab");
+      expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "打开文件" }));
+      // b.md opened last, so it is the active tab.
+      expect(screen.getByRole("tab", { name: /b\.md/ })).toHaveAttribute("aria-selected", "true");
+      menu.emit("menu.close_tab");
+      await waitFor(() =>
+        expect(screen.queryByRole("tab", { name: /b\.md/ })).not.toBeInTheDocument(),
+      );
+
+      // A dirty active tab routes into the close-confirmation dialog.
+      act(() => replaceEditorText("unsaved"));
+      menu.emit("menu.close_tab");
+      expect(await screen.findByRole("dialog", { name: "保存更改" })).toBeVisible();
+      await user.click(
+        within(screen.getByRole("dialog", { name: "保存更改" })).getByRole("button", { name: "取消" }),
+      );
+    });
+
     it("opens the settings dialog on menu.settings", async () => {
       const menu = menuSubscriber();
       render(<AppShell port={new InspectablePort()} subscribeToMenuActions={menu.subscribe} />);
@@ -1615,7 +1783,7 @@ describe("AppShell document translation", () => {
     expect(calls).toBe(1);
   });
 
-  it("shows the partial translation and batch progress while translating", async () => {
+  it("shows the partial translation and per-segment progress while translating", async () => {
     const user = userEvent.setup();
     const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
     const doc = paras.join("\n");
@@ -1635,28 +1803,30 @@ describe("AppShell document translation", () => {
     await user.click(screen.getByRole("button", { name: "打开文件" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
-    // Two batches (700-char paragraphs within the 1500-char budget); with
+    // Four paragraphs translate as four separate segment requests; with
     // nothing completed yet the banner shows no counts and the editor stays
     // on the original text.
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(4);
     expect(screen.getByRole("status")).toHaveTextContent("正在翻译…");
     expect(screen.getByRole("status")).not.toHaveTextContent("(");
 
-    // The first batch lands: the editor switches to the partial and freezes
-    // read-only, the banner reports batch progress.
+    // The first segment lands: the editor switches to the partial and freezes
+    // read-only, the banner reports per-segment progress.
     await act(async () => {
       pending[0].resolve(pending[0].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (1/2)"),
+      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (1/4)"),
     );
     expect(editor()).toHaveTextContent("ｘ");
     expect(editor().textContent).toContain("x");
     expect(editor()).toHaveAttribute("contenteditable", "false");
 
-    // The second batch completes: the full translation lands ready.
+    // The remaining segments complete: the full translation lands ready.
     await act(async () => {
       pending[1].resolve(pending[1].segments.map(pseudoTranslate));
+      pending[2].resolve(pending[2].segments.map(pseudoTranslate));
+      pending[3].resolve(pending[3].segments.map(pseudoTranslate));
     });
     const showOriginal = await screen.findByRole("button", { name: "显示原文" });
     expect(showOriginal).toHaveAttribute("aria-pressed", "true");
@@ -1723,5 +1893,158 @@ describe("AppShell document translation", () => {
       "请先在设置中配置翻译 API",
     );
     expect(port.translationCallCount).toBe(0);
+  });
+});
+
+describe("AppShell manual update check", () => {
+  const updateCheckButton = () =>
+    within(screen.getByRole("dialog", { name: "设置" })).getByRole("button", {
+      name: "检查更新",
+    });
+  const updateCheckHint = () =>
+    within(screen.getByRole("dialog", { name: "设置" })).getByRole("status");
+
+  it("reports manual update-check outcomes inline in the settings dialog", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<UpdateCheckResult>();
+    render(<AppShell port={new InspectablePort()} />);
+    // The startup check has already consumed the default mock result by now.
+    vi.mocked(checkUpdate).mockImplementationOnce(() => pending.promise);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(updateCheckButton());
+
+    expect(updateCheckButton()).toBeDisabled();
+    expect(updateCheckHint()).toHaveTextContent("正在检查…");
+
+    act(() => pending.resolve({ status: "up-to-date" }));
+    await waitFor(() =>
+      expect(updateCheckHint()).toHaveTextContent("当前已是最新版本"),
+    );
+    expect(updateCheckButton()).toBeEnabled();
+  });
+
+  it("drops a manual update check that resolves after the shell unmounted", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<UpdateCheckResult>();
+    const view = render(<AppShell port={new InspectablePort()} />);
+    vi.mocked(checkUpdate).mockImplementationOnce(() => pending.promise);
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(updateCheckButton());
+    view.unmount();
+
+    // Resolving after unmount must not touch state on the dead shell; a
+    // fresh mount starts from a clean idle state.
+    act(() =>
+      pending.resolve({
+        status: "update",
+        offer: { version: "9.9.9", downloadAndInstall: async () => {} },
+      }),
+    );
+
+    render(<AppShell port={new InspectablePort()} />);
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(updateCheckButton()).toBeEnabled();
+  });
+});
+
+describe("withAssetScopeForSavedImage", () => {
+  const port = (
+    overrides: Partial<{
+      savedPath: string | null;
+      acquireRejects: boolean;
+    }> = {},
+  ) => {
+    const acquireDocumentScope = vi.fn(async () => {
+      if (overrides.acquireRejects) throw new Error("scope denied");
+    });
+    const saveClipboardImage = vi.fn(async () => overrides.savedPath ?? null);
+    return {
+      saveClipboardImage,
+      acquireDocumentScope,
+      wrapper: withAssetScopeForSavedImage(
+        { saveClipboardImage, acquireDocumentScope },
+        "tab-1",
+      ),
+    };
+  };
+
+  const input = (overrides: Partial<ClipboardImageInput> = {}) => ({
+    bytes: new Uint8Array([1, 2, 3]),
+    mimeType: "image/png" as const,
+    documentPath: "/notes/a.md",
+    ...overrides,
+  });
+
+  it("acquires a scope for the image's directory when the pick is a subdirectory", async () => {
+    const { saveClipboardImage, acquireDocumentScope, wrapper } = port({
+      savedPath: "images/paste.png",
+    });
+
+    await expect(wrapper(input())).resolves.toBe("images/paste.png");
+
+    expect(saveClipboardImage).toHaveBeenCalledOnce();
+    expect(acquireDocumentScope).toHaveBeenCalledWith(
+      "tab-1",
+      "/notes/images/paste.png",
+    );
+  });
+
+  it("acquires a scope for an absolute pick outside the document directory", async () => {
+    const { acquireDocumentScope, wrapper } = port({
+      savedPath: "/tmp/notes/images/paste.png",
+    });
+
+    await expect(wrapper(input())).resolves.toBe("/tmp/notes/images/paste.png");
+
+    expect(acquireDocumentScope).toHaveBeenCalledWith(
+      "tab-1",
+      "/tmp/notes/images/paste.png",
+    );
+  });
+
+  it("keeps the saved path relative to the document directory", async () => {
+    const { wrapper } = port({ savedPath: "image-2026.png" });
+
+    await expect(wrapper(input())).resolves.toBe("image-2026.png");
+  });
+
+  it("does not acquire a scope when the save dialog is cancelled", async () => {
+    const { saveClipboardImage, acquireDocumentScope, wrapper } = port({
+      savedPath: null,
+    });
+
+    await expect(wrapper(input())).resolves.toBeNull();
+
+    expect(saveClipboardImage).toHaveBeenCalledOnce();
+    expect(acquireDocumentScope).not.toHaveBeenCalled();
+  });
+
+  it("cannot resolve a relative pick without a document path and still returns it", async () => {
+    const { acquireDocumentScope, wrapper } = port({
+      savedPath: "images/paste.png",
+    });
+
+    await expect(
+      wrapper(input({ documentPath: null })),
+    ).resolves.toBe("images/paste.png");
+
+    expect(acquireDocumentScope).not.toHaveBeenCalled();
+  });
+
+  it("returns the saved path even when the scope grant fails", async () => {
+    const { acquireDocumentScope, wrapper } = port({
+      savedPath: "/tmp/notes/images/paste.png",
+      acquireRejects: true,
+    });
+
+    await expect(wrapper(input())).resolves.toBe("/tmp/notes/images/paste.png");
+
+    expect(acquireDocumentScope).toHaveBeenCalledWith(
+      "tab-1",
+      "/tmp/notes/images/paste.png",
+    );
   });
 });
