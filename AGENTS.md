@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.7` (kept in sync across `package.json`,
+- Version: `0.1.8` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first)
 - UI language: Chinese (`zh-CN`); code, comments, and docs are in English
@@ -110,8 +110,10 @@ Rust/Tauri backend.
 - `src/workspace/`: folder sidebar tree state (`treeReducer.ts`) and UI
   (`FileSidebar.tsx`).
 - `src/translate/`: document translation pipeline. `types.ts` holds
-  `TranslationSettings` (endpoint, API key, model, target language) and the
-  per-tab `TranslationViewState`; `segments.ts` splits Markdown into
+  `TranslationSettings` (endpoint, API key, model, target language, concurrency
+  — the number of segments translated concurrently, configurable in settings
+  within 1-32, default 10) and the per-tab `TranslationViewState`; `segments.ts`
+  splits Markdown into
   translatable paragraph blocks and protected blocks (frontmatter, fenced
   code, display math, HTML comments); `translate.ts` issues one
   `DocumentPort.translateSegments` call per segment through a bounded
