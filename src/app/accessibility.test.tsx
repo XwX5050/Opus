@@ -136,9 +136,15 @@ describe("accessibility: roles and names", () => {
     render(<AppShell port={new MemoryDocumentPort(new Map())} />);
 
     await user.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByRole("dialog", { name: "设置" })).toBeVisible();
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    expect(dialog).toBeVisible();
+    // Escape only reaches the dialog's keydown handler once the focus
+    // effect has landed inside it; on slower runners that can lag a frame.
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement));
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
   });
 
   it("names the close-confirmation dialog and keeps it modal", async () => {
