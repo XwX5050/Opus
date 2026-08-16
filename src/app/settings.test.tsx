@@ -785,9 +785,11 @@ describe("settings: translation", () => {
     const endpoint = within(dialog).getByLabelText("API 端点");
     await user.clear(endpoint);
     await user.type(endpoint, "https://example.com/v1");
-    // Nothing commits mid-typing; Enter commits the draft.
+    // Nothing commits mid-typing; Enter commits the draft. fireEvent.keyDown
+    // targets the field directly — user.keyboard depends on the global focus,
+    // which flakes under CI load.
     expect(onTranslationSettingsChange).not.toHaveBeenCalled();
-    await user.keyboard("{Enter}");
+    fireEvent.keyDown(endpoint, { key: "Enter" });
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...DEFAULT_TRANSLATION_SETTINGS,
       endpoint: "https://example.com/v1",
