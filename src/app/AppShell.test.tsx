@@ -70,6 +70,7 @@ class InspectablePort implements DocumentPort {
   async chooseWorkspace(): Promise<WorkspaceRoot | null> { return null; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
   async listDirectory() { return []; }
+  async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
@@ -1612,6 +1613,56 @@ describe("AppShell document translation", () => {
     );
     expect(editor()).toHaveTextContent("ｈｅｌｌｏ ｗｏｒｌｄ");
     expect(calls).toBe(1);
+  });
+
+  it("shows the partial translation and batch progress while translating", async () => {
+    const user = userEvent.setup();
+    const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
+    const doc = paras.join("\n");
+    const port = keyedPort([translateFile("/notes/trans.md", doc)]);
+    const pending: {
+      segments: string[];
+      resolve: (value: string[]) => void;
+    }[] = [];
+    port.translateSegments = (
+      _settings: TranslationSettings,
+      segments: string[],
+    ) =>
+      new Promise<string[]>((resolve) => {
+        pending.push({ segments, resolve });
+      });
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+
+    // Two batches (700-char paragraphs within the 1500-char budget); with
+    // nothing completed yet the banner shows no counts and the editor stays
+    // on the original text.
+    expect(pending).toHaveLength(2);
+    expect(screen.getByRole("status")).toHaveTextContent("正在翻译…");
+    expect(screen.getByRole("status")).not.toHaveTextContent("(");
+
+    // The first batch lands: the editor switches to the partial and freezes
+    // read-only, the banner reports batch progress.
+    await act(async () => {
+      pending[0].resolve(pending[0].segments.map(pseudoTranslate));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (1/2)"),
+    );
+    expect(editor()).toHaveTextContent("ｘ");
+    expect(editor().textContent).toContain("x");
+    expect(editor()).toHaveAttribute("contenteditable", "false");
+
+    // The second batch completes: the full translation lands ready.
+    await act(async () => {
+      pending[1].resolve(pending[1].segments.map(pseudoTranslate));
+    });
+    const showOriginal = await screen.findByRole("button", { name: "显示原文" });
+    expect(showOriginal).toHaveAttribute("aria-pressed", "true");
+    expect(editor()).toHaveTextContent("ｘｘ");
+    expect(editor().textContent).not.toContain("x");
+    expect(editor()).toHaveAttribute("contenteditable", "false");
   });
 
   it("cancels an in-flight translation from the banner", async () => {

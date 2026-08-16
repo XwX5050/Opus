@@ -261,4 +261,26 @@ describe("MemoryDocumentPort translation", () => {
     expect(second).toEqual(["Ｈｅｌｌｏ"]);
     expect(port.translationCallCount).toBe(1);
   });
+
+  it("records listTranslationModels calls and serves the fixed model list", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const models = await port.listTranslationModels(
+      "https://api.openai.com/v1",
+      "secret-key",
+    );
+    // Deliberately unsorted so dialogs that sort by display are exercised.
+    expect(models).toEqual(["gpt-4o-mini", "gpt-4o"]);
+    expect(port.translationModelCalls).toEqual([
+      { endpoint: "https://api.openai.com/v1", apiKey: "secret-key" },
+    ]);
+  });
+
+  it("returns a clone of the model list so callers cannot mutate it", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const first = await port.listTranslationModels("https://api.openai.com/v1", "k");
+    first[0] = "mutated";
+    const second = await port.listTranslationModels("https://api.openai.com/v1", "k");
+    expect(second).toEqual(["gpt-4o-mini", "gpt-4o"]);
+    expect(port.translationModelCalls).toHaveLength(2);
+  });
 });

@@ -312,6 +312,11 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
         });
       } catch (error) { throw failure(error); }
     },
+    async listTranslationModels(endpoint: string, apiKey: string): Promise<string[]> {
+      try {
+        return await invoke<string[]>("list_translation_models", { endpoint, api_key: apiKey });
+      } catch (error) { throw failure(error); }
+    },
     subscribeToDiskEvents(handler: (event: DiskEvent) => void): Promise<() => void> {
       return listen<DiskEventDto>("document-disk-event", (event) => handler(diskEvent(event.payload)));
     },

@@ -48,6 +48,7 @@ class InspectableControllerPort implements DocumentPort {
   async chooseWorkspace() { return null; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
   async listDirectory() { return []; }
+  async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
@@ -101,6 +102,7 @@ class ScopeAwareControllerPort implements DocumentPort {
   async chooseWorkspace() { return this.workspaceRoot; }
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
   async listDirectory() { return []; }
+  async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
@@ -234,6 +236,7 @@ describe("useAppController", () => {
       async chooseWorkspace() { return null; },
       async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; },
       async listDirectory() { return []; },
+      async listTranslationModels() { return []; },
       async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
       async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
       async trashEntry() {},
@@ -1542,6 +1545,72 @@ describe("useAppController translations", () => {
       visible: true,
     });
     expect(port.calls).toBe(1);
+    hook.unmount();
+  });
+
+  it("surfaces partial translations and batch progress while translating", async () => {
+    const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
+    const doc = paras.join("\n");
+    class SteppedTranslatePort extends InspectableControllerPort {
+      readonly pending: {
+        segments: string[];
+        resolve: (value: string[]) => void;
+      }[] = [];
+      override translateSegments(
+        _settings: TranslationSettings,
+        segments: string[],
+      ) {
+        return new Promise<string[]>((resolve) => {
+          this.pending.push({ segments, resolve });
+        });
+      }
+    }
+    const port = new SteppedTranslatePort(
+      { ...file, text: doc },
+      Promise.resolve({ path: file.path, modifiedUnixMs: 2, version: "v2" }),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openFiles());
+    const id = hook.result.current.state.activeId!;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)?.state).toEqual({
+      phase: "translating",
+    });
+    // Two batches (700-char paragraphs within the 1500-char budget).
+    expect(port.pending).toHaveLength(2);
+
+    // The first batch lands: the translating state carries the partial text
+    // with the unfinished paragraphs still as the original text, plus counts.
+    await act(async () => {
+      port.pending[0].resolve(port.pending[0].segments.map(pseudoTranslate));
+    });
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state).toMatchObject({
+        phase: "translating",
+        completedBatches: 1,
+        totalBatches: 2,
+      }),
+    );
+    const partial = hook.result.current.translationOf(id)!.state;
+    if (partial.phase !== "translating") throw new Error("unreachable");
+    expect(partial.translatedText).toBe(
+      paras.slice(0, 2).map(pseudoTranslate).concat(paras.slice(2)).join("\n"),
+    );
+
+    await act(async () => {
+      port.pending[1].resolve(port.pending[1].segments.map(pseudoTranslate));
+    });
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(hook.result.current.translationOf(id)).toEqual({
+      state: {
+        phase: "ready",
+        translatedText: paras.map(pseudoTranslate).join("\n"),
+      },
+      visible: true,
+    });
     hook.unmount();
   });
 

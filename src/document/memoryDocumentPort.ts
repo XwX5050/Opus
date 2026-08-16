@@ -48,6 +48,13 @@ export interface MemoryClipboardImageSave {
   readonly documentPath: string | null;
 }
 
+/**
+ * Fixed model ids served by `listTranslationModels` for the in-memory port.
+ * Deliberately unsorted so callers that sort for display (the settings
+ * dialog) are exercised, mirroring a real endpoint responding out of order.
+ */
+const MEMORY_TRANSLATION_MODELS: readonly string[] = ["gpt-4o-mini", "gpt-4o"];
+
 const cloneOpenedFile = (file: OpenedFile): OpenedFile => ({ ...file });
 
 /**
@@ -104,6 +111,8 @@ export class MemoryDocumentPort implements DocumentPort {
   readonly #translationCache = new Map<string, string[]>();
   #translationCallCount = 0;
   #translationRequestedSegments = 0;
+  /** Recorded listTranslationModels calls, in order. */
+  readonly #translationModelCalls: { endpoint: string; apiKey: string }[] = [];
 
   /** When set, trashEntry rejects with this error instead of deleting. */
   trashFailure: DocumentPortError | null = null;
@@ -183,6 +192,11 @@ export class MemoryDocumentPort implements DocumentPort {
   /** Total segments sent for new (uncached) translation work. */
   get translationRequestedSegments(): number {
     return this.#translationRequestedSegments;
+  }
+
+  /** Recorded listTranslationModels calls (endpoint, api key), in order. */
+  get translationModelCalls(): ReadonlyArray<{ endpoint: string; apiKey: string }> {
+    return this.#translationModelCalls.map((call) => ({ ...call }));
   }
 
   async chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>> {
@@ -267,6 +281,14 @@ export class MemoryDocumentPort implements DocumentPort {
     this.#translationCallCount += 1;
     this.#translationRequestedSegments += segments.length;
     return [...translated];
+  }
+
+  async listTranslationModels(
+    endpoint: string,
+    apiKey: string,
+  ): Promise<string[]> {
+    this.#translationModelCalls.push({ endpoint, apiKey });
+    return [...MEMORY_TRANSLATION_MODELS];
   }
 
   async acquireDocumentScope(consumerId: string, path: string): Promise<void> {

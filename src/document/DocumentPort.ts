@@ -85,6 +85,14 @@ export interface DocumentPort {
     segments: string[],
   ): Promise<string[]>;
   /**
+   * Lists the model ids an OpenAI-compatible endpoint advertises (GET
+   * {endpoint}/models with the API key), sorted by id. The settings dialog
+   * uses this to populate the model picker and to test the connection.
+   * Rejects with a DocumentPortError (or a plain Error) when the request
+   * fails.
+   */
+  listTranslationModels(endpoint: string, apiKey: string): Promise<string[]>;
+  /**
    * Subscribes to the normalized disk-event stream. Resolves to an
    * unsubscribe function. Events arrive for any path covered by an active
    * watch; consumers filter by the paths they care about.

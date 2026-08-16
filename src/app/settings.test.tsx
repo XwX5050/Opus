@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { check as pluginCheck } from "@tauri-apps/plugin-updater";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
+import type { DocumentPort } from "../document/DocumentPort";
 import type { PersistedSession } from "../document/types";
 import { DEFAULT_EDITOR_PREFERENCES } from "../theme/preferences";
 import {
@@ -582,6 +584,7 @@ describe("settings: translation", () => {
   const renderTranslationDialog = (
     translationSettings: TranslationSettings = DEFAULT_TRANSLATION_SETTINGS,
     onTranslationSettingsChange = vi.fn(),
+    port: DocumentPort = new MemoryDocumentPort(new Map()),
   ) => {
     render(
       <SettingsDialog
@@ -594,11 +597,52 @@ describe("settings: translation", () => {
         updateCheckState="idle"
         translationSettings={translationSettings}
         onTranslationSettingsChange={onTranslationSettingsChange}
+        port={port}
       />,
     );
     return {
       dialog: screen.getByRole("dialog", { name: "设置" }),
       onTranslationSettingsChange,
+      port,
+    };
+  };
+
+  /**
+   * Renders the dialog with live translation-settings state, mirroring how
+   * AppShell owns the setting: the model combobox (like the custom-font
+   * field) is controlled live, so typing accumulates, filters the drawn
+   * list, and commits through a recording spy.
+   */
+  const renderLiveTranslationDialog = (
+    initialSettings: TranslationSettings = DEFAULT_TRANSLATION_SETTINGS,
+    port: DocumentPort = new MemoryDocumentPort(new Map()),
+  ) => {
+    const onTranslationSettingsChange = vi.fn();
+    const Wrapper = () => {
+      const [settings, setSettings] = useState(initialSettings);
+      return (
+        <SettingsDialog
+          theme="dark"
+          editorPreferences={DEFAULT_EDITOR_PREFERENCES}
+          onThemeChange={vi.fn()}
+          onEditorPreferencesChange={vi.fn()}
+          onClose={vi.fn()}
+          onCheckForUpdates={vi.fn()}
+          updateCheckState="idle"
+          translationSettings={settings}
+          onTranslationSettingsChange={(next) => {
+            onTranslationSettingsChange(next);
+            setSettings(next);
+          }}
+          port={port}
+        />
+      );
+    };
+    render(<Wrapper />);
+    return {
+      dialog: screen.getByRole("dialog", { name: "设置" }),
+      onTranslationSettingsChange,
+      port,
     };
   };
 
@@ -629,7 +673,8 @@ describe("settings: translation", () => {
 
   it("commits endpoint, API key and model edits as settings patches", async () => {
     const user = userEvent.setup();
-    const { dialog, onTranslationSettingsChange } = renderTranslationDialog();
+    const { dialog, onTranslationSettingsChange } =
+      renderLiveTranslationDialog();
 
     const endpoint = within(dialog).getByLabelText("API 端点");
     await user.clear(endpoint);
@@ -647,15 +692,19 @@ describe("settings: translation", () => {
     fireEvent.blur(apiKey);
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: "https://example.com/v1",
       apiKey: "sk-live-000",
     });
 
+    // The model combobox commits live (like the custom-font field), so the
+    // last patch carries every edit made so far.
     const model = within(dialog).getByLabelText("模型");
     await user.clear(model);
     await user.type(model, "gpt-4o");
-    fireEvent.blur(model);
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: "https://example.com/v1",
+      apiKey: "sk-live-000",
       model: "gpt-4o",
     });
   });
@@ -701,7 +750,7 @@ describe("settings: translation", () => {
       targetLanguage: "Français",
     };
     const { dialog, onTranslationSettingsChange } =
-      renderTranslationDialog(persisted);
+      renderLiveTranslationDialog(persisted);
 
     expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
       persisted.endpoint,
@@ -717,10 +766,236 @@ describe("settings: translation", () => {
     const model = within(dialog).getByLabelText("模型");
     await user.clear(model);
     await user.type(model, "new-model");
-    fireEvent.blur(model);
     expect(onTranslationSettingsChange).toHaveBeenCalledWith({
       ...persisted,
       model: "new-model",
     });
+  });
+
+  it("renders the model fetch and connection buttons", () => {
+    const { dialog } = renderTranslationDialog();
+    expect(
+      within(dialog).getByRole("button", { name: "获取模型列表" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "测试连接" }),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the translation buttons without a port", () => {
+    // Both actions need the app's DocumentPort; without it the buttons stay
+    // disabled so a click never silently no-ops.
+    render(
+      <SettingsDialog
+        theme="dark"
+        editorPreferences={DEFAULT_EDITOR_PREFERENCES}
+        onThemeChange={vi.fn()}
+        onEditorPreferencesChange={vi.fn()}
+        onClose={vi.fn()}
+        onCheckForUpdates={vi.fn()}
+        updateCheckState="idle"
+        translationSettings={DEFAULT_TRANSLATION_SETTINGS}
+        onTranslationSettingsChange={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    expect(
+      within(dialog).getByRole("button", { name: "获取模型列表" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "测试连接" }),
+    ).toBeDisabled();
+  });
+
+  it("populates the model picker from the port and commits a selection", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    const { dialog, onTranslationSettingsChange } = renderLiveTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      port,
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "获取模型列表" }),
+    );
+
+    const input = within(dialog).getByLabelText("模型");
+    await waitFor(() => expect(input).toHaveAttribute("role", "combobox"));
+    expect(
+      within(dialog).getByText("已加载 2 个模型"),
+    ).toBeInTheDocument();
+    expect(port.translationModelCalls).toEqual([
+      {
+        endpoint: DEFAULT_TRANSLATION_SETTINGS.endpoint,
+        apiKey: DEFAULT_TRANSLATION_SETTINGS.apiKey,
+      },
+    ]);
+
+    // Clearing the field (as a user searching from scratch would) opens the
+    // full, sorted list.
+    await user.clear(input);
+    const listbox = within(dialog).getByRole("listbox", { name: "可用模型" });
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["gpt-4o", "gpt-4o-mini"]);
+
+    await user.click(
+      within(listbox).getByRole("option", { name: "gpt-4o" }),
+    );
+    expect(onTranslationSettingsChange).toHaveBeenCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      model: "gpt-4o",
+    });
+    expect(
+      within(dialog).queryByRole("listbox", { name: "可用模型" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("filters the loaded model list as the user types", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderLiveTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      new MemoryDocumentPort(new Map()),
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "获取模型列表" }),
+    );
+    const input = within(dialog).getByLabelText("模型");
+    await waitFor(() => expect(input).toHaveAttribute("role", "combobox"));
+    await user.clear(input);
+    await user.type(input, "mini");
+
+    const listbox = within(dialog).getByRole("listbox", { name: "可用模型" });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(1);
+    expect(
+      within(listbox).getByRole("option", { name: "gpt-4o-mini" }),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a failed model fetch inline", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    vi.spyOn(port, "listTranslationModels").mockRejectedValue(
+      new Error("network down"),
+    );
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      port,
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "获取模型列表" }),
+    );
+    expect(
+      await within(dialog).findByText("获取模型失败：network down"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the fetch button disabled while a request is in flight", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    let resolveModels!: (models: string[]) => void;
+    vi.spyOn(port, "listTranslationModels").mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      port,
+    );
+
+    const fetchButton = within(dialog).getByRole("button", {
+      name: "获取模型列表",
+    });
+    await user.click(fetchButton);
+    expect(fetchButton).toBeDisabled();
+    expect(
+      within(dialog).getByText("正在获取模型…"),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      resolveModels(["gpt-4o"]);
+    });
+    await waitFor(() => expect(fetchButton).toBeEnabled());
+    expect(
+      within(dialog).getByText("已加载 1 个模型"),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a successful connection test with the model count", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      new MemoryDocumentPort(new Map()),
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "测试连接" }),
+    );
+    expect(
+      await within(dialog).findByText("连接成功（共 2 个模型）"),
+    ).toBeInTheDocument();
+    // The check only reports; the model picker list is left untouched.
+    expect(within(dialog).getByLabelText("模型")).not.toHaveAttribute(
+      "role",
+    );
+  });
+
+  it("shows the testing hint and disables the button while the check runs", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    let resolveModels!: (models: string[]) => void;
+    vi.spyOn(port, "listTranslationModels").mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      port,
+    );
+
+    const testButton = within(dialog).getByRole("button", {
+      name: "测试连接",
+    });
+    await user.click(testButton);
+    expect(testButton).toBeDisabled();
+    expect(within(dialog).getByText("正在测试…")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveModels(["gpt-4o", "gpt-4o-mini"]);
+    });
+    await waitFor(() => expect(testButton).toBeEnabled());
+    expect(
+      await within(dialog).findByText("连接成功（共 2 个模型）"),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a failed connection test with the reason", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    vi.spyOn(port, "listTranslationModels").mockRejectedValue(
+      new Error("401 Unauthorized"),
+    );
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      port,
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "测试连接" }),
+    );
+    expect(
+      await within(dialog).findByText("连接失败：401 Unauthorized"),
+    ).toBeInTheDocument();
   });
 });

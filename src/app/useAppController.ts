@@ -38,7 +38,7 @@ import {
 } from "../theme/preferences";
 import type { OpenPathSubscriptions } from "../document/tauriDocumentPort";
 import type { EditorViewMode } from "../editor/viewMode";
-import { translateDocument } from "../translate/translate";
+import { translateDocument, type TranslationPartial } from "../translate/translate";
 import {
   DEFAULT_TRANSLATION_SETTINGS,
   normalizeTranslationSettings,
@@ -371,7 +371,35 @@ export function useAppController(
     });
     const generation = lifecycleGenerationRef.current;
     const text = tab.text;
-    void translateDocument(port, settings, text, controller.signal)
+    // Batch completions update the translating state under the same per-run
+    // guards as the final result: a partial only lands while this run is
+    // still current and the source text is unchanged, so it can never
+    // resurrect a cancelled, superseded, or text-invalidated run.
+    const applyPartial = (partial: TranslationPartial) => {
+      if (!isCurrent(generation)) return;
+      if (translationControllers.current.get(id) !== controller) return;
+      const latest = stateRef.current.tabs.find(
+        (candidate) => candidate.id === id,
+      );
+      if (!latest || latest.text !== text) return;
+      setTranslations((current) => {
+        const next = new Map(current);
+        next.set(id, {
+          state: {
+            phase: "translating",
+            translatedText: partial.text,
+            completedBatches: partial.completedBatches,
+            totalBatches: partial.totalBatches,
+          },
+          visible: true,
+        });
+        return next;
+      });
+    };
+    void translateDocument(port, settings, text, {
+      signal: controller.signal,
+      onPartial: applyPartial,
+    })
       .then((translatedText) => {
         if (!isCurrent(generation)) return;
         // The controller map entry is the run token; a cancelled or dropped

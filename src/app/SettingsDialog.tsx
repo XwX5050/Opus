@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,6 +15,7 @@ import {
   type EditorPreferences,
   type ThemePreference,
 } from "../theme/preferences";
+import { type DocumentPort } from "../document/DocumentPort";
 import {
   DEFAULT_TRANSLATION_SETTINGS,
   type TranslationSettings,
@@ -29,6 +37,12 @@ export interface SettingsDialogProps {
   readonly onClose: () => void;
   readonly onCheckForUpdates: () => void;
   readonly updateCheckState: UpdateCheckState;
+  /**
+   * Backend for the model fetch and connection check. Optional so the dialog
+   * stays renderable in tests and until the shell passes the app's port; the
+   * translation buttons are disabled while it is absent.
+   */
+  readonly port?: DocumentPort;
 }
 
 const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
@@ -65,6 +79,20 @@ const UPDATE_HINTS: Readonly<
   "up-to-date": "当前已是最新版本",
   error: "检查失败，请稍后重试",
   unsupported: "当前环境不支持检查更新",
+};
+
+/** Inline hints next to the 获取模型列表 button, per fetch state. */
+const MODEL_LIST_HINTS = {
+  loading: "正在获取模型…",
+  success: (count: number) => `已加载 ${count} 个模型`,
+  error: (reason: string) => `获取模型失败：${reason}`,
+};
+
+/** Inline hints next to the 测试连接 button, per check state. */
+const CONNECTION_HINTS = {
+  testing: "正在测试…",
+  success: (count: number) => `连接成功（共 ${count} 个模型）`,
+  error: (reason: string) => `连接失败：${reason}`,
 };
 
 const isPresetFont = (fontFamily: string): boolean =>
@@ -162,32 +190,51 @@ function TextField({
   );
 }
 
-interface FontSearchFieldProps {
+interface SearchableFieldProps {
   readonly id: string;
   readonly value: string;
-  readonly fonts: readonly string[] | null;
+  /** Options for the drawn list; `null` keeps a plain text input. */
+  readonly options: readonly string[] | null;
+  /** Placeholder when there is no option list to search. */
+  readonly fallbackPlaceholder: string;
+  /** Placeholder once options are available. */
+  readonly searchPlaceholder: string;
+  /** aria-label of the drawn listbox. */
+  readonly listLabel: string;
+  /** Per-option inline style (fonts render in their own face); applied when
+   * set, omitted otherwise. */
+  readonly optionStyle?: (name: string) => CSSProperties | undefined;
   readonly onChange: (value: string) => void;
 }
 
 /**
- * Custom-font name field with a drawn, searchable list of installed fonts.
- * The native `<datalist>` picker cannot be styled inside the dark WKWebView
- * (its popup renders as an unreadable black box), so the list is drawn
- * in-app: filtered live as the user types, navigable with ArrowUp/ArrowDown
- * + Enter, closed by Escape, blur or a choice. `fonts` is null outside the
- * Tauri webview, where the field stays a plain text input.
+ * Text field with a drawn, searchable option list. The native `<datalist>`
+ * picker cannot be styled inside the dark WKWebView (its popup renders as an
+ * unreadable black box), so the list is drawn in-app: filtered live as the
+ * user types, navigable with ArrowUp/ArrowDown + Enter, closed by Escape,
+ * blur or a choice. `options` is null outside the Tauri webview (or before a
+ * list is loaded), where the field stays a plain text input.
  */
-function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
+function SearchableField({
+  id,
+  value,
+  options,
+  fallbackPlaceholder,
+  searchPlaceholder,
+  listLabel,
+  optionStyle,
+  onChange,
+}: SearchableFieldProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
   const filtered = useMemo(() => {
-    if (fonts === null) return null;
+    if (options === null) return null;
     const query = value.trim().toLocaleLowerCase();
     return query.length === 0
-      ? fonts
-      : fonts.filter((name) => name.toLocaleLowerCase().includes(query));
-  }, [fonts, value]);
+      ? options
+      : options.filter((name) => name.toLocaleLowerCase().includes(query));
+  }, [options, value]);
 
   // Keep the highlighted option inside the filtered list while typing.
   useEffect(() => {
@@ -257,21 +304,21 @@ function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
       <input
         id={id}
         type="text"
-        role={fonts === null ? undefined : "combobox"}
-        aria-expanded={fonts === null ? undefined : open}
+        role={options === null ? undefined : "combobox"}
+        aria-expanded={options === null ? undefined : open}
         aria-controls={listVisible ? `${id}-listbox` : undefined}
         aria-activedescendant={listVisible ? activeOptionId : undefined}
-        placeholder={fonts === null ? "已安装字体的名称" : "搜索已安装字体…"}
+        placeholder={options === null ? fallbackPlaceholder : searchPlaceholder}
         value={value}
         onChange={(event) => {
           onChange(event.target.value);
-          if (fonts !== null) setOpen(true);
+          if (options !== null) setOpen(true);
         }}
         onMouseDown={() => {
-          if (fonts !== null) setOpen(true);
+          if (options !== null) setOpen(true);
         }}
         onFocus={() => {
-          if (fonts !== null) {
+          if (options !== null) {
             setOpen(true);
             setActiveIndex(0);
           }
@@ -282,7 +329,7 @@ function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
         <ul
           id={`${id}-listbox`}
           role="listbox"
-          aria-label="已安装字体"
+          aria-label={listLabel}
           className="font-search-list"
         >
           {filtered.map((name, index) => (
@@ -292,7 +339,7 @@ function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
               role="option"
               aria-selected={index === activeIndex}
               className="font-search-option"
-              style={{ fontFamily: name }}
+              style={optionStyle?.(name)}
               onMouseDown={(event) => {
                 event.preventDefault();
                 select(name);
@@ -304,6 +351,32 @@ function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
         </ul>
       )}
     </div>
+  );
+}
+
+interface FontSearchFieldProps {
+  readonly id: string;
+  readonly value: string;
+  readonly fonts: readonly string[] | null;
+  readonly onChange: (value: string) => void;
+}
+
+/**
+ * Custom-font name field: the searchable option list serving installed fonts.
+ * See SearchableField for the drawn-list behavior behind it.
+ */
+function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
+  return (
+    <SearchableField
+      id={id}
+      value={value}
+      options={fonts}
+      fallbackPlaceholder="已安装字体的名称"
+      searchPlaceholder="搜索已安装字体…"
+      listLabel="已安装字体"
+      optionStyle={(name) => ({ fontFamily: name })}
+      onChange={onChange}
+    />
   );
 }
 
@@ -325,6 +398,7 @@ export default function SettingsDialog({
   onClose,
   onCheckForUpdates,
   updateCheckState,
+  port,
 }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstControlRef = useRef<HTMLSelectElement>(null);
@@ -341,6 +415,16 @@ export default function SettingsDialog({
   const [installedFonts, setInstalledFonts] = useState<readonly string[] | null>(
     null,
   );
+  // Model names for the model field's searchable list, loaded on demand via
+  // the port. `null` keeps the plain text input until a fetch succeeds; the
+  // connection test shares the same request but only reports the outcome.
+  const [translationModels, setTranslationModels] = useState<
+    readonly string[] | null
+  >(null);
+  const [modelsHint, setModelsHint] = useState<string | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [connectionHint, setConnectionHint] = useState<string | null>(null);
+  const [connectionTesting, setConnectionTesting] = useState(false);
 
   useEffect(() => {
     firstControlRef.current?.focus();
@@ -423,6 +507,46 @@ export default function SettingsDialog({
 
   const updateTranslation = (patch: Partial<TranslationSettings>) =>
     onTranslationSettingsChange({ ...translationSettings, ...patch });
+
+  const translationFailureReason = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  const fetchTranslationModels = async () => {
+    if (!port || modelsLoading) return;
+    setModelsLoading(true);
+    setModelsHint(MODEL_LIST_HINTS.loading);
+    try {
+      const models = await port.listTranslationModels(
+        translationSettings.endpoint,
+        translationSettings.apiKey,
+      );
+      // Sorted like the installed-font list, so the picker order is stable
+      // regardless of what the endpoint returns.
+      setTranslationModels([...models].sort((a, b) => a.localeCompare(b)));
+      setModelsHint(MODEL_LIST_HINTS.success(models.length));
+    } catch (error) {
+      setModelsHint(MODEL_LIST_HINTS.error(translationFailureReason(error)));
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
+  const testConnection = async () => {
+    if (!port || connectionTesting) return;
+    setConnectionTesting(true);
+    setConnectionHint(CONNECTION_HINTS.testing);
+    try {
+      const models = await port.listTranslationModels(
+        translationSettings.endpoint,
+        translationSettings.apiKey,
+      );
+      setConnectionHint(CONNECTION_HINTS.success(models.length));
+    } catch (error) {
+      setConnectionHint(CONNECTION_HINTS.error(translationFailureReason(error)));
+    } finally {
+      setConnectionTesting(false);
+    }
+  };
 
   const limits = EDITOR_PREFERENCE_LIMITS;
 
@@ -583,11 +707,47 @@ export default function SettingsDialog({
 
           <div className="settings-row" data-settings-row>
             <label htmlFor="settings-translation-model">模型</label>
-            <TextField
-              id="settings-translation-model"
-              value={translationSettings.model}
-              onCommit={(value) => updateTranslation({ model: value })}
-            />
+            <div className="settings-update-controls">
+              <SearchableField
+                id="settings-translation-model"
+                value={translationSettings.model}
+                options={translationModels}
+                fallbackPlaceholder="模型名称"
+                searchPlaceholder="搜索模型…"
+                listLabel="可用模型"
+                onChange={(value) => updateTranslation({ model: value })}
+              />
+              <button
+                type="button"
+                disabled={port === undefined || modelsLoading}
+                onClick={() => void fetchTranslationModels()}
+              >
+                获取模型列表
+              </button>
+              {modelsHint !== null && (
+                <span role="status" className="settings-update-hint">
+                  {modelsHint}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <span className="settings-row-label">连接</span>
+            <div className="settings-update-controls">
+              <button
+                type="button"
+                disabled={port === undefined || connectionTesting}
+                onClick={() => void testConnection()}
+              >
+                测试连接
+              </button>
+              {connectionHint !== null && (
+                <span role="status" className="settings-update-hint">
+                  {connectionHint}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="settings-row" data-settings-row>

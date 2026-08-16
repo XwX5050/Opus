@@ -256,11 +256,19 @@ export default function AppShell({
   );
   const viewMode = controller.viewModeOf(active?.id);
   const activeTranslation = controller.translationOf(active?.id);
-  // A translation on screen freezes the editor: value is the translated
-  // text, the view mode is forced to reading, and save/change are no-ops.
+  // The partial translation shown while batches are still in flight; absent
+  // until the first batch completes, after which the editor follows it.
+  const translatingPartial =
+    activeTranslation?.state.phase === "translating"
+      ? activeTranslation.state.translatedText
+      : undefined;
+  // A translation on screen — finished or partial — freezes the editor:
+  // value is the (partial) translated text, the view mode is forced to
+  // reading, and save/change are no-ops.
   const translationReady =
     activeTranslation?.state.phase === "ready" &&
     activeTranslation.visible === true;
+  const translationShown = translationReady || translatingPartial !== undefined;
   let translationLabel = "翻译文档";
   if (activeTranslation?.state.phase === "translating") translationLabel = "取消翻译";
   else if (translationReady) translationLabel = "显示原文";
@@ -1088,7 +1096,12 @@ export default function AppShell({
         )}
         {active && activeTranslation?.state.phase === "translating" && (
           <div role="status" className="translation-banner">
-            <span className="translation-banner-text">正在翻译…</span>
+            <span className="translation-banner-text">
+              {activeTranslation.state.completedBatches !== undefined &&
+              activeTranslation.state.totalBatches !== undefined
+                ? `正在翻译… (${activeTranslation.state.completedBatches}/${activeTranslation.state.totalBatches})`
+                : "正在翻译…"}
+            </span>
             <button
               type="button"
               onClick={() => controller.toggleTranslation(active.id)}
@@ -1116,21 +1129,21 @@ export default function AppShell({
             value={
               translationReady
                 ? activeTranslation.state.translatedText
-                : active.text
+                : translatingPartial ?? active.text
             }
             onChange={
-              translationReady
+              translationShown
                 ? () => {}
                 : (text) => controller.changeText(active.id, text)
             }
             onSave={
-              translationReady
+              translationShown
                 ? () => {}
                 : () => void controller.save(active.id)
             }
             onReopenClosed={reopenClosed}
             onToggleReading={() => controller.toggleReading(active.id)}
-            viewMode={translationReady ? "reading" : viewMode}
+            viewMode={translationShown ? "reading" : viewMode}
             documentPath={active.path}
             saveClipboardImage={(input) => port.saveClipboardImage(input)}
             resolveImageUrl={tauriImagePreviewUrl}
@@ -1343,6 +1356,7 @@ export default function AppShell({
           theme={controller.theme}
           editorPreferences={controller.editorPreferences}
           translationSettings={controller.translationSettings}
+          port={port}
           onThemeChange={controller.setTheme}
           onEditorPreferencesChange={controller.setEditorPreferences}
           onTranslationSettingsChange={controller.setTranslationSettings}

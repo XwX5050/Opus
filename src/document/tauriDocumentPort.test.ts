@@ -830,4 +830,27 @@ describe("tauri document port translation", () => {
       createTauriDocumentPort().translateSegments(settings, ["Hello"]),
     ).rejects.toMatchObject({ code: "io", message: "boom" });
   });
+
+  it("invokes list_translation_models with a snake case api key", async () => {
+    invoke.mockResolvedValue(["gpt-4o", "gpt-4o-mini"]);
+    const result = await createTauriDocumentPort().listTranslationModels(
+      "https://api.openai.com/v1",
+      "secret",
+    );
+    expect(invoke).toHaveBeenCalledWith("list_translation_models", {
+      endpoint: "https://api.openai.com/v1",
+      api_key: "secret",
+    });
+    expect(result).toEqual(["gpt-4o", "gpt-4o-mini"]);
+  });
+
+  it("maps structured list_translation_models failures", async () => {
+    invoke.mockRejectedValue({ code: "io", message: "listing failed" });
+    await expect(
+      createTauriDocumentPort().listTranslationModels(
+        "https://api.openai.com/v1",
+        "secret",
+      ),
+    ).rejects.toMatchObject({ code: "io", message: "listing failed" });
+  });
 });
