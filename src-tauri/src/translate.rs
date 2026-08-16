@@ -6,6 +6,10 @@
 //! sibling-temp + rename + directory-fsync discipline from `recovery`, and
 //! corrupt or missing entries are always treated as misses so a bad write can
 //! never fail a translation.
+//!
+//! The same endpoint also powers the settings dialog's model picker and
+//! connection check: `list_translation_models` fetches `GET {endpoint}/models`
+//! and returns the advertised model ids, sorted.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -342,6 +346,58 @@ pub async fn translate_segments_with_client(
         .collect())
 }
 
+/// Lists the model ids advertised by an OpenAI-compatible endpoint (GET
+/// {endpoint}/models, Bearer api_key), sorted by id. Separated from the Tauri
+/// command so integration tests can drive it with a real client against a mock
+/// server. Failure styles match `translate_batch`: transport problems, non-
+/// success statuses, and malformed payloads are all `TranslateError`s.
+pub async fn list_translation_models_with_client(
+    client: &reqwest::Client,
+    endpoint: &str,
+    api_key: &str,
+) -> Result<Vec<String>, TranslateError> {
+    validate_endpoint(endpoint)?;
+    let url = format!("{}/models", endpoint.trim_end_matches('/'));
+    let response = client
+        .get(&url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|source| TranslateError::Request { source })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(TranslateError::ResponseStatus { status, body });
+    }
+    let payload: serde_json::Value =
+        response
+            .json()
+            .await
+            .map_err(|source| TranslateError::BadResponse {
+                detail: format!("response JSON is invalid: {source}"),
+            })?;
+    let data = payload
+        .get("data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| TranslateError::BadResponse {
+            detail: "missing data array".into(),
+        })?;
+    let mut models: Vec<String> = data
+        .iter()
+        .map(|entry| {
+            entry
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| TranslateError::BadResponse {
+            detail: "data entries must have a string id".into(),
+        })?;
+    models.sort();
+    Ok(models)
+}
+
 /// Translates a batch of markdown segments via an OpenAI-compatible chat
 /// completions endpoint, caching results per segment under the app data
 /// directory.
@@ -364,6 +420,28 @@ pub async fn translate_segments(
         .build()
         .map_err(|error| format!("failed to build HTTP client: {error}"))?;
     translate_segments_with_client(&client, &settings, &segments, &cache)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Lists the models available at an OpenAI-compatible endpoint (GET
+/// {endpoint}/models, Bearer api_key), sorted by id. The settings dialog's
+/// model picker and connection check both call this; the WebView CSP forbids
+/// direct frontend calls to the provider, so the request goes through Rust
+/// like translation.
+#[tauri::command]
+pub async fn list_translation_models(
+    endpoint: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    // rustls requires a process-wide crypto provider before any Client is
+    // built; installing the ring provider is idempotent across the app.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("failed to build HTTP client: {error}"))?;
+    list_translation_models_with_client(&client, &endpoint, &api_key)
         .await
         .map_err(|error| error.to_string())
 }

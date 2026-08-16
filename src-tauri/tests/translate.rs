@@ -1,13 +1,15 @@
 use markdown_edit_lib::translate::{
-    translate_segments_with_client, TranslationCache, TranslationSettings,
+    list_translation_models_with_client, translate_segments_with_client, TranslationCache,
+    TranslationSettings,
 };
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
-/// Minimal HTTP server that records request bodies and answers each request
-/// with the next queued response. Every response closes the connection, so
-/// the request count is the connection count.
+/// Minimal HTTP server that records requests and answers each one with the
+/// next queued response. Every response closes the connection, so the request
+/// count is the connection count. Each captured request keeps its raw bytes
+/// (head + body) so tests can assert on the request line and headers.
 struct MockServer {
     addr: SocketAddr,
     requests: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -59,9 +61,44 @@ impl MockServer {
         self.requests.lock().unwrap().len()
     }
 
-    fn request_body(&self, index: usize) -> Vec<u8> {
-        self.requests.lock().unwrap()[index].clone()
+    fn request_line(&self, index: usize) -> String {
+        let raw = &self.requests.lock().unwrap()[index];
+        let (head, _) = split_request(raw);
+        let line: Vec<u8> = head
+            .iter()
+            .take_while(|&&byte| byte != b'\r')
+            .copied()
+            .collect();
+        String::from_utf8_lossy(&line).to_string()
     }
+
+    fn request_header(&self, index: usize, name: &str) -> Option<String> {
+        let raw = &self.requests.lock().unwrap()[index];
+        let (head, _) = split_request(raw);
+        let head = String::from_utf8_lossy(head);
+        head.lines().find_map(|line| {
+            let (header, value) = line.split_once(':')?;
+            header
+                .eq_ignore_ascii_case(name)
+                .then_some(value.trim().to_string())
+        })
+    }
+
+    fn request_body(&self, index: usize) -> Vec<u8> {
+        let raw = &self.requests.lock().unwrap()[index];
+        let (_, body) = split_request(raw);
+        body.to_vec()
+    }
+}
+
+/// Splits a captured raw request into (head, body) at the blank line.
+fn split_request(raw: &[u8]) -> (&[u8], &[u8]) {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("captured request ends its headers with a blank line")
+        + 4;
+    (&raw[..header_end], &raw[header_end..])
 }
 
 fn read_request(stream: &mut TcpStream) -> Option<Vec<u8>> {
@@ -101,7 +138,7 @@ fn read_request(stream: &mut TcpStream) -> Option<Vec<u8>> {
             Err(_) => return None,
         }
     }
-    Some(bytes[header_end..header_end + content_length].to_vec())
+    Some(bytes)
 }
 
 fn http_response(body: &str) -> Vec<u8> {
@@ -327,6 +364,77 @@ async fn invalid_endpoints_are_rejected_before_any_request() {
         ..settings.clone()
     };
     let error = translate_segments_with_client(&client, &insecure, &segments(&["one"]), &cache)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not allowed"));
+    assert_eq!(server.request_count(), 0);
+}
+
+#[tokio::test]
+async fn list_models_gets_the_models_path_with_bearer_auth_and_parses_ids_sorted() {
+    let server = MockServer::spawn();
+    // Out of order on purpose: the command must sort the ids for display.
+    server.queue(http_response(
+        &serde_json::json!({ "data": [{ "id": "gpt-4o-mini" }, { "id": "gpt-4o" }] }).to_string(),
+    ));
+
+    let client = client();
+    let models = list_translation_models_with_client(&client, &server.endpoint(), "test-key")
+        .await
+        .unwrap();
+
+    assert_eq!(models, ["gpt-4o", "gpt-4o-mini"]);
+    assert_eq!(server.request_count(), 1);
+    assert_eq!(server.request_line(0), "GET /v1/models HTTP/1.1");
+    assert_eq!(
+        server.request_header(0, "authorization"),
+        Some("Bearer test-key".into())
+    );
+    assert_eq!(server.request_body(0), b"");
+}
+
+#[tokio::test]
+async fn list_models_reports_provider_http_errors() {
+    let server = MockServer::spawn();
+    server.queue(http_status(401, "Unauthorized"));
+
+    let client = client();
+    let error = list_translation_models_with_client(&client, &server.endpoint(), "test-key")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("401"));
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn list_models_rejects_malformed_payloads() {
+    // (payload, expected error fragment); each case needs its own server
+    // because a queued response is consumed by exactly one request.
+    let cases: &[(&str, &str)] = &[
+        ("not json", "response JSON is invalid"),
+        (r#"{"models": []}"#, "missing data array"),
+        (r#"{"data": [{"id": 7}]}"#, "string id"),
+    ];
+    let client = client();
+    for (payload, expected) in cases {
+        let server = MockServer::spawn();
+        server.queue(http_response(payload));
+        let error = list_translation_models_with_client(&client, &server.endpoint(), "test-key")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "payload {payload:?} must fail mentioning {expected:?}, got: {error}"
+        );
+        assert_eq!(server.request_count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn list_models_rejects_insecure_endpoints_before_any_request() {
+    let server = MockServer::spawn();
+    let client = client();
+    let error = list_translation_models_with_client(&client, "http://example.com/v1", "test-key")
         .await
         .unwrap_err();
     assert!(error.to_string().contains("not allowed"));

@@ -44,6 +44,7 @@ pub fn run() {
             document_commands::read_recovery_draft,
             document_commands::discard_recovery_draft,
             translate::translate_segments,
+            translate::list_translation_models,
             perf_mark::perf_mark_editor_editable,
             #[cfg(target_os = "macos")]
             fonts::list_installed_fonts,
