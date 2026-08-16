@@ -244,13 +244,13 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--accent);
 }
 
-.editor-toolbar .view-mode-toggle[aria-pressed="true"] {
+.editor-toolbar .icon-button[aria-pressed="true"] {
   background: var(--selection);
   color: var(--accent);
 }
 
-.editor-toolbar .view-mode-toggle[aria-pressed="true"]:hover,
-.editor-toolbar .view-mode-toggle[aria-pressed="true"]:active {
+.editor-toolbar .icon-button[aria-pressed="true"]:hover,
+.editor-toolbar .icon-button[aria-pressed="true"]:active {
   background: var(--selection);
 }
 
@@ -685,6 +685,33 @@ body.outline-resizing * {
 }
 
 .perf-banner button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+/* Document-translation notice: the same quiet inline banner as the
+ * light-mode notice above, sharing its tokens. */
+.translation-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size-small);
+}
+
+.translation-banner-text {
+  flex: 1;
+}
+
+.translation-banner button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.translation-banner button:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
@@ -1475,7 +1502,8 @@ button,
 .outline-icon-button,
 .outline-heading-button,
 .recent-list button,
-.perf-banner button {
+.perf-banner button,
+.translation-banner button {
   transition:
     background-color var(--anim-fast) ease,
     color var(--anim-fast) ease,
@@ -1536,7 +1564,8 @@ button:active:not(:disabled),
 }
 
 .app-alert,
-.perf-banner {
+.perf-banner,
+.translation-banner {
   animation: bannerIn var(--anim-moderate) var(--anim-easing);
 }
 

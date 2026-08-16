@@ -36,6 +36,14 @@ tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 trash = "5.2.3"
 notify = "8.2.0"
+# OpenAI-compatible chat completions client for document translation,
+# matching the reqwest/rustls versions already locked in the tree by
+# tauri-plugin-updater. reqwest 0.13 split its old `rustls-tls` feature:
+# `rustls-no-provider` leaves the crypto provider to the tree. rustls 0.23
+# defaults to the aws-lc-rs provider, so the ring provider is pinned here
+# explicitly (as tauri-plugin-updater does).
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # macOS-only bindings for the WKWebView under-page background (see
 # window_background.rs) and installed-font enumeration (see fonts.rs).
@@ -50,3 +58,6 @@ objc2-core-foundation = { version = "0.3.2", features = ["std", "CFArray", "CFSt
 objc2-core-text = { version = "0.3.2", features = ["std", "CTFontManager"] }
 objc2-foundation = { version = "0.3.2", features = ["std", "objc2-core-foundation"] }
 objc2-web-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "objc2-app-kit", "WKWebView"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -2,8 +2,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DirectoryEntry, DocumentPort, SavedFile } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
-import { MemoryDocumentPort } from "../document/memoryDocumentPort";
+import {
+  MemoryDocumentPort,
+  pseudoTranslate,
+} from "../document/memoryDocumentPort";
 import type { DiskEvent, OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
+import type { TranslationSettings } from "../translate/types";
+import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
 import { useAppController } from "./useAppController";
 
 const file: OpenedFile = {
@@ -34,6 +39,9 @@ class InspectableControllerPort implements DocumentPort {
     return this.writeResult;
   }
   async saveClipboardImage() { return null; }
+  async translateSegments(_settings: TranslationSettings, segments: string[]) {
+    return segments.map(pseudoTranslate);
+  }
   async acquireDocumentScope() {}
   async acquireWorkspaceScope() {}
   async releaseAssetScope() {}
@@ -75,6 +83,9 @@ class ScopeAwareControllerPort implements DocumentPort {
   async chooseSavePath() { return null; }
   async write(): Promise<SavedFile> { throw new DocumentPortError("io", "not writable"); }
   async saveClipboardImage() { return null; }
+  async translateSegments(_settings: TranslationSettings, segments: string[]) {
+    return segments.map(pseudoTranslate);
+  }
   async acquireDocumentScope(consumerId: string, path: string) {
     if (this.acquireGate) await this.acquireGate(consumerId);
     this.scopeCalls.push({ kind: "acquire", consumerId, path });
@@ -216,6 +227,7 @@ describe("useAppController", () => {
         return { path: request.targetPath, modifiedUnixMs: 2, version: "v2" };
       },
       async saveClipboardImage() { return null; },
+      async translateSegments() { return []; },
       async acquireDocumentScope() {},
       async acquireWorkspaceScope() {},
       async releaseAssetScope() {},
@@ -1467,5 +1479,319 @@ describe("useAppController per-tab view modes", () => {
     expect(hook.result.current.viewModeOf(a)).toBe("reading");
     act(() => hook.result.current.toggleReading(a));
     expect(hook.result.current.viewModeOf(a)).toBe("editing");
+  });
+});
+
+describe("useAppController translations", () => {
+  const translateFile = (path: string, text = "hello world"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  const keyedSettings = (): TranslationSettings => ({
+    ...DEFAULT_TRANSLATION_SETTINGS,
+    apiKey: "test-key",
+  });
+
+  /** Counts every translateSegments call, unlike the caching MemoryDocumentPort. */
+  class CountingTranslatePort extends InspectableControllerPort {
+    calls = 0;
+    override async translateSegments(
+      _settings: TranslationSettings,
+      segments: string[],
+    ) {
+      this.calls += 1;
+      return segments.map(pseudoTranslate);
+    }
+  }
+
+  it("translates on toggle, remembers the result, and hides/shows with no new API call", async () => {
+    const port = new CountingTranslatePort(
+      file,
+      Promise.resolve({ path: file.path, modifiedUnixMs: 2, version: "v2" }),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openFiles());
+    const id = hook.result.current.state.activeId!;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)).toEqual({
+      state: { phase: "translating" },
+      visible: true,
+    });
+
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(hook.result.current.translationOf(id)).toEqual({
+      state: { phase: "ready", translatedText: "ｂａｓｅ" },
+      visible: true,
+    });
+
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)).toMatchObject({ visible: false });
+
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)).toEqual({
+      state: { phase: "ready", translatedText: "ｂａｓｅ" },
+      visible: true,
+    });
+    expect(port.calls).toBe(1);
+    hook.unmount();
+  });
+
+  it("cancels an in-flight translation and discards its late result", async () => {
+    class DeferredTranslatePort extends InspectableControllerPort {
+      pending: { segments: string[]; resolve: (value: string[]) => void }[] = [];
+      override translateSegments(_settings: TranslationSettings, segments: string[]) {
+        return new Promise<string[]>((resolve) => {
+          this.pending.push({ segments, resolve });
+        });
+      }
+    }
+    const port = new DeferredTranslatePort(
+      file,
+      Promise.resolve({ path: file.path, modifiedUnixMs: 2, version: "v2" }),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openFiles());
+    const id = hook.result.current.state.activeId!;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)?.state.phase).toBe("translating");
+    expect(port.pending).toHaveLength(1);
+
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+
+    // The late resolution must not resurrect the entry.
+    await act(async () => {
+      port.pending[0].resolve(["late result"]);
+    });
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+    hook.unmount();
+  });
+
+  it("drops the entry when the hidden translation's text is edited", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+
+    // A hidden translation is invalidated by a live edit.
+    act(() => hook.result.current.toggleTranslation(id));
+    act(() => hook.result.current.changeText(id, "edited"));
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+    expect(hook.result.current.state.tabs[0].text).toBe("edited");
+    hook.unmount();
+  });
+
+  it("drops the entry when a disk reload replaces the text", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+
+    act(() => port.updateFile("/notes/a.md", "disk edit", "v2", 9));
+    act(() =>
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/a.md",
+        modifiedUnixMs: 9,
+        version: "v2",
+      }),
+    );
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0].text).toBe("disk edit"),
+    );
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)).toBeUndefined(),
+    );
+    hook.unmount();
+  });
+
+  it("aborts and drops an in-flight translation when the tab text is replaced", async () => {
+    class DeferredTranslateMemoryPort extends MemoryDocumentPort {
+      resolvePending: ((value: string[]) => void)[] = [];
+      override translateSegments(
+        _settings: TranslationSettings,
+        segments: string[],
+      ): Promise<string[]> {
+        return new Promise((resolve) => {
+          this.resolvePending.push(resolve);
+        });
+      }
+    }
+    const port = new DeferredTranslateMemoryPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)?.state.phase).toBe("translating");
+
+    act(() => port.updateFile("/notes/a.md", "disk edit", "v2", 9));
+    act(() =>
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/a.md",
+        modifiedUnixMs: 9,
+        version: "v2",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)).toBeUndefined(),
+    );
+    expect(hook.result.current.state.tabs[0].text).toBe("disk edit");
+    hook.unmount();
+  });
+
+  it("prunes a closed tab's translation state", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+
+    act(() => hook.result.current.close(id));
+    expect(hook.result.current.state.tabs).toHaveLength(0);
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+    hook.unmount();
+  });
+
+  it("makes save and changeText no-ops while a translation is visible", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    act(() => hook.result.current.changeText(id, "edited"));
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+
+    act(() => hook.result.current.changeText(id, "more edits"));
+    expect(hook.result.current.state.tabs[0].text).toBe("edited");
+
+    await act(() => hook.result.current.save(id));
+    expect(port.writes).toHaveLength(0);
+    expect(hook.result.current.state.tabs[0].status).toBe("dirty");
+    hook.unmount();
+  });
+
+  it("restores and persists translation settings with the session", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      session: {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        translationSettings: {
+          endpoint: "https://example.com/v1",
+          apiKey: "secret-key",
+          model: "gpt-4o",
+          targetLanguage: "日本語",
+        },
+      },
+    });
+    const hook = renderHook(() => useAppController(port));
+
+    await waitFor(() =>
+      expect(hook.result.current.translationSettings).toEqual({
+        endpoint: "https://example.com/v1",
+        apiKey: "secret-key",
+        model: "gpt-4o",
+        targetLanguage: "日本語",
+      }),
+    );
+
+    act(() => {
+      hook.result.current.setTranslationSettings({
+        endpoint: "https://other.example.com/v1",
+        apiKey: "other-key",
+        model: "llama",
+        targetLanguage: "English",
+      });
+    });
+    await waitFor(() =>
+      expect(port.session?.translationSettings).toEqual({
+        endpoint: "https://other.example.com/v1",
+        apiKey: "other-key",
+        model: "llama",
+        targetLanguage: "English",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("repairs corrupt persisted translation settings", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      session: {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        translationSettings: { endpoint: 42 } as unknown as TranslationSettings,
+      },
+    });
+    const hook = renderHook(() => useAppController(port));
+
+    await waitFor(() =>
+      expect(hook.result.current.translationSettings).toEqual({
+        endpoint: "https://api.openai.com/v1",
+        apiKey: "",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("surfaces a settings hint instead of translating without an API key", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+
+    act(() => hook.result.current.toggleTranslation(id));
+
+    expect(hook.result.current.error).toContain("翻译 API");
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+    expect(port.translationCallCount).toBe(0);
+    hook.unmount();
   });
 });

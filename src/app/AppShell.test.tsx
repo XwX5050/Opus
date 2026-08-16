@@ -5,8 +5,12 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import type { DirectoryEntry, DocumentPort, SavedFile, WorkspaceRoot } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
-import { MemoryDocumentPort } from "../document/memoryDocumentPort";
+import {
+  MemoryDocumentPort,
+  pseudoTranslate,
+} from "../document/memoryDocumentPort";
 import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
+import type { TranslationSettings } from "../translate/types";
 import AppShell from "./AppShell";
 
 const file = (path: string, text = "saved"): OpenedFile => ({
@@ -57,6 +61,9 @@ class InspectablePort implements DocumentPort {
     });
   }
   async saveClipboardImage() { return null; }
+  async translateSegments(_settings: TranslationSettings, segments: string[]) {
+    return segments.map(pseudoTranslate);
+  }
   async acquireDocumentScope() {}
   async acquireWorkspaceScope() {}
   async releaseAssetScope() {}
@@ -1534,5 +1541,136 @@ describe("AppShell conflict and save-failure dialogs", () => {
       // the editor-pane toolbar.
       expect(screen.getByRole("button", { name: "编辑模式" })).toBeVisible();
     });
+  });
+});
+
+describe("AppShell document translation", () => {
+  const translateFile = (path: string, text = "saved"): OpenedFile =>
+    file(path, text);
+
+  // A configured key (via the persisted session) so translation starts.
+  const keyedPort = (files: Map<string, OpenedFile> | OpenedFile[] = []) =>
+    new MemoryDocumentPort(
+      files instanceof Map ? files : new Map(files.map((f) => [f.path, f])),
+      {
+        session: {
+          recent: [],
+          openPaths: [],
+          activePath: null,
+          workspacePath: null,
+          translationSettings: {
+            endpoint: "https://example.com/v1",
+            apiKey: "test-key",
+            model: "gpt-4o-mini",
+            targetLanguage: "中文",
+          },
+        },
+      },
+    );
+
+  it("translates through the toolbar, shows the result read-only, and toggles back without re-calling", async () => {
+    const user = userEvent.setup();
+    let resolveTranslation!: (value: string[]) => void;
+    let calls = 0;
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    port.translateSegments = (_settings: TranslationSettings, segments: string[]) => {
+      calls += 1;
+      return new Promise<string[]>((resolve) => {
+        resolveTranslation = (translated) => resolve(translated);
+      });
+    };
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    const translate = screen.getByRole("button", { name: "翻译文档" });
+    expect(translate).toHaveAttribute("aria-pressed", "false");
+    await user.click(translate);
+
+    // In flight: the toolbar offers cancellation and the banner shows progress.
+    expect(screen.getByRole("button", { name: "取消翻译" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("正在翻译…");
+
+    act(() => resolveTranslation(["ｈｅｌｌｏ ｗｏｒｌｄ"]));
+    const showOriginal = await screen.findByRole("button", { name: "显示原文" });
+    expect(showOriginal).toHaveAttribute("aria-pressed", "true");
+    expect(editor()).toHaveTextContent("ｈｅｌｌｏ ｗｏｒｌｄ");
+    expect(editor()).toHaveAttribute("contenteditable", "false");
+
+    // Hide: the original text is restored untouched and editing resumes.
+    await user.click(showOriginal);
+    const showTranslation = screen.getByRole("button", { name: "显示译文" });
+    expect(showTranslation).toHaveAttribute("aria-pressed", "false");
+    expect(editor()).toHaveTextContent("hello world");
+    expect(editor()).not.toHaveTextContent("ｈｅｌｌｏ ｗｏｒｌｄ");
+    expect(editor()).toHaveAttribute("contenteditable", "true");
+
+    // Re-show: the in-memory result comes back with no new API call.
+    await user.click(showTranslation);
+    expect(screen.getByRole("button", { name: "显示原文" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(editor()).toHaveTextContent("ｈｅｌｌｏ ｗｏｒｌｄ");
+    expect(calls).toBe(1);
+  });
+
+  it("cancels an in-flight translation from the banner", async () => {
+    const user = userEvent.setup();
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    port.translateSegments = () => new Promise<string[]>(() => {});
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+
+    const banner = screen.getByRole("status");
+    expect(banner).toHaveTextContent("正在翻译…");
+    await user.click(within(banner).getByRole("button", { name: "取消" }));
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "翻译文档" })).toBeInTheDocument();
+    expect(editor()).toHaveTextContent("hello world");
+  });
+
+  it("shows a failure banner with a working retry", async () => {
+    const user = userEvent.setup();
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    let failures = 1;
+    port.translateSegments = async (_settings: TranslationSettings, segments: string[]) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("boom");
+      }
+      return segments.map(pseudoTranslate);
+    };
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+
+    const banner = await screen.findByRole("status");
+    expect(banner).toHaveTextContent("翻译失败：boom");
+    expect(screen.getByRole("button", { name: "翻译文档" })).toBeInTheDocument();
+
+    await user.click(within(banner).getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("button", { name: "显示原文" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(editor()).toHaveTextContent("ｈｅｌｌｏ ｗｏｒｌｄ");
+  });
+
+  it("asks the user to configure the API when no key is set", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "请先在设置中配置翻译 API",
+    );
+    expect(port.translationCallCount).toBe(0);
   });
 });

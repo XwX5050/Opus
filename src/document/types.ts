@@ -2,6 +2,7 @@ import type {
   EditorPreferences,
   ThemePreference,
 } from "../theme/preferences";
+import type { TranslationSettings } from "../translate/types";
 
 export type Newline = "lf" | "cr_lf";
 export type PathPlatform = "linux" | "macos" | "windows";
@@ -184,8 +185,9 @@ export const normalizeOutlinePreferences = (
 /**
  * Session metadata persisted separately from recovery drafts: only paths,
  * ordering and UI preferences live here, never document content (dirty
- * content lives in drafts). Theme/editor/sidebar preferences are optional
- * so sessions persisted by older versions still load.
+ * content lives in drafts). Theme/editor/sidebar/outline/translation
+ * preferences are optional so sessions persisted by older versions still
+ * load.
  */
 export interface PersistedSession {
   readonly recent: ReadonlyArray<RecentItem>;
@@ -196,4 +198,5 @@ export interface PersistedSession {
   readonly editorPreferences?: EditorPreferences;
   readonly sidebar?: SidebarPreferences;
   readonly outline?: OutlinePreferences;
+  readonly translationSettings?: TranslationSettings;
 }

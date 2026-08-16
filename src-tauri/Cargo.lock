@@ -75,6 +75,8 @@ dependencies = [
  "objc2-core-text",
  "objc2-foundation",
  "objc2-web-kit",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -88,6 +90,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tempfile",
+ "tokio",
  "trash",
 ]
 

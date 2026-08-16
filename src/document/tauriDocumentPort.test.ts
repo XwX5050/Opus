@@ -791,3 +791,43 @@ describe("tauri document port session, window geometry, and close requests", () 
     stop();
   });
 });
+
+describe("tauri document port translation", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const settings = {
+    endpoint: "https://api.openai.com/v1",
+    apiKey: "secret",
+    model: "gpt-4o-mini",
+    targetLanguage: "中文",
+  };
+
+  it("invokes translate_segments with camel case settings and returns translations in order", async () => {
+    invoke.mockResolvedValue(["Ｈｅｌｌｏ", "Ｗｏｒｌｄ"]);
+    const result = await createTauriDocumentPort().translateSegments(settings, ["Hello", "World"]);
+    expect(invoke).toHaveBeenCalledWith("translate_segments", {
+      settings: {
+        endpoint: "https://api.openai.com/v1",
+        apiKey: "secret",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+      },
+      segments: ["Hello", "World"],
+    });
+    expect(result).toEqual(["Ｈｅｌｌｏ", "Ｗｏｒｌｄ"]);
+  });
+
+  it("maps structured translate_segments failures", async () => {
+    invoke.mockRejectedValue({ code: "io", message: "translation failed" });
+    await expect(
+      createTauriDocumentPort().translateSegments(settings, ["Hello"]),
+    ).rejects.toMatchObject({ code: "io", message: "translation failed" });
+  });
+
+  it("maps non-structured failures to io DocumentPortError", async () => {
+    invoke.mockRejectedValue(new Error("boom"));
+    await expect(
+      createTauriDocumentPort().translateSegments(settings, ["Hello"]),
+    ).rejects.toMatchObject({ code: "io", message: "boom" });
+  });
+});

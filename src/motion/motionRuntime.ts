@@ -331,12 +331,53 @@ export const bindChevronSpreadHover = (button: HTMLElement): (() => void) => {
 };
 
 /**
- * Hover animation for the reading/editing view-mode toggle. The icon is
- * queried at event time because the button swaps glyphs when the mode
- * changes: the book tilts open (3D flip around its spine) and the pencil
- * dips down-right as if starting to write; both elastically return on
- * leave. Skipped when the user prefers reduced motion.
+ * Hover animation for the translate toggle. The languages glyph sways like
+ * two letters swapping places — a small horizontal slide with a slight tilt —
+ * and elastically returns on leave, matching the view-mode toggle's feel.
+ * The icon is queried at event time for consistency with bindViewModeHover.
+ * Skipped when the user prefers reduced motion.
  */
+export const bindTranslateHover = (button: HTMLElement): (() => void) => {
+  if (prefersReducedMotion()) return () => {};
+  const icon = () => button.querySelector("[data-translate-icon]");
+  if (!icon()) return () => {};
+  const onEnter = () => {
+    const target = icon();
+    if (!target) return;
+    gsap.to(target, {
+      x: 2,
+      rotation: 8,
+      duration: MOTION.hover.enter.duration,
+      ease: MOTION.hover.enter.ease,
+      overwrite: "auto",
+    });
+  };
+  const onLeave = () => {
+    const target = icon();
+    if (!target) return;
+    gsap.to(target, {
+      x: 0,
+      rotation: 0,
+      duration: MOTION.hover.exit.duration,
+      ease: MOTION.hover.exit.ease,
+      overwrite: "auto",
+      clearProps: "transform",
+    });
+  };
+  button.addEventListener("pointerenter", onEnter);
+  button.addEventListener("pointerleave", onLeave);
+  return () => {
+    button.removeEventListener("pointerenter", onEnter);
+    button.removeEventListener("pointerleave", onLeave);
+    const target = icon();
+    if (target) {
+      gsap.killTweensOf(target);
+      gsap.set(target, { clearProps: "transform" });
+    }
+  };
+};
+
+
 export const bindViewModeHover = (button: HTMLElement): (() => void) => {
   if (prefersReducedMotion()) return () => {};
   const icon = () => button.querySelector("[data-view-icon]");

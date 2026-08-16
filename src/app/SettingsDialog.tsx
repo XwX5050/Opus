@@ -8,6 +8,10 @@ import {
   type EditorPreferences,
   type ThemePreference,
 } from "../theme/preferences";
+import {
+  DEFAULT_TRANSLATION_SETTINGS,
+  type TranslationSettings,
+} from "../translate/types";
 import { MOTION } from "../motion/motionConfig";
 import { prefersReducedMotion } from "../motion/motionRuntime";
 import type { UpdateCheckState } from "./updates";
@@ -18,8 +22,10 @@ gsap.registerPlugin(useGSAP);
 export interface SettingsDialogProps {
   readonly theme: ThemePreference;
   readonly editorPreferences: EditorPreferences;
+  readonly translationSettings: TranslationSettings;
   readonly onThemeChange: (value: ThemePreference) => void;
   readonly onEditorPreferencesChange: (value: EditorPreferences) => void;
+  readonly onTranslationSettingsChange: (value: TranslationSettings) => void;
   readonly onClose: () => void;
   readonly onCheckForUpdates: () => void;
   readonly updateCheckState: UpdateCheckState;
@@ -36,6 +42,19 @@ const FONT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "serif", label: "衬线" },
   { value: "monospace", label: "等宽" },
   { value: "custom", label: "自定义…" },
+];
+
+/** Target languages for document translation; the display name is the value
+ * passed through to the translation API. */
+const TRANSLATION_LANGUAGES: ReadonlyArray<string> = [
+  "中文",
+  "English",
+  "日本語",
+  "한국어",
+  "Français",
+  "Deutsch",
+  "Español",
+  "Русский",
 ];
 
 /** Inline hints next to the 检查更新 button, per manual-check state. */
@@ -85,6 +104,52 @@ function NumberField({ id, value, min, max, step, onCommit }: NumberFieldProps) 
       max={max}
       step={step}
       value={draft ?? String(value)}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => commit(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit(event.currentTarget.value);
+        }
+      }}
+    />
+  );
+}
+
+interface TextFieldProps {
+  readonly id: string;
+  readonly value: string;
+  readonly type?: "text" | "password";
+  readonly placeholder?: string;
+  readonly onCommit: (value: string) => void;
+}
+
+/**
+ * Text counterpart of NumberField: a local draft committed on blur/Enter, so
+ * typing never round-trips through the parent mid-keystroke. An emptied field
+ * commits as "" (clearing the API key is a legitimate change).
+ */
+function TextField({
+  id,
+  value,
+  type = "text",
+  placeholder,
+  onCommit,
+}: TextFieldProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (raw: string) => {
+    setDraft(null);
+    if (raw === value) return;
+    onCommit(raw);
+  };
+
+  return (
+    <input
+      id={id}
+      type={type}
+      placeholder={placeholder}
+      value={draft ?? value}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={(event) => commit(event.target.value)}
       onKeyDown={(event) => {
@@ -252,6 +317,11 @@ export default function SettingsDialog({
   editorPreferences,
   onThemeChange,
   onEditorPreferencesChange,
+  // Defaults keep the dialog renderable in tests that mount it without the
+  // translation props; the interface still requires them, so the AppShell
+  // always passes them and the defaults never fire in production.
+  translationSettings = DEFAULT_TRANSLATION_SETTINGS,
+  onTranslationSettingsChange = () => {},
   onClose,
   onCheckForUpdates,
   updateCheckState,
@@ -350,6 +420,9 @@ export default function SettingsDialog({
 
   const update = (patch: Partial<EditorPreferences>) =>
     onEditorPreferencesChange({ ...editorPreferences, ...patch });
+
+  const updateTranslation = (patch: Partial<TranslationSettings>) =>
+    onTranslationSettingsChange({ ...translationSettings, ...patch });
 
   const limits = EDITOR_PREFERENCE_LIMITS;
 
@@ -475,6 +548,66 @@ export default function SettingsDialog({
             </div>
           )}
         </div>
+      </section>
+
+      <section
+        className="settings-section"
+        aria-labelledby="settings-heading-translation"
+      >
+        <h3
+          id="settings-heading-translation"
+          className="settings-section-heading"
+        >
+          翻译
+        </h3>
+        <div className="settings-group">
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-translation-endpoint">API 端点</label>
+            <TextField
+              id="settings-translation-endpoint"
+              value={translationSettings.endpoint}
+              onCommit={(value) => updateTranslation({ endpoint: value })}
+            />
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-translation-api-key">API Key</label>
+            <TextField
+              id="settings-translation-api-key"
+              type="password"
+              placeholder="sk-..."
+              value={translationSettings.apiKey}
+              onCommit={(value) => updateTranslation({ apiKey: value })}
+            />
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-translation-model">模型</label>
+            <TextField
+              id="settings-translation-model"
+              value={translationSettings.model}
+              onCommit={(value) => updateTranslation({ model: value })}
+            />
+          </div>
+
+          <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-translation-target-language">目标语言</label>
+            <select
+              id="settings-translation-target-language"
+              value={translationSettings.targetLanguage}
+              onChange={(event) =>
+                updateTranslation({ targetLanguage: event.target.value })
+              }
+            >
+              {TRANSLATION_LANGUAGES.map((language) => (
+                <option key={language} value={language}>
+                  {language}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p>翻译结果会缓存在本机，原文不变时不重复调用 API。</p>
       </section>
 
       <section

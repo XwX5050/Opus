@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { PersistedSession } from "../document/types";
 import { DEFAULT_EDITOR_PREFERENCES } from "../theme/preferences";
+import {
+  DEFAULT_TRANSLATION_SETTINGS,
+  type TranslationSettings,
+} from "../translate/types";
 import AppShell from "./AppShell";
+import SettingsDialog from "./SettingsDialog";
 
 const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 
@@ -570,5 +575,152 @@ describe("settings: manual update check", () => {
     expect(
       await screen.findByRole("dialog", { name: "发现新版本 v2.0.0" }),
     ).toBeVisible();
+  });
+});
+
+describe("settings: translation", () => {
+  const renderTranslationDialog = (
+    translationSettings: TranslationSettings = DEFAULT_TRANSLATION_SETTINGS,
+    onTranslationSettingsChange = vi.fn(),
+  ) => {
+    render(
+      <SettingsDialog
+        theme="dark"
+        editorPreferences={DEFAULT_EDITOR_PREFERENCES}
+        onThemeChange={vi.fn()}
+        onEditorPreferencesChange={vi.fn()}
+        onClose={vi.fn()}
+        onCheckForUpdates={vi.fn()}
+        updateCheckState="idle"
+        translationSettings={translationSettings}
+        onTranslationSettingsChange={onTranslationSettingsChange}
+      />,
+    );
+    return {
+      dialog: screen.getByRole("dialog", { name: "设置" }),
+      onTranslationSettingsChange,
+    };
+  };
+
+  it("renders the translation section between editor and about", () => {
+    const { dialog } = renderTranslationDialog();
+    expect(
+      within(dialog)
+        .getAllByRole("heading")
+        .map((heading) => heading.textContent),
+    ).toEqual(["设置", "外观", "编辑器", "翻译", "关于"]);
+    expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
+      DEFAULT_TRANSLATION_SETTINGS.endpoint,
+    );
+    const apiKey = within(dialog).getByLabelText("API Key");
+    expect(apiKey).toHaveValue(DEFAULT_TRANSLATION_SETTINGS.apiKey);
+    expect(apiKey).toHaveAttribute("type", "password");
+    expect(apiKey).toHaveAttribute("placeholder", "sk-...");
+    expect(within(dialog).getByLabelText("模型")).toHaveValue(
+      DEFAULT_TRANSLATION_SETTINGS.model,
+    );
+    expect(within(dialog).getByLabelText("目标语言")).toHaveValue(
+      DEFAULT_TRANSLATION_SETTINGS.targetLanguage,
+    );
+    expect(
+      within(dialog).getByText("翻译结果会缓存在本机，原文不变时不重复调用 API。"),
+    ).toBeInTheDocument();
+  });
+
+  it("commits endpoint, API key and model edits as settings patches", async () => {
+    const user = userEvent.setup();
+    const { dialog, onTranslationSettingsChange } = renderTranslationDialog();
+
+    const endpoint = within(dialog).getByLabelText("API 端点");
+    await user.clear(endpoint);
+    await user.type(endpoint, "https://example.com/v1");
+    // Nothing commits mid-typing; Enter commits the draft.
+    expect(onTranslationSettingsChange).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: "https://example.com/v1",
+    });
+
+    const apiKey = within(dialog).getByLabelText("API Key");
+    await user.type(apiKey, "sk-live-000");
+    fireEvent.blur(apiKey);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      apiKey: "sk-live-000",
+    });
+
+    const model = within(dialog).getByLabelText("模型");
+    await user.clear(model);
+    await user.type(model, "gpt-4o");
+    fireEvent.blur(model);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      model: "gpt-4o",
+    });
+  });
+
+  it("commits the selected target language", async () => {
+    const user = userEvent.setup();
+    const { dialog, onTranslationSettingsChange } = renderTranslationDialog();
+    await user.selectOptions(
+      within(dialog).getByLabelText("目标语言"),
+      "日本語",
+    );
+    expect(onTranslationSettingsChange).toHaveBeenCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      targetLanguage: "日本語",
+    });
+  });
+
+  it("offers the full target-language list", () => {
+    const { dialog } = renderTranslationDialog();
+    const select = within(dialog).getByLabelText("目标语言");
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "中文",
+      "English",
+      "日本語",
+      "한국어",
+      "Français",
+      "Deutsch",
+      "Español",
+      "Русский",
+    ]);
+  });
+
+  it("shows persisted settings and keeps untouched fields in patches", async () => {
+    const user = userEvent.setup();
+    const persisted: TranslationSettings = {
+      endpoint: "https://custom.example.com/v1",
+      apiKey: "sk-persisted",
+      model: "custom-model",
+      targetLanguage: "Français",
+    };
+    const { dialog, onTranslationSettingsChange } =
+      renderTranslationDialog(persisted);
+
+    expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
+      persisted.endpoint,
+    );
+    expect(within(dialog).getByLabelText("API Key")).toHaveValue(
+      persisted.apiKey,
+    );
+    expect(within(dialog).getByLabelText("模型")).toHaveValue(persisted.model);
+    expect(within(dialog).getByLabelText("目标语言")).toHaveValue(
+      persisted.targetLanguage,
+    );
+
+    const model = within(dialog).getByLabelText("模型");
+    await user.clear(model);
+    await user.type(model, "new-model");
+    fireEvent.blur(model);
+    expect(onTranslationSettingsChange).toHaveBeenCalledWith({
+      ...persisted,
+      model: "new-model",
+    });
   });
 });

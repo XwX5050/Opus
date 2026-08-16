@@ -7,6 +7,7 @@ import type {
   RecoveryDraftInfo,
   SaveTarget,
 } from "./types";
+import type { TranslationSettings } from "../translate/types";
 
 export type DocumentPortErrorCode =
   | "invalid_utf8"
@@ -73,6 +74,16 @@ export interface DocumentPort {
   watchWorkspace(consumerId: string, root: string): Promise<void>;
   /** Releases every watch held by the consumer. */
   unwatch(consumerId: string): Promise<void>;
+  /**
+   * Translates a batch of paragraphs with the configured OpenAI-compatible
+   * API. The result has the same length as `segments`; each entry is the
+   * translation of the segment at the same index. Rejects with a
+   * DocumentPortError (or a plain Error) when the request fails.
+   */
+  translateSegments(
+    settings: TranslationSettings,
+    segments: string[],
+  ): Promise<string[]>;
   /**
    * Subscribes to the normalized disk-event stream. Resolves to an
    * unsubscribe function. Events arrive for any path covered by an active

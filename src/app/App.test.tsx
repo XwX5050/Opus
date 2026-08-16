@@ -17,6 +17,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
       async chooseSavePath() { return null; },
       async write() { throw new DocumentPortError("io", "not writable"); },
       async saveClipboardImage() { return null; },
+      async translateSegments() { return []; },
       async acquireDocumentScope() {},
       async acquireWorkspaceScope() {},
       async releaseAssetScope() {},

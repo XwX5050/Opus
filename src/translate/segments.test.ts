@@ -1,0 +1,222 @@
+import { describe, expect, it } from "vitest";
+import {
+  reassembleTranslation,
+  splitMarkdownSegments,
+  type Segment,
+} from "./segments";
+
+const kinds = (segments: readonly Segment[]): string[] =>
+  segments.map((segment) => segment.kind);
+
+const texts = (
+  segments: readonly Segment[],
+  kind: Segment["kind"],
+): string[] =>
+  segments.filter((segment) => segment.kind === kind).map((segment) => segment.text);
+
+const joined = (segments: readonly Segment[]): string =>
+  segments.map((segment) => segment.text).join("");
+
+describe("splitMarkdownSegments", () => {
+  it("splits plain text into paragraph blocks separated by blank lines", () => {
+    const doc = "first\nline\n\nsecond para\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(kinds(segments)).toEqual([
+      "translatable",
+      "protected",
+      "translatable",
+    ]);
+    expect(texts(segments, "translatable")).toEqual([
+      "first\nline\n",
+      "second para\n",
+    ]);
+    expect(texts(segments, "protected")).toEqual(["\n"]);
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("returns no segments for an empty document", () => {
+    expect(splitMarkdownSegments("")).toEqual([]);
+  });
+
+  it("keeps blank-only documents lossless", () => {
+    expect(splitMarkdownSegments("\n\n")).toEqual([
+      { kind: "protected", text: "\n\n" },
+    ]);
+  });
+
+  it("protects YAML frontmatter at the document start", () => {
+    const doc = "---\ntitle: 标题\ntags: [a, b]\n---\n\nbody\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments).toEqual([
+      { kind: "protected", text: "---\ntitle: 标题\ntags: [a, b]\n---\n" },
+      { kind: "protected", text: "\n" },
+      { kind: "translatable", text: "body\n" },
+    ]);
+  });
+
+  it("protects an unclosed frontmatter block to the end of the document", () => {
+    const doc = "---\ntitle: 标题\n";
+    expect(splitMarkdownSegments(doc)).toEqual([
+      { kind: "protected", text: doc },
+    ]);
+  });
+
+  it("does not treat a mid-document --- line as frontmatter", () => {
+    const segments = splitMarkdownSegments("text\n\n---\n");
+    expect(texts(segments, "translatable")).toEqual(["text\n", "---\n"]);
+  });
+
+  it("protects ``` fenced code blocks including their fences", () => {
+    const doc = "```ts\nconst x = 1;\n```\n\nafter\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "```ts\nconst x = 1;\n```\n",
+    });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "after\n" });
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("protects ~~~ fenced code blocks", () => {
+    const doc = "~~~\ncode\n~~~\nafter\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({ kind: "protected", text: "~~~\ncode\n~~~\n" });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "after\n" });
+  });
+
+  it("protects an unclosed fence to the end of the document", () => {
+    const doc = "```\ncode line\n";
+    expect(splitMarkdownSegments(doc)).toEqual([
+      { kind: "protected", text: doc },
+    ]);
+  });
+
+  it("requires the closing fence to use the same char and length", () => {
+    const shorter = "````\na\n```\nb\n````\n";
+    expect(splitMarkdownSegments(shorter)).toEqual([
+      { kind: "protected", text: shorter },
+    ]);
+    const different = "```\n~~~\n```\n";
+    expect(splitMarkdownSegments(different)).toEqual([
+      { kind: "protected", text: different },
+    ]);
+  });
+
+  it("protects whole-block display math including the delimiters", () => {
+    const doc = "$$\nE = mc^2\n$$\n\ntext\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "$$\nE = mc^2\n$$\n",
+    });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "text\n" });
+  });
+
+  it("protects one-line $$...$$ math blocks", () => {
+    const doc = "$$ E = mc^2 $$\n\nmore\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "$$ E = mc^2 $$\n",
+    });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "more\n" });
+  });
+
+  it("protects an unclosed display math block to the end of the document", () => {
+    const doc = "$$\nE = mc^2\n";
+    expect(splitMarkdownSegments(doc)).toEqual([
+      { kind: "protected", text: doc },
+    ]);
+  });
+
+  it("protects HTML comment blocks", () => {
+    const doc = "<!--\n这是注释\n-->\n\ntext\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "<!--\n这是注释\n-->\n",
+    });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "text\n" });
+  });
+
+  it("protects single-line comments and unclosed comment blocks", () => {
+    expect(splitMarkdownSegments("<!-- note -->\n")).toEqual([
+      { kind: "protected", text: "<!-- note -->\n" },
+    ]);
+    const unclosed = "<!--\nnote\n";
+    expect(splitMarkdownSegments(unclosed)).toEqual([
+      { kind: "protected", text: unclosed },
+    ]);
+  });
+
+  it("splits CRLF documents losslessly", () => {
+    const doc = "---\r\ntitle: X\r\n---\r\n\r\nbody\r\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(joined(segments)).toBe(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "---\r\ntitle: X\r\n---\r\n",
+    });
+    expect(texts(segments, "translatable")).toEqual(["body\r\n"]);
+  });
+
+  it("handles a document mixing every protected block type", () => {
+    const doc =
+      [
+        "---",
+        "title: T",
+        "---",
+        "",
+        "# Heading",
+        "",
+        "```rust",
+        "fn main() {}",
+        "```",
+        "",
+        "$$",
+        "a^2 + b^2 = c^2",
+        "$$",
+        "",
+        "<!--",
+        "hidden",
+        "-->",
+        "",
+        "tail",
+      ].join("\n") + "\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(kinds(segments)).toEqual([
+      "protected", // frontmatter
+      "protected", // blank
+      "translatable", // heading
+      "protected", // blank
+      "protected", // fence
+      "protected", // blank
+      "protected", // math
+      "protected", // blank
+      "protected", // comment
+      "protected", // blank
+      "translatable", // tail
+    ]);
+    expect(texts(segments, "translatable")).toEqual(["# Heading\n", "tail\n"]);
+    expect(joined(segments)).toBe(doc);
+  });
+});
+
+describe("reassembleTranslation", () => {
+  it("fills translations into translatable segments in order", () => {
+    const doc = "para one\n\n```ts\ncode\n```\n\npara two\n";
+    const segments = splitMarkdownSegments(doc);
+    const result = reassembleTranslation(segments, ["第一段", "第二段"]);
+    // Translations replace the whole block, including its trailing newline;
+    // `translateDocument` is responsible for restoring line breaks.
+    expect(result).toBe("第一段\n```ts\ncode\n```\n\n第二段");
+  });
+
+  it("falls back to the original text when a translation is missing", () => {
+    const doc = "one\n\ntwo\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(reassembleTranslation(segments, ["只译一段"])).toBe(
+      "只译一段\ntwo\n",
+    );
+  });
+});

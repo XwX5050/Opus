@@ -10,6 +10,7 @@ import {
   normalizeThemePreference,
 } from "../theme/preferences";
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecentItem, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
+import type { TranslationSettings } from "../translate/types";
 import {
   normalizeOutlinePreferences,
   normalizeSidebarPreferences,
@@ -297,6 +298,19 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async unwatch(consumerId: string): Promise<void> {
       try { await invoke("unwatch", { consumer_id: consumerId }); } catch (error) { throw failure(error); }
+    },
+    async translateSegments(settings: TranslationSettings, segments: string[]): Promise<string[]> {
+      try {
+        return await invoke<string[]>("translate_segments", {
+          settings: {
+            endpoint: settings.endpoint,
+            apiKey: settings.apiKey,
+            model: settings.model,
+            targetLanguage: settings.targetLanguage,
+          },
+          segments,
+        });
+      } catch (error) { throw failure(error); }
     },
     subscribeToDiskEvents(handler: (event: DiskEvent) => void): Promise<() => void> {
       return listen<DiskEventDto>("document-disk-event", (event) => handler(diskEvent(event.payload)));

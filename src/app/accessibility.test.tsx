@@ -426,10 +426,10 @@ describe("accessibility: stylesheet guarantees", () => {
 
   it("uses the text-selection color to highlight reading mode", () => {
     expect(appCss).toMatch(
-      /\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.editor-toolbar \.icon-button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
     expect(appCss).toMatch(
-      /\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]:hover,\s*\.editor-toolbar \.view-mode-toggle\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.editor-toolbar \.icon-button\[aria-pressed="true"\]:hover,\s*\.editor-toolbar \.icon-button\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
   });
 
@@ -472,7 +472,7 @@ describe("accessibility: stylesheet guarantees", () => {
       /\.dialog-overlay \[role="dialog"\]\s*\{[^}]*animation:\s*dialogIn var\(--anim-moderate\) var\(--anim-easing\);/s,
     );
     expect(appCss).toMatch(
-      /\.app-alert,[^}]*\.perf-banner\s*\{[^}]*animation:\s*bannerIn var\(--anim-moderate\) var\(--anim-easing\);/s,
+      /\.app-alert,[^}]*\.perf-banner,[^}]*\.translation-banner\s*\{[^}]*animation:\s*bannerIn var\(--anim-moderate\) var\(--anim-easing\);/s,
     );
     expect(appCss).toMatch(
       /\.sidebar-rail:not\(\[data-collapsed="true"\]\),\s*\.outline-rail:not\(\[data-collapsed="true"\]\)\s*\{[^}]*animation:\s*panelIn var\(--anim-moderate\) var\(--anim-easing\);/s,

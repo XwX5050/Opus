@@ -166,6 +166,28 @@ describe("MemoryDocumentPort session and close requests", () => {
     expect(stored?.openPaths).not.toBe(session.openPaths);
   });
 
+  it("clones translation settings when storing and loading a session", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const settings = {
+      endpoint: "https://api.openai.com/v1",
+      apiKey: "secret",
+      model: "gpt-4o-mini",
+      targetLanguage: "中文",
+    };
+    const session = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      translationSettings: settings,
+    };
+    await port.saveSession(session);
+
+    const loaded = await port.loadSession();
+    expect(loaded).toEqual(session);
+    expect(loaded?.translationSettings).not.toBe(settings);
+  });
+
   it("runs close-requested handlers in order until unsubscribed", async () => {
     const port = new MemoryDocumentPort(new Map());
     const calls: string[] = [];
@@ -183,5 +205,60 @@ describe("MemoryDocumentPort session and close requests", () => {
     stopFirst();
     await port.emitCloseRequested();
     expect(calls).toEqual(["first", "second", "second"]);
+  });
+});
+
+describe("MemoryDocumentPort translation", () => {
+  const settings = {
+    endpoint: "https://api.openai.com/v1",
+    apiKey: "secret",
+    model: "gpt-4o-mini",
+    targetLanguage: "中文",
+  };
+
+  it("fake-translates every requested segment in order", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const result = await port.translateSegments(settings, ["Hello", "World"]);
+    expect(result).toEqual(["Ｈｅｌｌｏ", "Ｗｏｒｌｄ"]);
+    expect(port.translationCallCount).toBe(1);
+    expect(port.translationRequestedSegments).toBe(2);
+  });
+
+  it("serves repeated batches from cache without counting new requests", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const first = await port.translateSegments(settings, ["Hello", "World"]);
+    const second = await port.translateSegments(settings, ["Hello", "World"]);
+    expect(first).toEqual(second);
+    expect(port.translationCallCount).toBe(1);
+    expect(port.translationRequestedSegments).toBe(2);
+  });
+
+  it("keeps cache entries distinct per model, target language, and text", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const chinese = await port.translateSegments(settings, ["Hello"]);
+    const japanese = await port.translateSegments(
+      { ...settings, targetLanguage: "日本語" },
+      ["Hello"],
+    );
+    const otherModel = await port.translateSegments(
+      { ...settings, model: "gpt-4o" },
+      ["Hello"],
+    );
+    const otherText = await port.translateSegments(settings, ["World"]);
+    expect(chinese).toEqual(["Ｈｅｌｌｏ"]);
+    expect(japanese).toEqual(["Ｈｅｌｌｏ"]);
+    expect(otherModel).toEqual(["Ｈｅｌｌｏ"]);
+    expect(otherText).toEqual(["Ｗｏｒｌｄ"]);
+    expect(port.translationCallCount).toBe(4);
+    expect(port.translationRequestedSegments).toBe(4);
+  });
+
+  it("returns a clone so callers cannot mutate the cached result", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const first = await port.translateSegments(settings, ["Hello"]);
+    first[0] = "mutated";
+    const second = await port.translateSegments(settings, ["Hello"]);
+    expect(second).toEqual(["Ｈｅｌｌｏ"]);
+    expect(port.translationCallCount).toBe(1);
   });
 });

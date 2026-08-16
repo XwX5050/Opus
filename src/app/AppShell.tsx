@@ -30,6 +30,7 @@ import {
   PanelLeftIcon,
   PanelRightIcon,
   PencilLineIcon,
+  TranslateIcon,
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
@@ -47,6 +48,7 @@ import {
   animatePanelIntro,
   bindButtonHoverMotion,
   bindPanelDividerHover,
+  bindTranslateHover,
   bindViewModeHover,
   setPanelDividerState,
 } from "../motion/motionRuntime";
@@ -253,6 +255,16 @@ export default function AppShell({
     (tab) => tab.id === controller.state.activeId,
   );
   const viewMode = controller.viewModeOf(active?.id);
+  const activeTranslation = controller.translationOf(active?.id);
+  // A translation on screen freezes the editor: value is the translated
+  // text, the view mode is forced to reading, and save/change are no-ops.
+  const translationReady =
+    activeTranslation?.state.phase === "ready" &&
+    activeTranslation.visible === true;
+  let translationLabel = "翻译文档";
+  if (activeTranslation?.state.phase === "translating") translationLabel = "取消翻译";
+  else if (translationReady) translationLabel = "显示原文";
+  else if (activeTranslation?.state.phase === "ready") translationLabel = "显示译文";
   const [outlinesByTab, setOutlinesByTab] = useState<
     ReadonlyMap<string, ReadonlyArray<OutlineHeading>>
   >(new Map());
@@ -469,6 +481,8 @@ export default function AppShell({
       }
       const viewModeToggle = root.querySelector<HTMLElement>(".view-mode-toggle");
       if (viewModeToggle) cleanups.push(bindViewModeHover(viewModeToggle));
+      const translateToggle = root.querySelector<HTMLElement>(".translate-toggle");
+      if (translateToggle) cleanups.push(bindTranslateHover(translateToggle));
       return () => {
         cleanups.forEach((cleanup) => cleanup());
       };
@@ -1028,6 +1042,16 @@ export default function AppShell({
           <div className="editor-toolbar">
             <button
               type="button"
+              className="icon-button translate-toggle"
+              aria-pressed={translationReady}
+              aria-label={translationLabel}
+              title={translationLabel}
+              onClick={() => controller.toggleTranslation(active.id)}
+            >
+              <TranslateIcon />
+            </button>
+            <button
+              type="button"
               className="icon-button view-mode-toggle"
               aria-pressed={viewMode === "reading"}
               aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
@@ -1062,15 +1086,51 @@ export default function AppShell({
             </button>
           </div>
         )}
+        {active && activeTranslation?.state.phase === "translating" && (
+          <div role="status" className="translation-banner">
+            <span className="translation-banner-text">正在翻译…</span>
+            <button
+              type="button"
+              onClick={() => controller.toggleTranslation(active.id)}
+            >
+              取消
+            </button>
+          </div>
+        )}
+        {active && activeTranslation?.state.phase === "error" && (
+          <div role="status" className="translation-banner">
+            <span className="translation-banner-text">
+              翻译失败：{activeTranslation.state.error}
+            </span>
+            <button
+              type="button"
+              onClick={() => controller.toggleTranslation(active.id)}
+            >
+              重试
+            </button>
+          </div>
+        )}
         {active ? (
           <MarkdownEditor
             key={active.id}
-            value={active.text}
-            onChange={(text) => controller.changeText(active.id, text)}
-            onSave={() => void controller.save(active.id)}
+            value={
+              translationReady
+                ? activeTranslation.state.translatedText
+                : active.text
+            }
+            onChange={
+              translationReady
+                ? () => {}
+                : (text) => controller.changeText(active.id, text)
+            }
+            onSave={
+              translationReady
+                ? () => {}
+                : () => void controller.save(active.id)
+            }
             onReopenClosed={reopenClosed}
             onToggleReading={() => controller.toggleReading(active.id)}
-            viewMode={viewMode}
+            viewMode={translationReady ? "reading" : viewMode}
             documentPath={active.path}
             saveClipboardImage={(input) => port.saveClipboardImage(input)}
             resolveImageUrl={tauriImagePreviewUrl}
@@ -1282,8 +1342,10 @@ export default function AppShell({
         <SettingsDialog
           theme={controller.theme}
           editorPreferences={controller.editorPreferences}
+          translationSettings={controller.translationSettings}
           onThemeChange={controller.setTheme}
           onEditorPreferencesChange={controller.setEditorPreferences}
+          onTranslationSettingsChange={controller.setTranslationSettings}
           onClose={() => setSettingsRequested(false)}
           onCheckForUpdates={checkForUpdates}
           updateCheckState={updateCheckState}

@@ -8,6 +8,7 @@ import {
   bindButtonHoverMotion,
   bindChevronSpreadHover,
   bindPanelDividerHover,
+  bindTranslateHover,
   bindViewModeHover,
   clampMotionTargets,
   prefersReducedMotion,
@@ -271,6 +272,42 @@ describe("motion runtime", () => {
     cleanup();
     button.dispatchEvent(new Event("pointerenter"));
     expect(gsap.getTweensOf(pencil)).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("animates the translate icon on hover and skips reduced motion", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      media: "(prefers-reduced-motion: reduce)",
+    }));
+    const button = document.createElement("button");
+    button.innerHTML = '<svg data-translate-icon viewBox="0 0 24 24"></svg>';
+
+    const cleanup = bindTranslateHover(button);
+    button.dispatchEvent(new Event("pointerenter"));
+    const icon = button.querySelector("[data-translate-icon]")!;
+    expect(gsap.getTweensOf(icon).length).toBeGreaterThan(0);
+    button.dispatchEvent(new Event("pointerleave"));
+
+    cleanup();
+    button.dispatchEvent(new Event("pointerenter"));
+    expect(gsap.getTweensOf(icon)).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not bind the translate hover when reduced motion is preferred", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+    }));
+    const button = document.createElement("button");
+    button.innerHTML = '<svg data-translate-icon viewBox="0 0 24 24"></svg>';
+
+    const cleanup = bindTranslateHover(button);
+    button.dispatchEvent(new Event("pointerenter"));
+    const icon = button.querySelector("[data-translate-icon]")!;
+    expect(gsap.getTweensOf(icon)).toHaveLength(0);
+    cleanup();
     vi.unstubAllGlobals();
   });
 });

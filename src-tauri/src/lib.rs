@@ -6,6 +6,7 @@ pub mod menu;
 pub mod open_events;
 pub mod perf_mark;
 pub mod recovery;
+pub mod translate;
 pub mod watch;
 pub mod window_background;
 pub mod workspace;
@@ -42,6 +43,7 @@ pub fn run() {
             document_commands::list_recovery_drafts,
             document_commands::read_recovery_draft,
             document_commands::discard_recovery_draft,
+            translate::translate_segments,
             perf_mark::perf_mark_editor_editable,
             #[cfg(target_os = "macos")]
             fonts::list_installed_fonts,

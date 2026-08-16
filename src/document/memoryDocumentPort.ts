@@ -17,6 +17,7 @@ import type {
   RecoveryDraftInfo,
   SaveTarget,
 } from "./types";
+import type { TranslationSettings } from "../translate/types";
 
 export interface MemoryDocumentPortOptions {
   readonly savePath?: string | null;
@@ -48,6 +49,18 @@ export interface MemoryClipboardImageSave {
 }
 
 const cloneOpenedFile = (file: OpenedFile): OpenedFile => ({ ...file });
+
+/**
+ * Pseudo-translation for the in-memory port: ASCII letters become their
+ * full-width forms so translated segments are visually distinct in the demo
+ * and detectable in tests. Unlike a marker prefix, this preserves the
+ * Markdown structure exactly (heading/list markers stay at line start) and
+ * adds no characters, mirroring what a real model is instructed to return.
+ */
+export const pseudoTranslate = (segment: string): string =>
+  segment.replace(/[A-Za-z]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) + 0xfee0),
+  );
 const cloneRequest = (request: PendingWriteRequest): PendingWriteRequest =>
   Object.freeze({ ...request });
 const cloneSession = (session: PersistedSession): PersistedSession => ({
@@ -61,6 +74,9 @@ const cloneSession = (session: PersistedSession): PersistedSession => ({
     : {}),
   ...(session.sidebar !== undefined ? { sidebar: { ...session.sidebar } } : {}),
   ...(session.outline !== undefined ? { outline: { ...session.outline } } : {}),
+  ...(session.translationSettings !== undefined
+    ? { translationSettings: { ...session.translationSettings } }
+    : {}),
 });
 const cloneImageSave = (save: MemoryClipboardImageSave): MemoryClipboardImageSave => ({
   bytes: new Uint8Array(save.bytes),
@@ -84,6 +100,10 @@ export class MemoryDocumentPort implements DocumentPort {
   #session: PersistedSession | null;
   #nextRevision = 1;
   #nextDraftStamp = 1;
+  /** Fake-translation cache keyed by settings + requested segment text. */
+  readonly #translationCache = new Map<string, string[]>();
+  #translationCallCount = 0;
+  #translationRequestedSegments = 0;
 
   /** When set, trashEntry rejects with this error instead of deleting. */
   trashFailure: DocumentPortError | null = null;
@@ -155,6 +175,16 @@ export class MemoryDocumentPort implements DocumentPort {
     return this.#scopeCalls.map((call) => ({ ...call }));
   }
 
+  /** Number of translateSegments calls that produced new (uncached) work. */
+  get translationCallCount(): number {
+    return this.#translationCallCount;
+  }
+
+  /** Total segments sent for new (uncached) translation work. */
+  get translationRequestedSegments(): number {
+    return this.#translationRequestedSegments;
+  }
+
   async chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>> {
     const paths =
       this.#options.chosenPaths ??
@@ -221,6 +251,22 @@ export class MemoryDocumentPort implements DocumentPort {
       }),
     );
     return this.#options.clipboardImagePath ?? null;
+  }
+
+  async translateSegments(
+    settings: TranslationSettings,
+    segments: string[],
+  ): Promise<string[]> {
+    const cacheKey =
+      `${settings.model}\u0000${settings.targetLanguage}\u0000` +
+      segments.join("\u0000");
+    const cached = this.#translationCache.get(cacheKey);
+    if (cached) return [...cached];
+    const translated = segments.map(pseudoTranslate);
+    this.#translationCache.set(cacheKey, translated);
+    this.#translationCallCount += 1;
+    this.#translationRequestedSegments += segments.length;
+    return [...translated];
   }
 
   async acquireDocumentScope(consumerId: string, path: string): Promise<void> {

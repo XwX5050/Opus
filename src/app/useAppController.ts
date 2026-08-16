@@ -38,6 +38,13 @@ import {
 } from "../theme/preferences";
 import type { OpenPathSubscriptions } from "../document/tauriDocumentPort";
 import type { EditorViewMode } from "../editor/viewMode";
+import { translateDocument } from "../translate/translate";
+import {
+  DEFAULT_TRANSLATION_SETTINGS,
+  normalizeTranslationSettings,
+  type TranslationSettings,
+  type TranslationViewState,
+} from "../translate/types";
 
 export type EventSubscriber = (
   port: DocumentPort,
@@ -48,6 +55,11 @@ export type EventSubscriber = (
 ) => Promise<OpenPathSubscriptions>;
 
 export type CloseChoice = "save" | "discard" | "cancel";
+
+export interface TabTranslation {
+  readonly state: TranslationViewState;
+  readonly visible: boolean;
+}
 
 export interface SaveFailure {
   readonly id: string;
@@ -117,6 +129,16 @@ export function useAppController(
   // always returns to "editing".
   const [viewModes, setViewModes] =
     useState<ReadonlyMap<string, EditorViewMode>>(new Map());
+  const [translationSettings, setTranslationSettingsState] =
+    useState<TranslationSettings>(DEFAULT_TRANSLATION_SETTINGS);
+  // Per-tab translation view memory: an entry exists only once the user has
+  // translated this tab in this session. `visible` says whether the editor
+  // is currently showing the translation; the cached result is kept while
+  // hidden so re-showing costs no API calls. Entries are pruned with their
+  // tab and dropped whenever the tab's text changes.
+  const [translations, setTranslations] = useState<
+    ReadonlyMap<string, TabTranslation>
+  >(new Map());
   const [recoveryDrafts, setRecoveryDrafts] =
     useState<ReadonlyArray<RecoveryDraftInfo> | null>(null);
   const workspacePathRef = useRef<string | null>(null);
@@ -147,6 +169,11 @@ export function useAppController(
   // release (or a re-acquire after close→reopen with the same tab ID) can
   // never overtake a still-pending acquire and leak a registry reference.
   const scopeOperationChains = useRef(new Map<string, Promise<void>>());
+  // Abort controllers for in-flight per-tab translations. The entry in the
+  // map also serves as a run token: a completion that no longer matches it
+  // (cancelled, superseded by a newer run, or dropped on text change) must
+  // not write its result.
+  const translationControllers = useRef(new Map<string, AbortController>());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -270,6 +297,11 @@ export function useAppController(
       setEditorPreferencesState(clampEditorPreferences(value)),
     [],
   );
+  const setTranslationSettings = useCallback(
+    (value: TranslationSettings) =>
+      setTranslationSettingsState(normalizeTranslationSettings(value)),
+    [],
+  );
 
   const viewModeOf = useCallback(
     (id: string | null | undefined): EditorViewMode =>
@@ -285,6 +317,13 @@ export function useAppController(
     viewModesRef.current = viewModes;
   }, [viewModes]);
 
+  // Same mirror for the per-tab translation state, read by the save /
+  // changeText guards and the tab-close prune.
+  const translationsRef = useRef(translations);
+  useEffect(() => {
+    translationsRef.current = translations;
+  }, [translations]);
+
   const setViewMode = useCallback((id: string, mode: EditorViewMode) => {
     setViewModes((current) => withViewMode(current, id, mode));
   }, []);
@@ -294,6 +333,107 @@ export function useAppController(
       (viewModesRef.current.get(id) ?? "editing") === "reading" ? "editing" : "reading";
     setViewModes((current) => withViewMode(current, id, target));
   }, []);
+
+  const translationOf = useCallback(
+    (id: string | null | undefined): TabTranslation | undefined =>
+      id ? translations.get(id) : undefined,
+    [translations],
+  );
+
+  // Drops a tab's translation state: aborts any in-flight request and
+  // removes the entry. Idempotent, so callers (cancel, prune, text change)
+  // never need to check whether an entry exists first.
+  const dropTranslation = useCallback((id: string) => {
+    translationControllers.current.get(id)?.abort();
+    translationControllers.current.delete(id);
+    setTranslations((current) => {
+      if (!current.has(id)) return current;
+      const next = new Map(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const startTranslation = useCallback((id: string) => {
+    const settings = translationSettings;
+    if (!settings.apiKey) {
+      setError("请先在设置中配置翻译 API");
+      return;
+    }
+    const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
+    if (!tab) return;
+    const controller = new AbortController();
+    translationControllers.current.set(id, controller);
+    setTranslations((current) => {
+      const next = new Map(current);
+      next.set(id, { state: { phase: "translating" }, visible: true });
+      return next;
+    });
+    const generation = lifecycleGenerationRef.current;
+    const text = tab.text;
+    void translateDocument(port, settings, text, controller.signal)
+      .then((translatedText) => {
+        if (!isCurrent(generation)) return;
+        // The controller map entry is the run token; a cancelled or dropped
+        // run fails the identity check and never writes its result. The text
+        // check closes the frame between a text replacement committing and
+        // the invalidating effect running.
+        if (translationControllers.current.get(id) !== controller) return;
+        const latest = stateRef.current.tabs.find(
+          (candidate) => candidate.id === id,
+        );
+        if (!latest || latest.text !== text) {
+          translationControllers.current.delete(id);
+          return;
+        }
+        translationControllers.current.delete(id);
+        setTranslations((current) => {
+          const next = new Map(current);
+          next.set(id, {
+            state: { phase: "ready", translatedText },
+            visible: true,
+          });
+          return next;
+        });
+      })
+      .catch((caught) => {
+        if (!isCurrent(generation)) return;
+        if (translationControllers.current.get(id) !== controller) return;
+        translationControllers.current.delete(id);
+        setTranslations((current) => {
+          const next = new Map(current);
+          next.set(id, {
+            state: { phase: "error", error: errorMessage(caught) },
+            visible: true,
+          });
+          return next;
+        });
+      });
+  }, [isCurrent, port, translationSettings]);
+
+  const toggleTranslation = useCallback((id: string) => {
+    const current = translationsRef.current.get(id);
+    if (!current) {
+      startTranslation(id);
+      return;
+    }
+    if (current.state.phase === "translating") {
+      // Second click cancels the in-flight request and forgets it.
+      dropTranslation(id);
+      return;
+    }
+    if (current.state.phase === "ready") {
+      // Hide/show the in-memory result; re-showing never re-calls the API.
+      setTranslations((entries) => {
+        const next = new Map(entries);
+        next.set(id, { state: current.state, visible: !current.visible });
+        return next;
+      });
+      return;
+    }
+    // Error state: retry from scratch.
+    startTranslation(id);
+  }, [dropTranslation, startTranslation]);
 
   // Prune view-mode memory for tabs that no longer exist.
   const viewModeTabIdsKey = state.tabs.map((tab) => tab.id).join("\n");
@@ -310,6 +450,40 @@ export function useAppController(
     // Keyed on the open tab ids; the reducer's tab list is the source of truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewModeTabIdsKey]);
+
+  // Per-tab translation memory is pruned with its tab, mirroring viewModes:
+  // a closed-and-reopened document starts untranslated (the disk-level
+  // segment cache still makes retranslation cheap).
+  const translationTabIdsKey = state.tabs.map((tab) => tab.id).join("\n");
+  useEffect(() => {
+    const open = new Set(state.tabs.map((tab) => tab.id));
+    for (const id of [...translationsRef.current.keys()]) {
+      if (!open.has(id)) dropTranslation(id);
+    }
+    // Keyed on the open tab ids; the reducer's tab list is the source of truth.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translationTabIdsKey]);
+
+  // A translation is bound to the exact text it was produced from. The tab
+  // list is compared by text identity on every render (no copies, so it
+  // stays cheap even for large documents), and any replacement of a tab's
+  // text — disk reloads, conflict resolution — drops the entry and aborts
+  // the in-flight request. Live edits are blocked while a translation is
+  // visible, so this only fires on external replacements.
+  const translationTextsRef = useRef(new Map<string, string>());
+  useEffect(() => {
+    const seen = translationTextsRef.current;
+    for (const tab of state.tabs) {
+      const previous = seen.get(tab.id);
+      if (previous !== undefined && previous !== tab.text) {
+        dropTranslation(tab.id);
+      }
+      seen.set(tab.id, tab.text);
+    }
+    for (const id of [...seen.keys()]) {
+      if (!state.tabs.some((tab) => tab.id === id)) seen.delete(id);
+    }
+  });
 
   const addOpenedFiles = useCallback((
     files: ReadonlyArray<OpenedFile>,
@@ -453,15 +627,28 @@ export function useAppController(
     }
   }, [acquireDocumentScope, dispatch, isCurrent, port, releaseScope, watchConsumer]);
 
-  const save = useCallback(
-    (id = stateRef.current.activeId) => performSave(id, false),
-    [performSave],
-  );
+  const save = useCallback((id = stateRef.current.activeId) => {
+    // While a translation is showing, saving is a no-op: the buffer belongs
+    // to the original document and must stay untouched (the read-only editor
+    // is the first line of defense, this guard the second).
+    if (id && translationsRef.current.get(id)?.visible) {
+      return Promise.resolve(false);
+    }
+    return performSave(id, false);
+  }, [performSave]);
 
   const saveAs = useCallback(
     (id = stateRef.current.activeId) => performSave(id, true),
     [performSave],
   );
+
+  const changeText = useCallback((id: string, text: string) => {
+    // Same guard as save: edits reaching the controller while a translation
+    // is visible (visible also covers the in-flight phase) are dropped so
+    // the original text can never be corrupted.
+    if (translationsRef.current.get(id)?.visible) return;
+    dispatch({ type: "textChanged", id, text });
+  }, [dispatch]);
 
   const close = useCallback((id: string) => {
     const document = stateRef.current.tabs.find((tab) => tab.id === id);
@@ -807,6 +994,9 @@ export function useAppController(
         );
         setSidebarPreferences(normalizeSidebarPreferences(session.sidebar));
         setOutlinePreferences(normalizeOutlinePreferences(session.outline));
+        setTranslationSettingsState(
+          normalizeTranslationSettings(session.translationSettings),
+        );
       }
 
       let drafts: ReadonlyArray<RecoveryDraftInfo> = [];
@@ -871,6 +1061,7 @@ export function useAppController(
       editorPreferences,
       sidebar: sidebarPreferences,
       outline: outlinePreferences,
+      translationSettings,
     }).catch(() => {
       // Session persistence is best-effort.
     });
@@ -884,6 +1075,7 @@ export function useAppController(
     editorPreferences,
     sidebarPreferences,
     outlinePreferences,
+    translationSettings,
   ]);
 
   const dismissSaveError = useCallback(() => setSaveError(null), []);
@@ -996,6 +1188,11 @@ export function useAppController(
     setSidebarPreferences,
     outlinePreferences,
     setOutlinePreferences,
+    translationSettings,
+    setTranslationSettings,
+    translations,
+    translationOf,
+    toggleTranslation,
     viewModes,
     viewModeOf,
     setViewMode,
@@ -1008,7 +1205,7 @@ export function useAppController(
     openWorkspacePath,
     closeWorkspace,
     activate: (id: string) => dispatch({ type: "activate", id }),
-    changeText: (id: string, text: string) => dispatch({ type: "textChanged", id, text }),
+    changeText,
     save,
     saveAs,
     close,
