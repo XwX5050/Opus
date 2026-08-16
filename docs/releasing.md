@@ -161,3 +161,32 @@ git push origin v0.2.0
 `latest.json` is served from the release's `latest/download` URL, so the
 most recent tagged release automatically becomes the update target for all
 existing installs.
+
+## Tag-push checklist (learned from past CI failures)
+
+A failed release run means deleting and re-pushing the tag, so verify these
+**before** pushing any `v*` tag — every item below is a failure that has
+actually happened:
+
+- **Run the exact CI gate, not pieces of it**: `npm run check` (vitest +
+  `tsc -b` + vite build + cargo test). Vitest uses esbuild and never
+  type-checks, so a type error in a `*.test.ts` file passes `npm test`
+  locally and fails CI (v0.1.7 first attempt). After editing any test file,
+  `npx tsc -b` is mandatory.
+- **No focus- or timing-dependent test assertions**: `user.keyboard(...)`
+  and anything reading `document.activeElement` depends on global focus and
+  flakes under CI parallel load even when it passes locally every time
+  (v0.1.9 first attempt). Assert through the element itself
+  (`fireEvent.keyDown(el, ...)`, `fireEvent.blur(el)`) instead. When a test
+  involving focus/timing was added or changed, repeat-run the touched spec
+  (`for i in ...; npx vitest run <spec>`) before tagging.
+- **Watch the run to completion**: `gh run list --workflow=release.yml`
+  then poll until `completed`; on failure read
+  `gh run view <id> --log-failed` before retrying — never re-push a tag
+  blind. A re-tag moves the tag: `git tag -d vX && git push origin
+  :refs/tags/vX && git tag vX && git push origin vX` (check first with
+  `gh release view vX` whether a release was already created; if the
+  workflow failed before the release step there is nothing to clean up).
+- **GitHub API hiccups are not build failures**: an `EOF`/5xx from
+  `gh run watch` means the network call broke, not the build — re-check the
+  run status before assuming anything.
