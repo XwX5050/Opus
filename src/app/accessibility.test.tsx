@@ -140,7 +140,7 @@ describe("accessibility: roles and names", () => {
     expect(dialog).toBeVisible();
     // Escape only reaches the dialog's keydown handler once the focus
     // effect has landed inside it; on slower runners that can lag a frame.
-    await waitFor(() => expect(dialog).toContainElement(document.activeElement));
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     await user.keyboard("{Escape}");
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
