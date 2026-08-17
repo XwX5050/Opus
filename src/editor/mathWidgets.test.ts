@@ -1,4 +1,5 @@
 import { markdown } from "@codemirror/lang-markdown";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
@@ -15,8 +16,8 @@ const createState = (
   selections: readonly { anchor: number; head?: number }[] = [
     { anchor: doc.length },
   ],
-) =>
-  EditorState.create({
+) => {
+  const state = EditorState.create({
     doc,
     selection: EditorSelection.create(
       selections.map(({ anchor, head = anchor }) =>
@@ -28,6 +29,14 @@ const createState = (
       markdown({ extensions: [GFM, mathMarkdownExtension] }),
     ],
   });
+  // The language field's initial parse runs under a short wall-clock budget
+  // (20ms) and is never resumed without a view — under heavy CI load a starved
+  // worker can exhaust that budget before one scheduling quantum, leaving a
+  // partial tree that surfaces as missing math nodes. Complete the parse and
+  // fold it back into the state so syntaxTree(state) is whole.
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  return state.update({}).state;
+};
 
 const views: EditorView[] = [];
 const createView = (

@@ -1,5 +1,5 @@
 import { markdown } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, forceParsing, syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
@@ -14,11 +14,19 @@ import {
   tableCells,
 } from "./markdownTable";
 
-const parse = (doc: string) =>
-  EditorState.create({
+const parse = (doc: string) => {
+  const state = EditorState.create({
     doc,
     extensions: [markdown({ extensions: [GFM] })],
   });
+  // The language field's initial parse runs under a short work budget and is
+  // never resumed without a view — under heavy CI load a starved worker can
+  // leave a partial tree that truncates the pressure-sized fixtures below.
+  // Complete the parse and fold it back into the state so syntaxTree(state)
+  // spans the whole document, as it does in the app behind a view.
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  return state.update({}).state;
+};
 
 const generatedOuterPipeRow = (columns: number, label: string) =>
   `| ${Array.from({ length: columns }, (_, index) => `${label}-${index}`).join(" | ")} |`;

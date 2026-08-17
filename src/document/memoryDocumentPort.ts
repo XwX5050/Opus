@@ -546,6 +546,11 @@ export class MemoryDocumentPort implements DocumentPort {
     return this.#watchCalls.map((call) => ({ ...call }));
   }
 
+  /** Test hook: number of disk-event subscribers currently registered. */
+  get diskEventHandlerCount(): number {
+    return this.#diskHandlers.size;
+  }
+
   async watchDocument(consumerId: string, path: string): Promise<void> {
     this.#watchCalls.push({ kind: "document", consumerId, path });
   }

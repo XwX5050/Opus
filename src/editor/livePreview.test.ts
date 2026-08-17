@@ -1,5 +1,5 @@
 import { markdown } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
@@ -14,8 +14,8 @@ import {
 const createState = (
   doc: string,
   ranges: readonly { anchor: number; head?: number }[] = [{ anchor: doc.length }],
-) =>
-  EditorState.create({
+) => {
+  const state = EditorState.create({
     doc,
     selection: EditorSelection.create(
       ranges.map(({ anchor, head = anchor }) => EditorSelection.range(anchor, head)),
@@ -25,6 +25,14 @@ const createState = (
       markdown({ extensions: [GFM, highlightMarkdownExtension] }),
     ],
   });
+  // The language field's initial parse runs under a short wall-clock budget
+  // (20ms) and is never resumed without a view — under heavy CI load a starved
+  // worker can exhaust that budget before one scheduling quantum, leaving a
+  // partial tree that skews plan/decoration counts. Complete the parse and
+  // fold it back into the state so syntaxTree(state) is whole.
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  return state.update({}).state;
+};
 
 const hiddenSource = (state: EditorState, plan: readonly PlannedDecoration[]) =>
   plan

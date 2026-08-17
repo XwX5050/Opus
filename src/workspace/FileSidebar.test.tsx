@@ -42,6 +42,12 @@ const renderSidebar = (port = makePort(), onOpenFile = vi.fn()) => {
 const rows = () => screen.getAllByRole("treeitem");
 const rowNames = () => rows().map((row) => row.getAttribute("aria-label"));
 
+// The disk-event reload path — event -> invalidation -> listing request ->
+// render — spans several React commits plus an async listing per event. CI
+// runners under parallel load exceed the 1s default find*/waitFor budget, so
+// assertions that wait on that path get an explicit budget with margin.
+const DISK_EVENT_TIMEOUT_MS = 3000;
+
 describe("FileSidebar", () => {
   it("loads the top-level listing once with directories before files", async () => {
     const { port } = renderSidebar();
@@ -310,19 +316,25 @@ describe("FileSidebar", () => {
     // A file created outside the app appears after a changed event.
     const created = await port.createMarkdownFile("/notes", "delta.md");
     port.emitDiskEvent({ kind: "changed", path: created.path, modifiedUnixMs: 1, version: "v1" });
-    await screen.findByRole("treeitem", { name: "delta.md" });
+    await screen.findByRole("treeitem", { name: "delta.md" }, { timeout: DISK_EVENT_TIMEOUT_MS });
 
     // A file deleted outside the app disappears after a missing event.
     port.removeFile("/notes/alpha.md");
     port.emitDiskEvent({ kind: "missing", path: "/notes/alpha.md" });
-    await waitFor(() =>
-      expect(screen.queryByRole("treeitem", { name: "alpha.md" })).not.toBeInTheDocument(),
+    await waitFor(
+      () =>
+        expect(screen.queryByRole("treeitem", { name: "alpha.md" })).not.toBeInTheDocument(),
+      { timeout: DISK_EVENT_TIMEOUT_MS },
     );
 
     // A rename reported as moved updates both sides of the listing.
     const renamed = await port.renameEntry("/notes", "Beta.markdown", "renamed.md");
     port.emitDiskEvent({ kind: "moved", from: "/notes/Beta.markdown", to: renamed.path });
-    await screen.findByRole("treeitem", { name: "renamed.md" });
+    await screen.findByRole(
+      "treeitem",
+      { name: "renamed.md" },
+      { timeout: DISK_EVENT_TIMEOUT_MS },
+    );
     expect(screen.queryByRole("treeitem", { name: "Beta.markdown" })).not.toBeInTheDocument();
 
     // Every event re-listed the affected parent directory.
@@ -348,10 +360,16 @@ describe("FileSidebar", () => {
       });
     });
 
-    await waitFor(() =>
-      expect(port.listCalls.length).toBeGreaterThan(callsBefore),
-    );
-    expect(await screen.findByRole("treeitem", { name: "gamma.md" })).toBeInTheDocument();
+    await waitFor(() => expect(port.listCalls.length).toBeGreaterThan(callsBefore), {
+      timeout: DISK_EVENT_TIMEOUT_MS,
+    });
+    expect(
+      await screen.findByRole(
+        "treeitem",
+        { name: "gamma.md" },
+        { timeout: DISK_EVENT_TIMEOUT_MS },
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: "drafts" })).toHaveAttribute(
       "aria-expanded",
       "true",
@@ -363,9 +381,17 @@ describe("FileSidebar", () => {
     await screen.findByRole("treeitem", { name: "alpha.md" });
     const calls = [...port.listCalls];
 
-    port.emitDiskEvent({ kind: "changed", path: "/other/x.md", modifiedUnixMs: 1, version: "v1" });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The subscription registers asynchronously after mount; only emit once
+    // the handler is known to be live so the assertion checks a delivered
+    // event rather than a not-yet-registered subscriber.
+    await waitFor(() => expect(port.diskEventHandlerCount).toBeGreaterThan(0));
+    await act(async () => {
+      port.emitDiskEvent({ kind: "changed", path: "/other/x.md", modifiedUnixMs: 1, version: "v1" });
+    });
 
+    // A wrongly-scoped handler would dispatch an invalidation synchronously,
+    // so the act flush above decides the outcome deterministically — no fixed
+    // sleep window that a loaded CI worker could slip through.
     expect(port.listCalls).toEqual(calls);
   });
 
@@ -415,7 +441,7 @@ describe("FileSidebar", () => {
 
     // The rename dropped the stale in-flight token, so the renamed directory
     // is re-requested immediately and its listing renders.
-    await screen.findByRole("treeitem", { name: "gamma.md" });
+    await screen.findByRole("treeitem", { name: "gamma.md" }, { timeout: DISK_EVENT_TIMEOUT_MS });
     expect(screen.queryByRole("treeitem", { name: "drafts" })).not.toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: "published" })).toHaveAttribute(
       "aria-expanded",
@@ -424,8 +450,9 @@ describe("FileSidebar", () => {
 
     // The stale listing settling later is discarded, not applied.
     releaseListing();
-    await waitFor(() =>
-      expect(screen.getByRole("treeitem", { name: "gamma.md" })).toBeInTheDocument(),
+    await waitFor(
+      () => expect(screen.getByRole("treeitem", { name: "gamma.md" })).toBeInTheDocument(),
+      { timeout: DISK_EVENT_TIMEOUT_MS },
     );
   });
 });

@@ -1,4 +1,12 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import type { Update } from "@tauri-apps/plugin-updater";
@@ -14,6 +22,13 @@ import {
 } from "../translate/types";
 import AppShell from "./AppShell";
 import SettingsDialog from "./SettingsDialog";
+
+// Every async wait in this file settles a port/bridge promise chain — session
+// load/persist, font and model list fetches, update checks. CI runners under
+// parallel load exceed the 1s default waitFor/findBy* budget on that class of
+// waits, so raise the default for the file with margin (the same budget
+// FileSidebar.test.tsx scopes to its disk-event paths).
+configure({ asyncUtilTimeout: 3000 });
 
 const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 
@@ -190,12 +205,18 @@ describe("settings: theme and editor preferences", () => {
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     await user.clear(bodySize);
-    await user.type(bodySize, "18");
+    // Enter the draft through a single change event: user.type's per-keystroke
+    // dispatch can drop characters into a re-rendering controlled input under
+    // heavy CI load, leaving the field empty and the assertion vacuous.
+    fireEvent.change(bodySize, { target: { value: "18" } });
     // Nothing committed yet: the field shows the raw draft.
     expect(bodySize).toHaveValue(18);
     expect(port.session?.editorPreferences?.bodySizePx ?? 16).toBe(16);
 
-    await user.tab();
+    // Commit through the field's own Enter handler instead of user.tab():
+    // tab depends on the global focus that a starved jsdom can revoke
+    // (document.hasFocus() flips false), which would skip the blur commit.
+    fireEvent.keyDown(bodySize, { key: "Enter" });
     await waitFor(() =>
       expect(port.session?.editorPreferences?.bodySizePx).toBe(18),
     );
@@ -211,8 +232,13 @@ describe("settings: theme and editor preferences", () => {
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const width = within(dialog).getByLabelText("内容宽度");
     await user.clear(width);
-    await user.type(width, "640");
-    await user.keyboard("{Enter}");
+    // The draft goes in via a single change event: user.type's per-keystroke
+    // dispatch can drop characters into a re-rendering controlled input
+    // under heavy CI load.
+    fireEvent.change(width, { target: { value: "640" } });
+    // Enter through the field's own handler: user.keyboard("{Enter}") would
+    // depend on the global focus a starved jsdom can revoke.
+    fireEvent.keyDown(width, { key: "Enter" });
 
     await waitFor(() =>
       expect(port.session?.editorPreferences?.contentWidthPx).toBe(640),
@@ -229,7 +255,9 @@ describe("settings: theme and editor preferences", () => {
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     await user.clear(bodySize);
-    await user.tab();
+    // Blur is dispatched directly so the commit is deterministic: user.tab()
+    // would rely on the global focus a starved jsdom can revoke.
+    fireEvent.blur(bodySize);
 
     expect(bodySize).toHaveValue(16);
   });
@@ -292,7 +320,7 @@ describe("settings: installed font enumeration", () => {
     const input = within(dialog).getByLabelText("自定义字体");
     expect(input).not.toHaveAttribute("list");
     expect(input).not.toHaveAttribute("role");
-    await user.type(input, "Ping");
+    fireEvent.change(input, { target: { value: "Ping" } });
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
   });
@@ -331,8 +359,10 @@ describe("settings: installed font enumeration", () => {
         .map((option) => option.textContent),
     ).toEqual(["LXGW WenKai", "PingFang SC", "Songti SC"]);
 
-    // Typing filters in real time.
-    await user.type(input, "wen");
+    // Typing filters in real time; the char stream is sent as one change
+    // event because user.type can drop keystrokes into a re-rendering
+    // controlled input under heavy CI load.
+    fireEvent.change(input, { target: { value: "wen" } });
     listbox = within(dialog).getByRole("listbox", { name: "已安装字体" });
     expect(within(listbox).getAllByRole("option")).toHaveLength(1);
     expect(
@@ -378,17 +408,20 @@ describe("settings: installed font enumeration", () => {
       within(dialog).getByRole("listbox", { name: "已安装字体" }),
     ).toBeInTheDocument();
 
-    // ArrowDown highlights the second font; Enter commits it.
-    await user.keyboard("{ArrowDown}");
-    await user.keyboard("{Enter}");
+    // ArrowDown highlights the second font; Enter commits it. Both are
+    // dispatched to the input's own handler — user.keyboard() would depend
+    // on the global focus a starved jsdom can revoke.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
       expect(port.session?.editorPreferences?.fontFamily).toBe("PingFang SC"),
     );
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
 
     // The field stays a plain text input: the picked value is still
-    // editable by hand.
-    await user.type(input, "x");
+    // editable by hand. The typed letter arrives as one change event —
+    // user.type can drop keystrokes under heavy CI load.
+    fireEvent.change(input, { target: { value: "PingFang SCx" } });
     expect(input).toHaveValue("PingFang SCx");
   });
 
@@ -418,7 +451,10 @@ describe("settings: installed font enumeration", () => {
       within(dialog).getByRole("listbox", { name: "已安装字体" }),
     ).toBeInTheDocument();
 
-    await user.keyboard("{Escape}");
+    // The input's own Escape handler closes the list (and stops propagation,
+    // keeping the dialog open); dispatched directly so it cannot be starved
+    // of the global focus.
+    fireEvent.keyDown(input, { key: "Escape" });
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "设置" })).toBeInTheDocument();
   });
@@ -482,8 +518,10 @@ describe("settings: installed font enumeration", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
 
     // ArrowDown moves the highlight to the second option, which must scroll
-    // itself into view.
-    await user.keyboard("{ArrowDown}");
+    // itself into view. Dispatched to the input directly: keyboard events
+    // via user.keyboard() depend on the global focus a starved jsdom can
+    // revoke under CI load.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
 
     Reflect.deleteProperty(Element.prototype, "scrollIntoView");
@@ -514,8 +552,9 @@ describe("settings: installed font enumeration", () => {
     expect(input).toHaveAttribute("aria-expanded", "true");
 
     // A filter with no matches draws no listbox, so the combobox must not
-    // claim to be expanded.
-    await user.type(input, "zzz");
+    // claim to be expanded. The filter runs off the change event; user.type's
+    // per-keystroke dispatch can drop characters under heavy CI load.
+    fireEvent.change(input, { target: { value: "zzz" } });
     expect(input).toHaveAttribute("aria-expanded", "false");
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
   });
@@ -784,7 +823,10 @@ describe("settings: translation", () => {
 
     const endpoint = within(dialog).getByLabelText("API 端点");
     await user.clear(endpoint);
-    await user.type(endpoint, "https://example.com/v1");
+    // The draft is set via one change event — user.type's per-keystroke
+    // dispatch can drop characters into a re-rendering controlled input
+    // under heavy CI load.
+    fireEvent.change(endpoint, { target: { value: "https://example.com/v1" } });
     // Nothing commits mid-typing; Enter commits the draft. fireEvent.keyDown
     // targets the field directly — user.keyboard depends on the global focus,
     // which flakes under CI load.
@@ -796,7 +838,7 @@ describe("settings: translation", () => {
     });
 
     const apiKey = within(dialog).getByLabelText("API Key");
-    await user.type(apiKey, "sk-live-000");
+    fireEvent.change(apiKey, { target: { value: "sk-live-000" } });
     fireEvent.blur(apiKey);
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...DEFAULT_TRANSLATION_SETTINGS,

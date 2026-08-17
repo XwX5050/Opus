@@ -1,5 +1,5 @@
 import { markdown } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { GFM } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
@@ -8,13 +8,21 @@ import {
   highlightMarkdownExtension,
 } from "./highlightExtension";
 
-const parse = (doc: string) =>
-  EditorState.create({
+const parse = (doc: string) => {
+  const state = EditorState.create({
     doc,
     extensions: [
       markdown({ extensions: [GFM, highlightMarkdownExtension] }),
     ],
   });
+  // The language field's initial parse runs under a short wall-clock budget
+  // (20ms) and is never resumed without a view — under heavy CI load a starved
+  // worker can exhaust that budget before one scheduling quantum, leaving a
+  // partial tree. Complete the parse and fold it back into the state so
+  // syntaxTree(state) is whole.
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  return state.update({}).state;
+};
 
 const nodesNamed = (state: EditorState, name: string) => {
   const nodes: { from: number; to: number; source: string }[] = [];

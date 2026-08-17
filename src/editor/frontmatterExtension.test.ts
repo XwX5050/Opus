@@ -77,33 +77,46 @@ describe("frontmatterMarkdownExtension", () => {
     expect(tree).toContain("HorizontalRule");
   });
 
-  it("keeps an unclosed opening delimiter on a huge document cheap to parse", () => {
-    const huge = "---\n" + "line without closing delimiter\n".repeat(100_000);
-    const createStateFor = (withFrontmatter: boolean) => {
-      const extensions = withFrontmatter
-        ? [GFM, frontmatterMarkdownExtension]
-        : [GFM];
-      const startedAt = performance.now();
-      const state = EditorState.create({
-        doc: huge,
-        extensions: [markdown({ extensions })],
-      });
-      syntaxTree(state).toString();
-      return performance.now() - startedAt;
-    };
-    // Warm up the JIT, then take the minimum of a few runs so a stray GC
-    // pause or scheduling hiccup cannot inflate the frontmatter side.
-    createStateFor(true);
-    createStateFor(false);
-    const withFrontmatter = Math.min(...[0, 1, 2].map(() => createStateFor(true)));
-    const withoutFrontmatter = Math.min(
-      ...[0, 1, 2].map(() => createStateFor(false)),
-    );
-    // The closing scan used to walk all 100k lines, adding ~160ms of parse
-    // time; bounded to maxFrontMatterLines it adds only a few ms, so this
-    // generous ceiling only trips when the scan regresses.
-    expect(withFrontmatter - withoutFrontmatter).toBeLessThan(100);
-  });
+  it(
+    "keeps an unclosed opening delimiter on a huge document cheap to parse",
+    () => {
+      const huge = "---\n" + "line without closing delimiter\n".repeat(100_000);
+      const createStateFor = (withFrontmatter: boolean) => {
+        const extensions = withFrontmatter
+          ? [GFM, frontmatterMarkdownExtension]
+          : [GFM];
+        const startedAt = performance.now();
+        const state = EditorState.create({
+          doc: huge,
+          extensions: [markdown({ extensions })],
+        });
+        syntaxTree(state).toString();
+        return performance.now() - startedAt;
+      };
+      // Warm up the JIT. Then measure both sides back-to-back: wall-clock
+      // noise from the scheduler or a stray GC pause lands on whichever side
+      // happens to run during the stall, so per-side minima (as before) can
+      // pick a fast "without" sample against a slow "with" sample and blow
+      // the budget under parallel CI load. The minimum of interleaved pair
+      // diffs cancels the shared load drift and discards stalled pairs, so
+      // the ceiling stays sensitive to a real scan regression while immune
+      // to measurement noise.
+      createStateFor(true);
+      createStateFor(false);
+      const surplus = Math.min(
+        ...[0, 1, 2, 3].map(
+          () => createStateFor(true) - createStateFor(false),
+        ),
+      );
+      // The closing scan used to walk all 100k lines, adding ~160ms of parse
+      // time; bounded to maxFrontMatterLines it adds only a few ms, so this
+      // generous ceiling only trips when the scan regresses.
+      expect(surplus).toBeLessThan(100);
+    },
+    // Under heavy CI load a single 100k-line parse stretches to seconds; the
+    // explicit budget keeps a slow-but-correct run from false-failing.
+    20_000,
+  );
 
   it("leaves a mid-document `---` after a paragraph as a setext heading", () => {
     const state = createState("some paragraph\n---\n");
