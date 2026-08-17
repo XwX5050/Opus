@@ -242,20 +242,31 @@ describe("subdivideSegment", () => {
     const line = "l".repeat(300) + "\n"; // 301 chars
     const text = line.repeat(6); // 1806 chars
     const chunks = subdivideSegment(text);
-    expect(chunks).toEqual([line.repeat(4), line.repeat(2)]);
+    // Two lines (602 chars) no longer fit under the 600-char target, so each
+    // 301-char line stays intact as its own chunk.
+    expect(chunks).toEqual([
+      line,
+      line,
+      line,
+      line,
+      line,
+      line,
+    ]);
     expect(chunks.join("")).toBe(text);
   });
 
   it("splits an over-long single line at sentence boundaries", () => {
-    const sentence = "句".repeat(500) + "。"; // 501 chars
-    const text = sentence.repeat(5) + "\n"; // 2506 chars
+    const sentence = "句".repeat(300) + "。"; // 301 chars
+    const text = sentence.repeat(5) + "\n"; // 1506 chars
     const chunks = subdivideSegment(text);
-    // Two sentences fit per chunk (1002); the punctuation stays attached to
-    // its sentence, and the last chunk carries the trailing newline.
+    // Two sentences (602 chars) exceed the 600-char target, so each sentence
+    // becomes its own chunk and the last one carries the trailing newline.
     expect(chunks).toEqual([
-      "句".repeat(500) + "。" + "句".repeat(500) + "。",
-      "句".repeat(500) + "。" + "句".repeat(500) + "。",
-      "句".repeat(500) + "。\n",
+      sentence,
+      sentence,
+      sentence,
+      sentence,
+      sentence + "\n",
     ]);
     expect(chunks.join("")).toBe(text);
     expect(
@@ -269,10 +280,8 @@ describe("subdivideSegment", () => {
     const text = "x".repeat(5000) + "\n";
     const chunks = subdivideSegment(text);
     expect(chunks).toEqual([
-      "x".repeat(1500),
-      "x".repeat(1500),
-      "x".repeat(1500),
-      "x".repeat(500) + "\n",
+      ...Array.from({ length: 8 }, () => "x".repeat(600)),
+      "x".repeat(200) + "\n",
     ]);
     expect(chunks.join("")).toBe(text);
     expect(
@@ -285,11 +294,32 @@ describe("subdivideSegment", () => {
   it("splits consecutive over-long lines independently", () => {
     const text = "x".repeat(1600) + "\n" + "y".repeat(1700) + "\n";
     expect(subdivideSegment(text)).toEqual([
-      "x".repeat(1500),
-      "x".repeat(100) + "\n",
-      "y".repeat(1500),
-      "y".repeat(200) + "\n",
+      "x".repeat(600),
+      "x".repeat(600),
+      "x".repeat(400) + "\n",
+      "y".repeat(600),
+      "y".repeat(600),
+      "y".repeat(500) + "\n",
     ]);
+  });
+
+  it("never hard-splits across a placeholder token", () => {
+    // 600-character cuts land inside ⟪1⟫ (positions 595-599) on the first
+    // split and directly after ⟫ on the next; both must leave the token whole.
+    const text = "x".repeat(598) + "⟪1⟫" + "y".repeat(400);
+    const chunks = subdivideSegment(text);
+    expect(chunks).toEqual([
+      "x".repeat(598),
+      "⟪1⟫" + "y".repeat(400),
+    ]);
+    expect(chunks.join("")).toBe(text);
+    // A token ending exactly at the naive cut boundary stays in one chunk too.
+    const around = subdivideSegment("x".repeat(597) + "⟪1⟫" + "y".repeat(400));
+    expect(around).toEqual([
+      "x".repeat(597) + "⟪1⟫",
+      "y".repeat(400),
+    ]);
+    expect(around.join("")).toBe("x".repeat(597) + "⟪1⟫" + "y".repeat(400));
   });
 
   it("honors an explicit maxLength", () => {

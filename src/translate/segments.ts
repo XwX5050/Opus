@@ -13,6 +13,8 @@
  * `reassembleTranslation` can swap translations back in losslessly.
  */
 
+import { PLACEHOLDER_CLOSE, PLACEHOLDER_OPEN } from "./placeholders";
+
 export interface Segment {
   readonly kind: "translatable" | "protected";
   readonly text: string;
@@ -158,17 +160,24 @@ export function splitMarkdownSegments(text: string): Segment[] {
 }
 
 /**
- * Upper bound, in characters, for a single translatable chunk sent to the
- * provider. Paragraphs are subdivided past this limit because OpenAI-
- * compatible providers (DeepSeek and similar) can drop or mis-decode very
- * long single requests — oversized segments have been observed to disconnect
- * with `response JSON is invalid: error decoding response body`. 1500
- * characters covers nearly every real paragraph as a single request, so
- * subdivision only kicks in for unusually long runs, while staying far below
- * provider context limits and bounding the cost of a request that has to be
- * retried. Exported so tests and callers can reason about the same limit.
+ * Target size, in characters, for a single translatable chunk sent to the
+ * provider. `subdivideSegment` treats it as a hard upper bound — no chunk
+ * exceeds it and most land close to it.
+ *
+ * 600 balances two opposing costs. Per-chunk LLM latency grows roughly with
+ * the chunk's character count: a 1500-character chunk can take tens of
+ * seconds to generate a full translation (and oversized requests have also
+ * been observed to disconnect with `response JSON is invalid: error decoding
+ * response body` on OpenAI-compatible providers), while a ~600-character
+ * chunk typically completes in a few seconds. Smaller chunks therefore
+ * shorten the tail latency each request imposes on the bounded concurrency
+ * pool and keep the pool fed with more chunks for documents that subdivide
+ * into few segments in the first place. Going much smaller (below ~500
+ * characters) would start paying more per-request overhead — prompt framing,
+ * hop latency, provider-side batching — than it saves on generation time.
+ * Exported so tests and callers reason about the same limit.
  */
-export const MAX_TRANSLATABLE_CHUNK_LENGTH = 1500;
+export const MAX_TRANSLATABLE_CHUNK_LENGTH = 600;
 
 /**
  * Sentence- and phrase-ending punctuation, Chinese and English. Chunks split
@@ -180,6 +189,23 @@ export const MAX_TRANSLATABLE_CHUNK_LENGTH = 1500;
  */
 const SENTENCE_BOUNDARY_RE =
   /[^。！？；：，!?;:,]*[。！？；：，!?;:,]+|[^。！？；：，!?;:,]+/g;
+
+/**
+ * Hard-cut position for an over-long run: `maxLength` unless that would slice
+ * a placeholder token (⟪n⟫) in half, in which case the cut backs up to just
+ * before the token so placeholders always reach the provider intact.
+ */
+const safeHardCut = (text: string, maxLength: number): number => {
+  const naive = Math.min(maxLength, text.length);
+  // Walk back from the cut to the nearest ⟪ or ⟫; an opening ⟪ before the cut
+  // with no ⟫ in between means the cut falls inside a placeholder token.
+  for (let index = naive - 1; index >= 0; index--) {
+    const char = text[index];
+    if (char === PLACEHOLDER_CLOSE) break;
+    if (char === PLACEHOLDER_OPEN) return Math.max(index, 1);
+  }
+  return naive;
+};
 
 /**
  * Splits a single over-long line into chunks at sentence boundaries, falling
@@ -200,8 +226,9 @@ const subdivideLongLine = (line: string, maxLength: number): string[] => {
       if (current.length > 0) chunks.push(current);
       current = sentence;
       while (current.length > maxLength) {
-        chunks.push(current.slice(0, maxLength));
-        current = current.slice(maxLength);
+        const cut = safeHardCut(current, maxLength);
+        chunks.push(current.slice(0, cut));
+        current = current.slice(cut);
       }
     }
   }

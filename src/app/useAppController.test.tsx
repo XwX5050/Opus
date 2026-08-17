@@ -1780,7 +1780,8 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
-  it("surfaces partial translations and per-segment progress while translating", async () => {
+  it("surfaces partial translations and per-chunk progress while translating", async () => {
+    // Each 701-char paragraph subdivides into two chunk requests (600 + 101).
     const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
     const doc = paras.join("\n");
     class SteppedTranslatePort extends InspectableControllerPort {
@@ -1809,12 +1810,12 @@ describe("useAppController translations", () => {
     expect(hook.result.current.translationOf(id)?.state).toEqual({
       phase: "translating",
     });
-    // Four paragraphs translate as four separate segment requests.
-    expect(port.pending).toHaveLength(4);
+    // Eight chunks (four paragraphs x two) start as eight requests.
+    expect(port.pending).toHaveLength(8);
 
-    // The first segment lands: the translating state carries the partial
-    // text with the unfinished paragraphs still as the original text, plus
-    // counts.
+    // The first chunk of the first paragraph lands: the translating state
+    // carries the partial with only that chunk translated and the rest of
+    // the paragraph still original, plus chunk counts.
     await act(async () => {
       port.pending[0].resolve(port.pending[0].segments.map(pseudoTranslate));
     });
@@ -1822,20 +1823,29 @@ describe("useAppController translations", () => {
       expect(hook.result.current.translationOf(id)?.state).toMatchObject({
         phase: "translating",
         completedBatches: 1,
-        totalBatches: 4,
+        totalBatches: 8,
       }),
     );
     const partial = hook.result.current.translationOf(id)!.state;
     if (partial.phase !== "translating") throw new Error("unreachable");
     expect(partial.translatedText).toBe(
-      [pseudoTranslate(paras[0])].concat(paras.slice(1)).join("\n"),
+      "ｘ".repeat(600) +
+        "x".repeat(100) +
+        "\n" +
+        "\n" +
+        paras[1] +
+        "\n" +
+        paras[2] +
+        "\n" +
+        paras[3],
     );
 
-    // The remaining segments land: the full translation arrives ready.
+    // The remaining chunks land: the second chunk completes the first
+    // paragraph, then the rest follow until the full translation arrives.
     await act(async () => {
-      port.pending[1].resolve(port.pending[1].segments.map(pseudoTranslate));
-      port.pending[2].resolve(port.pending[2].segments.map(pseudoTranslate));
-      port.pending[3].resolve(port.pending[3].segments.map(pseudoTranslate));
+      for (const call of port.pending.slice(1)) {
+        call.resolve(call.segments.map(pseudoTranslate));
+      }
     });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),

@@ -1785,8 +1785,9 @@ describe("AppShell document translation", () => {
     expect(calls).toBe(1);
   });
 
-  it("shows the partial translation and per-segment progress while translating", async () => {
+  it("shows the partial translation and per-chunk progress while translating", async () => {
     const user = userEvent.setup();
+    // Each 701-char paragraph subdivides into two chunk requests (600 + 101).
     const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
     const doc = paras.join("\n");
     const port = keyedPort([translateFile("/notes/trans.md", doc)]);
@@ -1805,30 +1806,29 @@ describe("AppShell document translation", () => {
     await user.click(screen.getByRole("button", { name: "打开文件" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
-    // Four paragraphs translate as four separate segment requests; with
-    // nothing completed yet the banner shows no counts and the editor stays
-    // on the original text.
-    expect(pending).toHaveLength(4);
+    // Eight chunks start as eight requests; with nothing completed yet the
+    // banner shows no counts and the editor stays on the original text.
+    expect(pending).toHaveLength(8);
     expect(screen.getByRole("status")).toHaveTextContent("正在翻译…");
     expect(screen.getByRole("status")).not.toHaveTextContent("(");
 
-    // The first segment lands: the editor switches to the partial and freezes
-    // read-only, the banner reports per-segment progress.
+    // The first chunk lands: the editor switches to the partial and freezes
+    // read-only, the banner reports per-chunk progress.
     await act(async () => {
       pending[0].resolve(pending[0].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (1/4)"),
+      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (1/8)"),
     );
     expect(editor()).toHaveTextContent("ｘ");
     expect(editor().textContent).toContain("x");
     expect(editor()).toHaveAttribute("contenteditable", "false");
 
-    // The remaining segments complete: the full translation lands ready.
+    // The remaining chunks complete: the full translation lands ready.
     await act(async () => {
-      pending[1].resolve(pending[1].segments.map(pseudoTranslate));
-      pending[2].resolve(pending[2].segments.map(pseudoTranslate));
-      pending[3].resolve(pending[3].segments.map(pseudoTranslate));
+      for (const call of pending.slice(1)) {
+        call.resolve(call.segments.map(pseudoTranslate));
+      }
     });
     const showOriginal = await screen.findByRole("button", { name: "显示原文" });
     expect(showOriginal).toHaveAttribute("aria-pressed", "true");

@@ -12,7 +12,7 @@ export interface TranslationSettings {
   readonly apiKey: string;
   readonly model: string;
   readonly targetLanguage: string;
-  /** Maximum concurrent segment requests for one document translation. */
+  /** Maximum concurrent chunk requests for one document translation. */
   readonly concurrency: number;
 }
 
@@ -71,9 +71,11 @@ export const normalizeTranslationSettings = (
 export type TranslationViewState =
   | {
       readonly phase: "translating";
-      /** Partial translation shown while segments are still in flight. */
+      /** Partial translation shown while chunks are still in flight. */
       readonly translatedText?: string;
+      /** Chunks completed so far, for the banner's x/y progress display. */
       readonly completedBatches?: number;
+      /** Total chunks this document was subdivided into. */
       readonly totalBatches?: number;
     }
   | { readonly phase: "ready"; readonly translatedText: string }

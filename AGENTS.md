@@ -33,7 +33,8 @@ Rust/Tauri backend.
   `gsap`, `@gsap/react`, `react`, `react-dom`.
 - **Key Rust crates**: `tauri` 2.11 (with `protocol-asset`),
   `tauri-plugin-dialog/fs/opener/process/store/updater/log`, `notify` 8.2,
-  `trash` 5.2, `sha2`, `serde`, `tempfile`, `reqwest` (rustls); macOS-only
+  `trash` 5.2, `sha2`, `serde`, `tempfile`, `reqwest` 0.13 (rustls with the
+  ring provider pinned); macOS-only
   `objc2-app-kit`/`objc2-foundation`/`objc2-web-kit`/`objc2-core-foundation`/
   `objc2-core-text` 0.3 (pinned to wry's locked versions so the types line up
   with the webview handles from `with_webview`).
@@ -111,17 +112,21 @@ Rust/Tauri backend.
   (`FileSidebar.tsx`).
 - `src/translate/`: document translation pipeline. `types.ts` holds
   `TranslationSettings` (endpoint, API key, model, target language, concurrency
-  — the number of segments translated concurrently, configurable in settings
-  within 1-32, default 10) and the per-tab `TranslationViewState`; `segments.ts`
-  splits Markdown into
+  — the number of chunk requests translated concurrently, configurable in
+  settings within 1-32, default 10) and the per-tab `TranslationViewState`;
+  `segments.ts` splits Markdown into
   translatable paragraph blocks and protected blocks (frontmatter, fenced
   code, display math, HTML comments) and subdivides over-long translatable
-  segments into chunks under `MAX_TRANSLATABLE_CHUNK_LENGTH` (line boundaries
-  first, then sentence punctuation, then hard cuts);
+  segments into chunks under `MAX_TRANSLATABLE_CHUNK_LENGTH` (600 characters;
+  line boundaries first, then sentence punctuation, then hard cuts that never
+  split a placeholder token); `placeholders.ts` swaps inline code/math spans
+  (`` `code` ``, `$math$`) for ⟪n⟫ tokens before subdivision so they survive
+  translation verbatim and are validated and restored from each reply;
   `translate.ts` issues one
   `DocumentPort.translateSegments` call per chunk through a bounded
   concurrency pool, retries transiently failed chunk requests with a short
-  backoff (never on abort), and surfaces incremental results via `onPartial`. The
+  backoff (never on abort), and surfaces each finished chunk via `onPartial`
+  with the unfinished chunks still showing the original text. The
   backend `src-tauri/src/translate.rs` translates through an
   OpenAI-compatible chat completions endpoint via reqwest (rustls) and caches
   results per segment on disk.
@@ -236,7 +241,8 @@ Automated gates:
   commands, workspace operations, asset scopes, recovery, open events,
   clipboard images, and the translation pipeline (cache and
   OpenAI-compatible client).
-- E2E tests in `tests/e2e/` run against a real Vite dev server on port 1421
+- E2E tests in `tests/e2e/` (`notepad`, `editorWidth`, `translation` specs)
+  run against a real Vite dev server on port 1421
   with `VITE_E2E=1` (`reuseExistingServer` is off so the environment is
   guaranteed); they exercise the UI through DOM/CodeMirror interactions using
   the in-memory port (see `src/app/e2e.ts` and `playwright.config.ts`).
