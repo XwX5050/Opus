@@ -13,8 +13,9 @@
 :root {
   /* Typography */
   --font-ui:
-    Inter, -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue",
-    "Segoe UI", sans-serif;
+    Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
+    "WenQuanYi Micro Hei", "Microsoft YaHei", sans-serif;
   --font-ui-size: 13px;
   --font-ui-size-small: 12px;
 
@@ -36,7 +37,8 @@
   --editor-body-size: 16px;
   --editor-line-height: 1.5;
   --editor-body-font:
-    -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    system-ui, -apple-system, "Noto Sans SC", "Noto Sans CJK SC",
+    "Source Han Sans SC", "PingFang SC", "Helvetica Neue", sans-serif;
 
   /* Motion: subtle, and disabled under prefers-reduced-motion. */
   --transition-fast: 120ms ease;
@@ -75,11 +77,11 @@
   --shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.4);
   --backdrop: rgba(0, 0, 0, 0.6);
   --focus-ring: rgba(127, 109, 242, 0.45);
-  --selection: rgba(127, 109, 242, 0.2);
+  --selection: rgba(127, 109, 242, 0.3);
   --search-match: rgba(224, 175, 104, 0.4);
   --highlight: #796a32;
-  --scrollbar: rgba(255, 255, 255, 0.13);
-  --scrollbar-hover: rgba(255, 255, 255, 0.26);
+  --scrollbar: rgba(255, 255, 255, 0.2);
+  --scrollbar-hover: rgba(255, 255, 255, 0.38);
   --syntax-keyword: #b3a1ff;
   --syntax-string: #a3d9a5;
   --syntax-comment: #787983;
@@ -114,8 +116,8 @@
   --selection: rgba(108, 86, 217, 0.15);
   --search-match: rgba(230, 180, 80, 0.45);
   --highlight: #ffec99;
-  --scrollbar: rgba(0, 0, 0, 0.12);
-  --scrollbar-hover: rgba(0, 0, 0, 0.26);
+  --scrollbar: rgba(0, 0, 0, 0.22);
+  --scrollbar-hover: rgba(0, 0, 0, 0.38);
   --syntax-keyword: #6c56d9;
   --syntax-string: #2f7d32;
   --syntax-comment: #8a8c94;

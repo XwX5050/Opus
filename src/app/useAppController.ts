@@ -7,6 +7,7 @@ import {
   normalizePathKey,
   type DocumentAction,
 } from "../document/documentReducer";
+import { detectPathPlatform } from "../document/platform";
 import {
   DEFAULT_OUTLINE_PREFERENCES,
   DEFAULT_SIDEBAR_PREFERENCES,
@@ -74,14 +75,17 @@ const errorMessage = (error: unknown): string =>
 const DRAFT_DEBOUNCE_MS = 2000;
 const DRAFT_MAX_PENDING_MS = 5000;
 
+/** Path-key platform, resolved once from the webview user agent. */
+const PATH_PLATFORM = detectPathPlatform();
+
 /** Disk-event paths are canonical; tab paths are user-supplied. */
 const findTabByPath = (
   state: DocumentState,
   path: string,
 ): DocumentSnapshot | undefined => {
-  const key = normalizePathKey(path);
+  const key = normalizePathKey(path, PATH_PLATFORM);
   return state.tabs.find(
-    (tab) => tab.path !== null && normalizePathKey(tab.path) === key,
+    (tab) => tab.path !== null && normalizePathKey(tab.path, PATH_PLATFORM) === key,
   );
 };
 
@@ -93,7 +97,7 @@ const findTabByPath = (
 const parentPathKey = (path: string): string => {
   const normalized = path.replaceAll("\\", "/");
   const index = normalized.lastIndexOf("/");
-  return normalizePathKey(index <= 0 ? "/" : normalized.slice(0, index));
+  return normalizePathKey(index <= 0 ? "/" : normalized.slice(0, index), PATH_PLATFORM);
 };
 
 /**
@@ -301,7 +305,7 @@ export function useAppController(
     setRecent((current) => [
       item,
       ...current.filter(
-        (entry) => normalizePathKey(entry.path) !== normalizePathKey(item.path),
+        (entry) => normalizePathKey(entry.path, PATH_PLATFORM) !== normalizePathKey(item.path, PATH_PLATFORM),
       ),
     ].slice(0, 10));
   }, []);
@@ -544,7 +548,13 @@ export function useAppController(
     for (const openedFile of files) {
       const id = nextId();
       const before = stateRef.current;
-      const next = dispatch({ type: "fileOpened", id, file: openedFile, activate });
+      const next = dispatch({
+        type: "fileOpened",
+        id,
+        file: openedFile,
+        pathPlatform: PATH_PLATFORM,
+        activate,
+      });
       // Only a genuinely new tab acquires a scope; duplicate-path opens just
       // focus the existing tab and must not leak a reference.
       const added = next.tabs.find(
@@ -611,6 +621,7 @@ export function useAppController(
       const requested = dispatch({
         type: "saveRequested",
         id,
+        pathPlatform: PATH_PLATFORM,
         ...(target ? { target } : {}),
       });
       const pending = requested.tabs.find((tab) => tab.id === id)?.pendingSave;
@@ -710,7 +721,12 @@ export function useAppController(
       setCloseDocumentId(id);
       return;
     }
-    const next = dispatch({ type: "closeConfirmed", id, disposition: "saved" });
+    const next = dispatch({
+      type: "closeConfirmed",
+      id,
+      disposition: "saved",
+      pathPlatform: PATH_PLATFORM,
+    });
     if (!next.tabs.some((tab) => tab.id === id)) releaseScope(id);
   }, [dispatch, releaseScope]);
 
@@ -723,7 +739,12 @@ export function useAppController(
     }
     if (choice === "discard") {
       setCloseDocumentId(null);
-      const next = dispatch({ type: "closeConfirmed", id, disposition: "discarded" });
+      const next = dispatch({
+        type: "closeConfirmed",
+        id,
+        disposition: "discarded",
+        pathPlatform: PATH_PLATFORM,
+      });
       if (!next.tabs.some((tab) => tab.id === id)) releaseScope(id);
       return;
     }
@@ -737,7 +758,12 @@ export function useAppController(
       if (!isCurrent(generation)) return;
       const document = stateRef.current.tabs.find((tab) => tab.id === id);
       if (saved && document?.status === "clean" && !document.pendingSave) {
-        const next = dispatch({ type: "closeConfirmed", id, disposition: "saved" });
+        const next = dispatch({
+          type: "closeConfirmed",
+          id,
+          disposition: "saved",
+          pathPlatform: PATH_PLATFORM,
+        });
         if (!next.tabs.some((tab) => tab.id === id)) releaseScope(id);
         setCloseDocumentId(null);
       }
@@ -752,7 +778,7 @@ export function useAppController(
   const reopenClosed = useCallback(() => {
     const reopeningId = stateRef.current.recentlyClosed[0]?.document.id;
     const before = stateRef.current;
-    const next = dispatch({ type: "reopenLastClosed" });
+    const next = dispatch({ type: "reopenLastClosed", pathPlatform: PATH_PLATFORM });
     if (!reopeningId) return;
     const added = next.tabs.find(
       (tab) =>
@@ -883,7 +909,12 @@ export function useAppController(
       // Dirty/conflicted tabs keep their path (and watch) so the user's
       // buffer stays saveable at the location it was opened from.
       if (!tab || tab.status !== "clean" || tab.pendingSave) return;
-      const next = dispatch({ type: "externalMoved", from: event.from, to: event.to });
+      const next = dispatch({
+        type: "externalMoved",
+        from: event.from,
+        to: event.to,
+        pathPlatform: PATH_PLATFORM,
+      });
       const moved = next.tabs.find((candidate) => candidate.id === tab.id);
       if (
         moved &&
@@ -1077,7 +1108,7 @@ export function useAppController(
           for (const entry of session.recent) {
             if (!merged.some(
               (existing) =>
-                normalizePathKey(existing.path) === normalizePathKey(entry.path),
+                normalizePathKey(existing.path, PATH_PLATFORM) === normalizePathKey(entry.path, PATH_PLATFORM),
             )) {
               merged.push(entry);
             }
@@ -1215,7 +1246,12 @@ export function useAppController(
       if (!isCurrent(generation)) return;
       const id = nextId();
       const before = stateRef.current;
-      const next = dispatch({ type: "documentRestored", id, draft });
+      const next = dispatch({
+        type: "documentRestored",
+        id,
+        draft,
+        pathPlatform: PATH_PLATFORM,
+      });
       const added = next.tabs.find(
         (tab) => tab.id === id && !before.tabs.some((tab) => tab.id === id),
       );
@@ -1281,7 +1317,7 @@ export function useAppController(
       if (caught instanceof DocumentPortError && caught.code === "not_found") {
         setRecent((current) =>
           current.filter(
-            (entry) => normalizePathKey(entry.path) !== normalizePathKey(item.path),
+            (entry) => normalizePathKey(entry.path, PATH_PLATFORM) !== normalizePathKey(item.path, PATH_PLATFORM),
           ),
         );
       }

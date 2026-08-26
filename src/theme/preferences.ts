@@ -138,17 +138,17 @@ export const clampEditorPreferences = (
 export const fontFamilyStack = (choice: string): string => {
   switch (choice) {
     case "serif":
-      return `"Source Han Serif SC", "Songti SC", Georgia, "Times New Roman", serif`;
+      return `"Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", Georgia, "Times New Roman", serif`;
     case "monospace":
-      return `"SF Mono", ui-monospace, Menlo, Consolas, monospace`;
+      return `"JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, monospace`;
     case "system":
-      return `-apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif`;
+      return `system-ui, -apple-system, "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Helvetica Neue", sans-serif`;
     default: {
       // A user-entered installed font name; quotes inside could break out of
       // the CSS string, so strip them — and control characters, which would
       // quietly invalidate the whole `font` declaration — before quoting.
       const safe = choice.replace(/["\\\x00-\x1F]/g, "");
-      return `"${safe}", -apple-system, "PingFang SC", sans-serif`;
+      return `"${safe}", system-ui, -apple-system, "Noto Sans SC", "PingFang SC", sans-serif`;
     }
   }
 };

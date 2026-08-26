@@ -1,4 +1,4 @@
-//! Native window background sync (src/theme/useTheme.ts).
+//! Native window background sync (src/theme/useTheme.ts), macOS-only.
 //!
 //! During live window resizes the WKWebView repaints a step behind the drag,
 //! so white flashes along the resized edge. Two layers need the canvas color:
@@ -12,6 +12,10 @@
 //! The frontend reports the resolved canvas color (`--canvas` in
 //! src/theme/tokens.css) whenever the theme changes; `lib.rs` also seeds the
 //! initial background with the dark default canvas before the first frame.
+//!
+//! Linux has no equivalent: the window is undecorated and carries no native
+//! menu bar (see lib.rs), so there is no native chrome left to theme and the
+//! module is compiled on macOS only.
 
 use tauri::window::Color;
 
@@ -43,7 +47,6 @@ pub fn parse_hex_color(input: &str) -> Result<Color, String> {
 /// background with the given opaque color. The under-page layer is what
 /// flashes during live resizes: AppKit paints it into newly exposed regions
 /// before the webview reflows and repaints.
-#[cfg(target_os = "macos")]
 pub(crate) fn apply_background(window: &tauri::WebviewWindow, color: Color) -> Result<(), String> {
     window
         .set_background_color(Some(color))
@@ -71,7 +74,6 @@ pub(crate) fn apply_background(window: &tauri::WebviewWindow, color: Color) -> R
 /// Sets the calling window's native background and its WKWebView under-page
 /// background to the given opaque hex color.
 #[tauri::command]
-#[cfg(target_os = "macos")]
 pub fn set_window_background(window: tauri::WebviewWindow, color: String) -> Result<(), String> {
     apply_background(&window, parse_hex_color(&color)?)
 }

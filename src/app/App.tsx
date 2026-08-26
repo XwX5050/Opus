@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
+import { detectPathPlatform } from "../document/platform";
 import type { DocumentPort } from "../document/DocumentPort";
 import { createTauriDocumentPort, restoreWindowGeometry } from "../document/tauriDocumentPort";
 import type { PersistedSession } from "../document/types";
@@ -93,7 +94,10 @@ const createDemoPort = async (params: URLSearchParams): Promise<DocumentPort> =>
     workspacePath: withWorkspace ? "/demo" : null,
     theme: normalizeThemePreference(params.get("theme") ?? undefined),
   };
-  return new MemoryDocumentPort(files, { session });
+  return new MemoryDocumentPort(files, {
+    session,
+    pathPlatform: detectPathPlatform(),
+  });
 };
 
 /**

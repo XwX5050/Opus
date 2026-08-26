@@ -33,6 +33,31 @@ const sessionWith = (...paths: string[]): E2eFixtureSpec["session"] => ({
 
 const editorContent = (page: Page) => page.locator(".cm-content");
 
+/**
+ * Browser-shell tests run on macOS CI but also on Linux. CodeMirror's `Mod-`
+ * prefix maps to Meta on macOS and Control on Linux, so shortcut keys must
+ * pick the modifier for the running platform. Pure native contenteditable
+ * editing commands (word/line deletion) also differ per platform, so those
+ * tests branch their key sequences while asserting the same final document.
+ */
+const isMac = process.platform === "darwin";
+const modKey = isMac ? "Meta" : "Control";
+/** `mod+s`, `mod+f`, `mod+v`, ... — the platform's primary shortcut. */
+const modShortcut = (key: string) => `${modKey}+${key}`;
+/**
+ * Redo. CodeMirror binds `Mod-y` everywhere and also `Mod-Shift-z` (mac) /
+ * `Ctrl-Shift-z` (linux). The `Ctrl-Shift-z` variant is unreliable in Chromium
+ * on Linux (the browser's native editing layer reverts the document past the
+ * last undo), so Linux uses the equally-bound `Ctrl+y`.
+ */
+const redoShortcut = isMac ? "Meta+Shift+z" : "Control+y";
+/** Delete the word before the caret (browser-native editing commands). */
+const deleteWordBackward = isMac ? "Alt+Backspace" : "Control+Backspace";
+/** Delete the word after the caret (browser-native editing commands). */
+const deleteWordForward = isMac ? "Alt+Delete" : "Control+Delete";
+/** Delete everything before the caret back to the start of the line. */
+const deleteToLineStart = isMac ? "Meta+Backspace" : "Control+Shift+Backspace";
+
 const tableDocumentSource = [
   "Before untouched",
   "",
@@ -129,7 +154,7 @@ test("keeps successive IME updates in one composition range", async ({
     await cdp.send("Input.insertText", { text: "炒" });
     await expect(line).toContainText("番茄炒蛋");
 
-    await page.keyboard.press("Meta+s");
+    await page.keyboard.press(modShortcut("s"));
     const writes = await page.evaluate(() =>
       (window.__E2E_PORT__?.writes ?? []).map((write) => write.text),
     );
@@ -170,7 +195,7 @@ test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
   await editorContent(page).click();
   await page.keyboard.type(" edited");
   await expect(page.locator(".tab-dirty")).toHaveCount(1);
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press(modShortcut("s"));
   await expect(page.locator(".tab-dirty")).toHaveCount(0);
 
   const writes = await page.evaluate(() =>
@@ -292,12 +317,12 @@ test("types and pastes plain text into a Markdown table and saves exact source",
     navigator.clipboard.writeText("<b>x|y</b>\n下一行"),
   );
   await clickEditableTableCell(markdownTableCell(page, 3));
-  await page.keyboard.press("Meta+v");
+  await page.keyboard.press(modShortcut("v"));
   await expect(markdownTableCell(page, 3))
     .toHaveText("old<b>x|y</b> 下一行");
   await expect(markdownTableCell(page, 3).locator("*")).toHaveCount(0);
 
-  await markdownTableCell(page, 3).press("Meta+s");
+  await markdownTableCell(page, 3).press(modShortcut("s"));
   await expect(page.locator(".tab-dirty")).toHaveCount(0);
   const expected = [
     "Before untouched",
@@ -347,24 +372,24 @@ test("deletes table-cell text with browser-supported native shortcuts and saves 
 
   await clickEditableTableCell(markdownTableCell(page, 8));
   await placeTableCaret(markdownTableCell(page, 8), 5);
-  await page.keyboard.press("Alt+Backspace");
+  await page.keyboard.press(deleteWordBackward);
   await expect(markdownTableCell(page, 8)).toHaveText("");
 
   await clickEditableTableCell(markdownTableCell(page, 9));
   await placeTableCaret(markdownTableCell(page, 9), 0);
-  await page.keyboard.press("Alt+Delete");
+  await page.keyboard.press(deleteWordForward);
   await expect(markdownTableCell(page, 9)).toHaveText("");
 
   await clickEditableTableCell(markdownTableCell(page, 10));
   await placeTableCaret(markdownTableCell(page, 10), 7);
-  await page.keyboard.press("Meta+Backspace");
+  await page.keyboard.press(deleteToLineStart);
   await expect(markdownTableCell(page, 10)).toHaveText("");
 
   // Chromium does not natively implement Meta+Delete in contenteditable; the
   // table widget unit contract covers event ownership, and packaged WKWebView
   // acceptance must verify its mutation manually.
 
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press(modShortcut("s"));
   await expect(page.locator(".tab-dirty")).toHaveCount(0);
   const expected = [
     "Before untouched",
@@ -408,7 +433,7 @@ test("clicking a reading-mode Markdown table body cell enters editing and saves 
   await page.keyboard.press("Tab");
   await expect(markdownTableCell(page, 3)).toBeFocused();
 
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press(modShortcut("s"));
   await expect(page.locator(".tab-dirty")).toHaveCount(0);
   const expected = [
     "Before untouched",
@@ -458,20 +483,20 @@ test("navigates, appends, undoes, redoes, saves, and reads a Markdown table", as
   await expect(table.locator("th, td")).toHaveCount(6);
   await expect(markdownTableCell(page, 4)).toBeFocused();
 
-  await page.keyboard.press("Meta+z");
+  await page.keyboard.press(modShortcut("z"));
   await expect(table.locator("tbody tr")).toHaveCount(1);
   await expect(table.locator("th, td")).toHaveCount(4);
   await expect(markdownTableCell(page, 2)).toHaveText("Ada|中文");
   await expect(markdownTableCell(page, 3)).toHaveText("old");
 
   await content.focus();
-  await page.keyboard.press("Meta+Shift+z");
+  await page.keyboard.press(redoShortcut);
   await expect(table.locator("tbody tr")).toHaveCount(2);
   await expect(table.locator("th, td")).toHaveCount(6);
   await expect(content).toBeFocused();
   await expect(markdownTableCell(page, 2)).toHaveText("Ada|中文");
 
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press(modShortcut("s"));
   await expect(page.locator(".tab-dirty")).toHaveCount(0);
   const expected = [
     "Before untouched",
@@ -688,7 +713,7 @@ test("finds and replaces text in the current document", async ({ page }) => {
   const content = editorContent(page);
   await content.waitFor();
   await content.click();
-  await page.keyboard.press("Meta+f");
+  await page.keyboard.press(modShortcut("f"));
   const panel = page.locator(".cm-panel.cm-search");
   await panel.waitFor();
   await panel.locator('input[name="search"]').fill("foo");

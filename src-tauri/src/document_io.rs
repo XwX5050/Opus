@@ -318,6 +318,9 @@ pub fn write_document(
         drop(temporary_file);
         fs::rename(&temporary_path, &destination)
             .map_err(|error| map_io_error(&destination, error))?;
+        // Without the directory fsync a crash could roll back the rename on
+        // delayed-allocation filesystems (ext4/xfs), losing the new content.
+        sync_parent_directory(&destination)?;
 
         Ok(modified_unix_ms)
     })();
@@ -352,7 +355,11 @@ pub fn write_image_bytes(path: &Path, bytes: &[u8]) -> Result<(), DocumentIoErro
             .sync_all()
             .map_err(|error| map_io_error(&destination, error))?;
         drop(temporary_file);
-        fs::rename(&temporary_path, &destination).map_err(|error| map_io_error(&destination, error))
+        fs::rename(&temporary_path, &destination)
+            .map_err(|error| map_io_error(&destination, error))?;
+        // Same durability rule as document writes: fsync the directory so the
+        // rename survives a crash.
+        sync_parent_directory(&destination)
     })();
 
     if result.is_err() {

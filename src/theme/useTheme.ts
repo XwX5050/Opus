@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { detectPathPlatform } from "../document/platform";
 import {
   fontFamilyStack,
   resolveTheme,
@@ -60,14 +61,19 @@ export function useTheme(
     const root = document.documentElement;
     root.dataset.theme = resolved;
 
-    // Inside the Tauri webview, keep the native window background in sync
-    // with the resolved canvas color: WKWebView repaints lag behind live
-    // window resizes, so a mismatched NSWindow background would flash along
-    // the resized edge. `--canvas` is read after `data-theme` is applied so
-    // it reflects the resolved theme; this is a no-op in the browser, the
+    // Inside the Tauri webview on macOS, keep the native window background
+    // in sync with the resolved canvas color: WKWebView repaints lag behind
+    // live window resizes, so a mismatched NSWindow background would flash
+    // along the resized edge. Linux has no native chrome left to theme (the
+    // window is undecorated and no menu bar is installed), so the command
+    // exists on macOS only. `--canvas` is read after `data-theme` is applied
+    // so it reflects the resolved theme; this is a no-op in the browser, the
     // dev demo, and jsdom tests. This lives in its own effect so unrelated
     // editor-preference changes never re-sync the native window.
-    if ("__TAURI_INTERNALS__" in window) {
+    if (
+      "__TAURI_INTERNALS__" in window &&
+      detectPathPlatform() === "macos"
+    ) {
       const canvas = getComputedStyle(document.documentElement)
         .getPropertyValue("--canvas")
         .trim();

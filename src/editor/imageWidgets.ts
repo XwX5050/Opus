@@ -300,7 +300,7 @@ const imageWidgetsTheme = EditorView.baseTheme({
   ".md-image": { maxWidth: "100%", maxHeight: "24em" },
   ".md-image-broken-indicator": {
     color: "var(--danger)",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
     border: "1px dashed var(--danger)",
     borderRadius: "0.2em",
     padding: "0 0.25em",

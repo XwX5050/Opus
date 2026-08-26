@@ -1,18 +1,32 @@
 pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
+#[cfg(target_os = "macos")]
 pub mod fonts;
+#[cfg(target_os = "linux")]
+pub mod linux_env;
+// Native menu bar is macOS-only: Linux runs with no native chrome at all
+// (no CSD header bar, no menu bar), so no menu is built or installed there.
+#[cfg(target_os = "macos")]
 pub mod menu;
 pub mod open_events;
 pub mod perf_mark;
 pub mod recovery;
 pub mod translate;
 pub mod watch;
+#[cfg(target_os = "macos")]
 pub mod window_background;
 pub mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Normalize the Linux session environment before any GTK/WebKit
+    // initialization: GTK reads GDK_BACKEND at gtk_init and WKWebView reads
+    // WEBKIT_DISABLE_DMABUF_RENDERER when it creates its backend, both inside
+    // the Tauri builder below, so this must run first.
+    #[cfg(target_os = "linux")]
+    linux_env::apply();
+
     use std::sync::{Arc, Mutex};
     use tauri::{Emitter, Listener, Manager};
     let open_queue = Arc::new(Mutex::new(open_events::OpenPathQueue::default()));
@@ -54,11 +68,11 @@ pub fn run() {
             window_background::set_window_background
         ])
         .setup(move |app| {
-            // Seed the native window and WKWebView under-page layer with the
-            // dark default canvas before the webview renders: both default to
-            // white and flash along the resized edge while WKWebView repaints
-            // lag behind live resizes. useTheme keeps them in sync with the
-            // resolved theme via set_window_background.
+            // Seed the native chrome with the dark default canvas before the
+            // webview renders: the NSWindow/WKWebView underlying background
+            // (both default to white and flash along the resized edge).
+            // useTheme keeps it in sync with the resolved theme via
+            // set_window_background.
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window_background::apply_background(
@@ -67,16 +81,30 @@ pub fn run() {
                         .expect("default canvas is a valid hex color"),
                 );
             }
-            app.set_menu(menu::build_menu(app.handle())?)?;
-            app.on_menu_event(move |app_handle, event| {
-                let id: &str = event.id().as_ref();
-                // Predefined items (about, undo, copy, …) also arrive here but
-                // are handled natively; only the custom `menu.*` ids are
-                // forwarded so the frontend never has to filter them out.
-                if id.starts_with("menu.") {
-                    let _ = app_handle.emit("menu-action", id);
-                }
-            });
+            // Linux runs without any native chrome: the window is undecorated
+            // (tiling-WM users drive it with their WM; the CSD header bar's
+            // title and window buttons are useless) and no menu bar is
+            // installed below. The setup hook runs before the event loop maps
+            // the window, so dropping decorations here applies ahead of the
+            // first frame with no header-bar flash.
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_decorations(false);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                app.set_menu(menu::build_menu(app.handle())?)?;
+                app.on_menu_event(move |app_handle, event| {
+                    let id: &str = event.id().as_ref();
+                    // Predefined items (about, undo, copy, …) also arrive here
+                    // but are handled natively; only the custom `menu.*` ids
+                    // are forwarded so the frontend never has to filter them
+                    // out.
+                    if id.starts_with("menu.") {
+                        let _ = app_handle.emit("menu-action", id);
+                    }
+                });
+            }
             let initial = open_events::normalize_open_paths(std::env::args().skip(1));
             setup_queue
                 .lock()

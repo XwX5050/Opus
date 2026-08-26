@@ -185,7 +185,7 @@ describe("fontFamilyStack", () => {
 
   it("strips control characters that would invalidate the font declaration", () => {
     expect(fontFamilyStack("Evil\nFont")).toBe(
-      '"EvilFont", -apple-system, "PingFang SC", sans-serif',
+      '"EvilFont", system-ui, -apple-system, "Noto Sans SC", "PingFang SC", sans-serif',
     );
     expect(fontFamilyStack("Line\rBreak")).toContain('"LineBreak"');
     expect(fontFamilyStack("Tab\tFont")).not.toContain("\t");

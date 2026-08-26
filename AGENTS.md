@@ -15,7 +15,7 @@ Rust/Tauri backend.
 - Bundle identifier: `com.xiongweini.markdown-edit`
 - Version: `0.1.10` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
-- Target platform: macOS 12+ (Apple Silicon first)
+- Target platform: macOS 12+ (Apple Silicon first) and Linux (WebKitGTK)
 - UI language: Chinese (`zh-CN`); code, comments, and docs are in English
 - License: MIT
 
@@ -54,7 +54,7 @@ Rust/Tauri backend.
 │   ├── conflict/           # External-change conflict dialog
 │   └── recovery/           # Crash-recovery drafts and UI
 ├── src-tauri/src/          # Rust backend
-│   ├── lib.rs              # Tauri builder: plugins, commands, menu, open/drop events
+│   ├── lib.rs              # Tauri builder: plugins, commands, macOS menu, open/drop events
 │   ├── document_io.rs      # Lossless atomic file reads/writes
 │   ├── document_commands.rs# Tauri commands for documents/images/scopes
 │   ├── workspace.rs        # Directory listing and workspace mutations
@@ -65,6 +65,7 @@ Rust/Tauri backend.
 │   ├── open_events.rs      # Deep-link / drag-drop / argv normalization
 │   ├── menu.rs             # Native macOS menu bar
 │   ├── fonts.rs            # Installed-font enumeration (Core Text, macOS-only)
+│   ├── linux_env.rs        # Linux-only pre-init env (Wayland backend, DMA-BUF)
 │   ├── perf_mark.rs        # Startup instrumentation hook
 │   └── window_background.rs# Native window/webview background sync
 ├── src-tauri/tests/        # Rust integration tests
@@ -84,7 +85,11 @@ Rust/Tauri backend.
   (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings
   dialog (`SettingsDialog.tsx`), tab bar (`TabList.tsx`), automatic
   performance-mode hook (`usePerformanceMode.ts`), in-app update checks
-  (`updates.ts`), and the E2E fixture bridge (`e2e.ts`).
+  (`updates.ts`), and the E2E fixture bridge (`e2e.ts`). The header is
+  platform-specific: macOS keeps the native menu bar (so the header stays
+  minimal) while Linux native gets a file-icon dropdown next to the sidebar
+  toggle plus frontend keybindings (Ctrl+N/O/Shift+O/S/Shift+S/W/,) replacing
+  the native menu accelerators (see `AppShell.linuxHeader.test.tsx`).
 - `src/document/`: the `DocumentPort` contract (`DocumentPort.ts`), pure
   document reducer (`documentReducer.ts`), shared types (`types.ts`), and two
   implementations:
@@ -101,7 +106,17 @@ Rust/Tauri backend.
   `@codemirror/search`), frontmatter, highlight markers, and performance
   (light) mode (`performanceMode.ts`). `viewMode.ts` defines the per-tab
   modes: `editing` (live preview, selection reveals source) and `reading`
-  (read-only, fully rendered).
+  (read-only, fully rendered). On Linux (WebKitGTK), IME compositions are
+  protected by a patch-package patch (`patches/@codemirror+view+*.patch`,
+  applied via the `postinstall` script) that stops CodeMirror from rewriting
+  the DOM selection mid-composition — without it, fcitx5's preedit caret gets
+  pinned after the first letter. The platform also never renders a caret
+  inside the marked text and reports a bogus selection offset during
+  composition, so `imeCaret.ts` hides the drawn caret layer while composing
+  and positions its own caret at the end of the preedit text node. Editor
+  extensions must never dispatch transactions synchronously during
+  composition (live preview/math decorations freeze instead and recompute at
+  `compositionend`).
 - `src/motion/`: GSAP-based animation. `motionConfig.ts` holds the shared
   timing/easing tokens; `motionRuntime.ts` provides panel/dialog/list intro
   helpers that honor `prefers-reduced-motion`; `editorMotion.ts` animates
@@ -146,10 +161,24 @@ Rust/Tauri backend.
 - `src-tauri/src/fonts.rs`: macOS-only `list_installed_fonts` command backed
   by Core Text; WKWebView has no `queryLocalFonts`, so the settings dialog's
   font picker gets family names from the native side.
-- `src-tauri/src/window_background.rs`: paints the NSWindow background and the
-  WKWebView under-page background with the resolved `--canvas` color so live
-  resizes never flash white; seeded dark at startup, synced from `useTheme` on
-  every theme change.
+- `src-tauri/src/window_background.rs`: macOS-only; paints the NSWindow
+  background and the WKWebView under-page background with the resolved
+  `--canvas` color so live resizes never flash white; seeded dark at startup,
+  synced from `useTheme` on every theme change. Linux has no native chrome to
+  theme: the window runs without decorations and no GTK menu bar is installed
+  (both removed because the extra titlebar/menu layers were redundant under
+  tiling compositors), so the module compiles away there.
+- `src-tauri/src/linux_env.rs`: Linux-only, runs before any GTK/WebKit init in
+  `run()`. The Tauri-generated AppImage launcher force-exports
+  `GDK_BACKEND=x11` (linuxdeploy GTK hook), which strands the app on XWayland
+  where pointer grabs mid-drag break and freeze the UI (observed under niri);
+  it therefore resets `GDK_BACKEND` to `wayland,x11` on Wayland sessions
+  (`OPUS_FORCE_X11` opts out) and defaults `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+  because the NVIDIA/GBM DMA-BUF path renders blank webviews there. On Linux,
+  `src/main.tsx` also suppresses in-webview HTML5 `dragstart` entirely — every
+  in-page native drag takes a WebKitGTK seat grab that can wedge the app;
+  external file drops are unaffected. Panel drag-resize never uses
+  `setPointerCapture` for the same reason (see `AppShell.tsx`).
 
 ## Port selection and runtime modes
 
@@ -192,8 +221,11 @@ npm run build            # tsc -b && vite build -> dist/
 Native app build:
 
 ```sh
-npm run tauri build -- --bundles app         # -> src-tauri/target/release/bundle/macos/Opus.app
+npm run tauri build -- --bundles app         # macOS -> src-tauri/target/release/bundle/macos/Opus.app
 npm run tauri build -- --bundles app,dmg     # also produce a DMG
+NO_STRIP=1 npm run tauri build -- --bundles appimage    # Linux -> src-tauri/target/release/bundle/appimage/
+# (NO_STRIP=1: linuxdeploy's bundled strip predates RELR and fails on
+#  bleeding-edge distro libraries, e.g. CachyOS/.relr.dyn sections)
 ```
 
 Automated testing:

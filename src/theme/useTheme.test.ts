@@ -60,6 +60,14 @@ const installMatchMedia = (systemDark: boolean, reducedMotion: boolean) => {
 
 const systemQuery = () => queries.get("(prefers-color-scheme: dark)")!;
 
+const originalUserAgent = navigator.userAgent;
+
+const stubUserAgent = (value: string) =>
+  Object.defineProperty(window.navigator, "userAgent", {
+    value,
+    configurable: true,
+  });
+
 const Probe = ({
   preference,
   editorPreferences = DEFAULT_EDITOR_PREFERENCES,
@@ -86,6 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  stubUserAgent(originalUserAgent);
 });
 
 describe("useTheme", () => {
@@ -179,6 +188,9 @@ describe("useTheme", () => {
   it("syncs the native window background only when the resolved theme changes", () => {
     installMatchMedia(true, false);
     vi.stubGlobal("__TAURI_INTERNALS__", {});
+    // The native background sync is macOS-only; the jsdom UA reflects the
+    // host OS (Linux in CI), so pin a macOS UA for the sync to engage.
+    stubUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
     // `--canvas` normally comes from app.css (not loaded in jsdom); pin a
     // value so the background-sync IPC is observable.
     document.documentElement.style.setProperty("--canvas", "#101014");
@@ -210,5 +222,17 @@ describe("useTheme", () => {
       "set_window_background",
       { color: "#101014" },
     );
+  });
+
+  it("never syncs the native window background on Linux", () => {
+    installMatchMedia(true, false);
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    stubUserAgent("Mozilla/5.0 (X11; Linux x86_64)");
+    document.documentElement.style.setProperty("--canvas", "#101014");
+
+    // Linux runs undecorated with no native menu bar, so the
+    // set_window_background command is registered on macOS only.
+    renderProbe("dark");
+    expect(tauriMocks.invoke).not.toHaveBeenCalled();
   });
 });
