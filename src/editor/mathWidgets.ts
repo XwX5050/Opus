@@ -297,7 +297,11 @@ class MathWidgetsPlugin {
     if (!this.composingRanges.length) {
       this.composingRanges = selectedMathRanges(view.state);
     }
-    view.dispatch({ effects: refreshMathWidgets.of(null) });
+    // Deliberately no refresh dispatch here: a synchronous update during
+    // compositionstart rebuilds content DOM and resets the selection,
+    // which breaks the composing caret under WebKitGTK (fcitx5). The
+    // formula under the caret is already revealed by the selection; the
+    // captured ranges are picked up by the next update.
   }
 
   endComposition(view: EditorView) {
@@ -343,7 +347,7 @@ const mathWidgetsTheme = EditorView.baseTheme({
   },
   ".md-math-error": {
     color: "var(--danger)",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
     textDecoration: "underline wavy",
   },
 });

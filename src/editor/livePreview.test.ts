@@ -572,41 +572,66 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
-  it("temporarily reveals source during composition and restores preview afterward", () => {
+  it("keeps decorations and content DOM untouched when a composition starts", () => {
+    // Regression: a synchronous dispatch at compositionstart rebuilt the
+    // content DOM and forced a selection reset mid-composition, which pins
+    // the composing caret under WebKitGTK/fcitx5 (caret stuck after the
+    // first letter). Composition must not touch the editor DOM at all.
+    const view = createView();
+    const line = view.contentDOM.querySelector(".cm-line");
+    const lineText = line?.firstChild;
+    expect(view.contentDOM.textContent).not.toContain("**");
+
+    const dispatch = vi.spyOn(view, "dispatch");
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(view.contentDOM.querySelector(".cm-line")).toBe(line);
+    expect(view.contentDOM.querySelector(".cm-line")?.firstChild).toBe(lineText);
+    expect(view.contentDOM.textContent).not.toContain("**");
+
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(view.contentDOM.textContent).not.toContain("**");
+    view.destroy();
+  });
+
+  it("keeps decorations frozen and mapped through composition document updates", () => {
     const view = createView();
     view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    // A change before the bold span must shift the frozen decorations
+    // instead of clearing them: the markers stay hidden at their new
+    // offsets and no source is revealed mid-composition.
+    view.dispatch({ changes: { from: 0, insert: "中文" } });
+    expect(view.state.doc.toString()).toBe("中文**world** rest");
+    expect(view.contentDOM.textContent).not.toContain("**");
+    expect(view.dom.querySelector(".cm-live-preview-strong")).not.toBeNull();
+
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(view.contentDOM.textContent).not.toContain("**");
+    expect(view.dom.querySelector(".cm-live-preview-strong")).not.toBeNull();
+    view.destroy();
+  });
+
+  it("reveals only the caret's own structure during composition, not the whole document", () => {
+    const doc = "**world** rest";
+    const view = createView(doc);
+    // Caret inside the strong node: its source is revealed by the
+    // selection, which is what the composition types into.
+    view.dispatch({ selection: { anchor: 4 } });
     expect(view.contentDOM.textContent).toContain("**world**");
-    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    expect(view.contentDOM.textContent).not.toContain("**");
-    view.destroy();
-  });
 
-  it("temporarily reveals highlight source during composition and restores it afterward", () => {
-    const view = createView("==重点== outside");
-    expect(view.contentDOM.textContent).not.toContain("==");
-    expect(view.dom.querySelector(".cm-live-preview-highlight")).not.toBeNull();
-
-    view.contentDOM.dispatchEvent(
-      new CompositionEvent("compositionstart", { bubbles: true }),
-    );
-    expect(view.contentDOM.textContent).toContain("==重点==");
-
-    view.contentDOM.dispatchEvent(
-      new CompositionEvent("compositionend", { bubbles: true }),
-    );
-    expect(view.contentDOM.textContent).not.toContain("==");
-    expect(view.dom.querySelector(".cm-live-preview-highlight")).not.toBeNull();
-    view.destroy();
-  });
-
-  it("keeps decorations disabled through composition document updates", () => {
-    const view = createView();
+    const dispatch = vi.spyOn(view, "dispatch");
     view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    view.dispatch({ changes: { from: 2, to: 7, insert: "中文" } });
-    expect(view.state.doc.toString()).toBe("**中文** rest");
-    expect(view.contentDOM.textContent).toContain("**中文**");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(view.contentDOM.textContent).toContain("**world**");
+
+    view.dispatch({ changes: { from: 4, insert: "中" } });
+    expect(view.state.doc.toString()).toBe("**wo中rld** rest");
+    expect(view.contentDOM.textContent).toContain("**wo中rld**");
+
     view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    expect(view.contentDOM.textContent).not.toContain("**");
+    // The caret sits inside the strong node, so its source stays revealed.
+    expect(view.contentDOM.textContent).toContain("**wo中rld**");
     view.destroy();
   });
 

@@ -730,20 +730,23 @@ class LivePreviewPlugin {
 
   constructor(view: EditorView, private readonly options?: LivePreviewOptions) {
     this.composing = view.compositionStarted;
-    if (this.composing) {
-      this.decorations = Decoration.none;
-      this.atomicRanges = Decoration.none;
-    } else {
-      const sets = decorationSetsFor(view.state, planningRanges(view), this.options);
-      this.decorations = sets.decorations;
-      this.atomicRanges = sets.atomicRanges;
-    }
+    const sets = decorationSetsFor(view.state, planningRanges(view), this.options);
+    this.decorations = sets.decorations;
+    this.atomicRanges = sets.atomicRanges;
   }
 
   update(update: ViewUpdate) {
     if (this.composing) {
-      this.decorations = Decoration.none;
-      this.atomicRanges = Decoration.none;
+      // While an IME composition is active the decorations are frozen:
+      // recomputing or clearing them rebuilds content DOM and forces a
+      // selection reset, which breaks the composing caret under WebKitGTK
+      // (fcitx5 pins it after the first letter). Mapping through the
+      // document changes keeps the frozen set at the right offsets
+      // without touching the DOM.
+      if (update.docChanged) {
+        this.decorations = this.decorations.map(update.changes);
+        this.atomicRanges = this.atomicRanges.map(update.changes);
+      }
       return;
     }
     const syntaxChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
@@ -763,12 +766,13 @@ class LivePreviewPlugin {
     }
   }
 
-  startComposition(view: EditorView) {
-    if (this.composing) return;
+  startComposition() {
+    // Deliberately no view.dispatch here: a synchronous update during
+    // compositionstart rebuilds content DOM and resets the selection,
+    // which WebKitGTK's IME integration cannot tolerate mid-composition.
+    // The source around the caret is already revealed by the selection,
+    // so the frozen decorations are safe to compose into.
     this.composing = true;
-    this.decorations = Decoration.none;
-    this.atomicRanges = Decoration.none;
-    view.dispatch({ effects: refreshLivePreview.of(null) });
   }
 
   endComposition(view: EditorView) {
@@ -794,11 +798,11 @@ const livePreviewPlugin = (options?: LivePreviewOptions) =>
           (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none,
         ),
       eventHandlers: {
-        compositionstart(_event, view) {
-          this.startComposition(view);
+        compositionstart() {
+          this.startComposition();
         },
-        compositionupdate(_event, view) {
-          this.startComposition(view);
+        compositionupdate() {
+          this.startComposition();
         },
         compositionend(_event, view) {
           this.endComposition(view);
@@ -818,11 +822,11 @@ const livePreviewTheme = EditorView.baseTheme({
   ".cm-live-preview-emphasis": { fontStyle: "italic" },
   ".cm-live-preview-strikethrough": { textDecoration: "line-through" },
   ".cm-live-preview-inline-code, .cm-live-preview-code-block": {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
   },
   // Frontmatter reads as metadata: code-like but muted and smaller.
   ".cm-live-preview-frontmatter": {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
     fontSize: "0.85em",
     color: "var(--text-muted)",
   },

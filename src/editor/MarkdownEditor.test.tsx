@@ -813,17 +813,23 @@ describe("MarkdownEditor", () => {
     expect(atomicRanges(view)).toContainEqual({ from: 8, to: 10 });
   });
 
-  it("keeps source revealed when preview is toggled during composition", () => {
+  it("keeps the preview stable when the view mode toggles mid-composition", () => {
     const rendered = renderEditor({ value: "**world** rest", viewMode: "editing" });
     moveToEnd();
     content().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    expect(content()).toHaveTextContent("**world**");
+    // The caret sits outside the bold span, so its source stays hidden: the
+    // decorations are frozen at compositionstart rather than revealing
+    // everything — a mid-composition reveal rebuilds content DOM and breaks
+    // the composing caret under WebKitGTK/fcitx5.
+    expect(content()).toHaveTextContent("world rest");
 
     rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="reading" />);
     rendered.rerender(<MarkdownEditor {...rendered.props} viewMode="editing" />);
-    expect(content()).toHaveTextContent("**world**");
+    expect(content()).toHaveTextContent("world rest");
 
     content().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    // The caret is still outside the bold span, so the preview re-applies
+    // and keeps its source hidden.
     expect(content()).not.toHaveTextContent("**");
   });
 

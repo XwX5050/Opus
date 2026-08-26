@@ -1,0 +1,20 @@
+diff --git a/node_modules/@codemirror/view/dist/index.js b/node_modules/@codemirror/view/dist/index.js
+index 3ca4e26..c89fd24 100644
+--- a/node_modules/@codemirror/view/dist/index.js
++++ b/node_modules/@codemirror/view/dist/index.js
+@@ -3021,6 +3021,15 @@ class DocView {
+     }
+     // Sync the DOM selection to this.state.selection
+     updateSelection(mustRead = false, fromPointer = false) {
++        // [opus] While an IME composition is active, never force the editor
++        // state selection back into the DOM: WebKitGTK resolves the selection
++        // inside the marked (preedit) text imprecisely, and rewriting it pins
++        // the composition caret (observed with fcitx5: caret stuck after the
++        // first preedit letter). The DOM selection belongs to the IME until
++        // compositionend, after which `composing` drops below 0 and updates
++        // resume syncing the selection.
++        if (this.view.inputState.composing >= 0)
++            return;
+         if (mustRead || !this.view.observer.selectionRange.focusNode)
+             this.view.observer.readSelectionRange();
+         let { dom } = this.tile;

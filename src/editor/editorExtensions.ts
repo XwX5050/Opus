@@ -22,8 +22,10 @@ import {
   keymap,
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
+import { detectPathPlatform } from "../document/platform";
 import { frontmatterMarkdownExtension } from "./frontmatterExtension";
 import { highlightMarkdownExtension } from "./highlightExtension";
+import { imeCaretExtension } from "./imeCaret";
 import { mathMarkdownExtension } from "./mathExtension";
 
 export interface EditorCommands {
@@ -70,6 +72,13 @@ const openSearchPanelForReplace = (view: EditorView): boolean => {
   return true;
 };
 
+// The @codemirror/view patch (patches/@codemirror+view+*.patch, applied via
+// postinstall) stops the editor from rewriting the DOM selection while an IME
+// composition is active — under WebKitGTK that write-back pinned the fcitx5
+// preedit caret after the first letter. With the write-back gone, the drawn
+// selection is safe everywhere (it only reads state.selection), so
+// drawSelection stays enabled on all platforms.
+
 export const editorExtensions = (
   commands: EditorCommands,
   livePreview: Extension = [],
@@ -94,6 +103,8 @@ export const editorExtensions = (
     addKeymap: false,
   }),
   livePreview,
+  // WebKitGTK composition caret workaround; empty on other platforms.
+  imeCaretExtension(),
   search({ top: true }),
   keymap.of([
     {

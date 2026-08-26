@@ -13,7 +13,8 @@
     "perf:fixtures": "node scripts/generate-perf-fixtures.mjs",
     "perf": "node scripts/measure-editor.mjs",
     "perf:startup": "node scripts/measure-startup.mjs",
-    "check": "npm run test && npm run build && cargo test --manifest-path src-tauri/Cargo.toml"
+    "check": "npm run test && npm run build && cargo test --manifest-path src-tauri/Cargo.toml",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",
@@ -50,6 +51,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
     "jsdom": "^29.1.1",
+    "patch-package": "^8.0.1",
     "playwright": "^1.61.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
