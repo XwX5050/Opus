@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useGSAP } from "@gsap/react";
 import type { Text } from "@codemirror/state";
 import type { ClipboardImageInput, DocumentPort } from "../document/DocumentPort";
@@ -59,6 +59,18 @@ export type ImageDropSubscriber = (
   signal?: AbortSignal,
 ) => Promise<() => void>;
 
+// Live drag-resize state for the sidebar/outline handles. `frame` holds the
+// pending rAF id that coalesces width writes (null when no flush is queued);
+// `cleanup` detaches the window listeners, for unmount safety.
+type PanelDragState = {
+  pointerId: number;
+  startX: number;
+  startWidth: number;
+  lastWidth: number;
+  frame: number | null;
+  cleanup: () => void;
+};
+
 export type MenuActionSubscriber = (
   onAction: (action: string) => void,
   signal?: AbortSignal,
@@ -75,6 +87,13 @@ export interface AppShellProps {
    * production moves those actions into the macOS menu instead.
    */
   fileActionsInHeader?: boolean;
+  /**
+   * Linux native builds have no native menu bar or window title: the header
+   * drops the "Opus" title, shows a compact file-menu dropdown next to the
+   * sidebar toggle, and owns the menu keyboard shortcuts at the window level
+   * (routed through the same handler the macOS native menu drives).
+   */
+  linuxNativeHeader?: boolean;
   externalError?: string | null;
   onDismissExternalError?: () => void;
 }
@@ -155,6 +174,7 @@ export default function AppShell({
   subscribeToImageDrops = null,
   subscribeToMenuActions = null,
   fileActionsInHeader = true,
+  linuxNativeHeader = false,
   externalError = null,
   onDismissExternalError,
 }: AppShellProps) {
@@ -185,73 +205,153 @@ export default function AppShell({
   // Drag-resize writes the live width straight to the panel elements instead
   // of re-rendering the whole shell on every pointermove; the final width is
   // committed to the preferences (which persist the session) once, on
-  // pointerup or restored on pointercancel.
+  // pointerup, and the committed width is restored on pointercancel.
   const sidebarRailRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
-  const sidebarResizeRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startWidth: number;
-    lastWidth: number;
-  } | null>(null);
+  const sidebarResizeRef = useRef<PanelDragState | null>(null);
   const outlineRailRef = useRef<HTMLDivElement>(null);
   const outlineRef = useRef<HTMLElement>(null);
-  const outlineResizeRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startWidth: number;
-    lastWidth: number;
-  } | null>(null);
-  // Sidebar drag-resize: pointer capture keeps move/up events on the handle
-  // even when the pointer leaves it; width is clamped on every move and
-  // applied to the panel DOM directly, so dragging never re-renders the shell.
-  const applyDragWidth = (
-    rail: HTMLDivElement | null,
-    panel: HTMLElement | null,
-    width: number,
+  const outlineResizeRef = useRef<PanelDragState | null>(null);
+  // Move/up/cancel are tracked on window listeners registered at pointerdown
+  // rather than on the handle element: WebKitGTK under Wayland cannot be
+  // relied on to keep pointer capture, and a lost capture must never strand
+  // the resizing state (a stranded `*-resizing` body class freezes the UI).
+  //
+  // Width writes go straight to the rail/panel DOM (React stays out of the
+  // per-frame path) and are coalesced into one animation frame so a high-rate
+  // Wayland pointer cannot queue redundant layouts. Because the panel edge
+  // itself follows the pointer, the drag reads as a real resize rather than a
+  // detached divider floating over the editor.
+  const beginPanelResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    options: {
+      dragRef: RefObject<PanelDragState | null>;
+      railRef: RefObject<HTMLDivElement | null>;
+      panelRef: RefObject<HTMLElement | null>;
+      startWidth: number;
+      direction: 1 | -1;
+      setResizing: (resizing: boolean) => void;
+      commit: (width: number) => void;
+    },
   ) => {
-    if (rail) rail.style.width = `${width}px`;
-    if (panel) panel.style.width = `${width}px`;
-  };
-  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    sidebarResizeRef.current = {
+    const applyWidth = (width: number) => {
+      const rail = options.railRef.current;
+      const panel = options.panelRef.current;
+      if (rail !== null) rail.style.width = `${width}px`;
+      if (panel !== null) panel.style.width = `${width}px`;
+    };
+    const drag: PanelDragState = {
       pointerId: event.pointerId,
       startX: event.clientX,
-      startWidth: sidebar.width,
-      lastWidth: sidebar.width,
+      startWidth: options.startWidth,
+      lastWidth: options.startWidth,
+      frame: null,
+      cleanup: () => {},
     };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    setSidebarResizing(true);
+    const flush = () => {
+      drag.frame = null;
+      applyWidth(drag.lastWidth);
+    };
+    const scheduleFlush = () => {
+      if (drag.frame !== null) return;
+      if (typeof requestAnimationFrame === "function") {
+        drag.frame = requestAnimationFrame(flush);
+      } else {
+        flush();
+      }
+    };
+    const finish = (commit: boolean) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("lostpointercapture", onCancel);
+      window.removeEventListener("blur", onBlur);
+      if (drag.frame !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(drag.frame);
+      }
+      options.dragRef.current = null;
+      options.setResizing(false);
+      if (commit) {
+        options.commit(drag.lastWidth);
+      } else {
+        // A cancelled drag puts the committed width back: the live writes
+        // went straight to the DOM, so React never knew about them.
+        applyWidth(drag.startWidth);
+      }
+    };
+    const onMove = (move: PointerEvent) => {
+      if (move.pointerId !== drag.pointerId) return;
+      // `buttons === 0` means the button was released but the matching
+      // pointerup never arrived — a real failure mode where XWayland loses
+      // the grab mid-drag and motion/up events vanish (the grab transfer
+      // tears down the GTK seat, stranding the resizing state). Rather than
+      // leave the app frozen, unstrand by committing the current width.
+      if (move.buttons === 0) {
+        finish(true);
+        return;
+      }
+      drag.lastWidth = clampSidebarWidthToWindow(
+        drag.startWidth + options.direction * (move.clientX - drag.startX),
+        window.innerWidth,
+      );
+      scheduleFlush();
+    };
+    const onUp = (up: PointerEvent) => {
+      if (up.pointerId !== drag.pointerId) return;
+      finish(true);
+    };
+    const onCancel = (cancel: Event) => {
+      if (
+        cancel instanceof PointerEvent &&
+        cancel.pointerId !== drag.pointerId
+      ) {
+        return;
+      }
+      finish(false);
+    };
+    // Losing window focus mid-drag (Alt-Tab, an OS-level overlay, a Wayland
+    // window that steals the seat) can swallow the remaining pointer events
+    // too; cancel so the resizing state never strands the UI.
+    const onBlur = () => {
+      finish(false);
+    };
+    drag.cleanup = () => finish(false);
+    options.dragRef.current = drag;
+    // No setPointerCapture on purpose: WebKitGTK on wlroots compositors
+    // (niri) wedges the GTK seat grab when the webview captures the pointer,
+    // freezing all input. The window listeners above make capture redundant.
+    options.setResizing(true);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("lostpointercapture", onCancel);
+    window.addEventListener("blur", onBlur);
   };
-  const moveSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = sidebarResizeRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    const width = clampSidebarWidthToWindow(
-      drag.startWidth + (event.clientX - drag.startX),
-      window.innerWidth,
-    );
-    drag.lastWidth = width;
-    applyDragWidth(sidebarRailRef.current, sidebarRef.current, width);
-  };
-  const endSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = sidebarResizeRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    sidebarResizeRef.current = null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    setSidebarResizing(false);
-    if (drag.lastWidth !== sidebar.width) {
-      setSidebar((current) => ({ ...current, width: drag.lastWidth }));
-    }
-  };
-  const cancelSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = sidebarResizeRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    sidebarResizeRef.current = null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    setSidebarResizing(false);
-    // A cancelled drag restores the committed width and persists nothing.
-    applyDragWidth(sidebarRailRef.current, sidebarRef.current, sidebar.width);
+  // If the shell unmounts mid-drag, release the listeners so nothing leaks.
+  useEffect(() => {
+    const sidebarDrag = sidebarResizeRef;
+    const outlineDrag = outlineResizeRef;
+    return () => {
+      sidebarDrag.current?.cleanup();
+      outlineDrag.current?.cleanup();
+    };
+  }, []);
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const committed = sidebar.width;
+    beginPanelResize(event, {
+      dragRef: sidebarResizeRef,
+      railRef: sidebarRailRef,
+      panelRef: sidebarRef,
+      startWidth: committed,
+      direction: 1,
+      setResizing: setSidebarResizing,
+      commit: (width) => {
+        if (width !== committed) {
+          setSidebar((current) => ({ ...current, width }));
+        }
+      },
+    });
   };
   const onSidebarResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = 16;
@@ -264,44 +364,20 @@ export default function AppShell({
     }));
   };
   const startOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    outlineResizeRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startWidth: outline.width,
-      lastWidth: outline.width,
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    setOutlineResizing(true);
-  };
-  const moveOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = outlineResizeRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    const width = clampSidebarWidthToWindow(
-      drag.startWidth + (drag.startX - event.clientX),
-      window.innerWidth,
-    );
-    drag.lastWidth = width;
-    applyDragWidth(outlineRailRef.current, outlineRef.current, width);
-  };
-  const endOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = outlineResizeRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    outlineResizeRef.current = null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    setOutlineResizing(false);
-    if (drag.lastWidth !== outline.width) {
-      setOutline({ width: drag.lastWidth });
-    }
-  };
-  const cancelOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = outlineResizeRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    outlineResizeRef.current = null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    setOutlineResizing(false);
-    // A cancelled drag restores the committed width and persists nothing.
-    applyDragWidth(outlineRailRef.current, outlineRef.current, outline.width);
+    const committed = outline.width;
+    beginPanelResize(event, {
+      dragRef: outlineResizeRef,
+      railRef: outlineRailRef,
+      panelRef: outlineRef,
+      startWidth: committed,
+      direction: -1,
+      setResizing: setOutlineResizing,
+      commit: (width) => {
+        if (width !== committed) {
+          setOutline({ width });
+        }
+      },
+    });
   };
   const onOutlineResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -853,6 +929,101 @@ export default function AppShell({
     };
   }, [subscribeToMenuActions]);
 
+  // Linux native header: a compact dropdown standing in for the removed
+  // native menu bar. It closes on Escape, on an outside pointerdown, and
+  // after choosing an item; focus moves into the menu on open and returns
+  // to the toggle on dismiss.
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const fileMenuAnchorRef = useRef<HTMLDivElement>(null);
+  const fileMenuButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!fileMenuOpen) return;
+    fileMenuAnchorRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]')
+      ?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      if (!fileMenuAnchorRef.current?.contains(event.target as Node)) {
+        setFileMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [fileMenuOpen]);
+
+  // Entry motion for the file menu; the helper honors prefers-reduced-motion.
+  useGSAP(
+    () => {
+      const root = shellRef.current;
+      if (!root || !fileMenuOpen) return;
+      const menu = root.querySelector<HTMLElement>(".file-menu");
+      if (menu) animatePanelIntro(menu);
+    },
+    { scope: shellRef, dependencies: [fileMenuOpen] },
+  );
+
+  const runFileMenuAction = (action: () => void) => {
+    setFileMenuOpen(false);
+    fileMenuButtonRef.current?.focus();
+    action();
+  };
+
+  const onFileMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const items = [
+      ...(fileMenuAnchorRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ) ?? []),
+    ];
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setFileMenuOpen(false);
+      fileMenuButtonRef.current?.focus();
+      return;
+    }
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      items[(current + delta + items.length) % items.length]?.focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      items.at(-1)?.focus();
+    }
+  };
+
+  // Linux native builds install no native menu bar, so its accelerators are
+  // re-bound at the window level and routed through the same handler the
+  // macOS menu drives (which gates them while a modal dialog is open).
+  // Chords the editor already owns — CodeMirror's Mod-s keymap calls
+  // preventDefault — are left to it, so nothing double-fires.
+  useEffect(() => {
+    if (!linuxNativeHeader) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (!event.ctrlKey || event.metaKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      let action: string | null = null;
+      if (event.shiftKey) {
+        if (key === "o") action = "menu.open_folder";
+        else if (key === "s") action = "menu.save_as";
+      } else if (key === "n") action = "menu.new";
+      else if (key === "o") action = "menu.open_files";
+      else if (key === "s") action = "menu.save";
+      else if (key === "w") action = "menu.close_tab";
+      else if (key === ",") action = "menu.settings";
+      if (action === null) return;
+      event.preventDefault();
+      setFileMenuOpen(false);
+      menuActionHandlerRef.current(action);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [linuxNativeHeader]);
+
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (anyDialogOpen) return;
     if (!(event.metaKey || event.ctrlKey)) return;
@@ -1025,9 +1196,84 @@ export default function AppShell({
             <PanelLeftIcon />
           </button>
         )}
-        <strong className="app-title" data-tauri-drag-region>
-          Opus
-        </strong>
+        {linuxNativeHeader && (
+          <div className="file-menu-anchor" ref={fileMenuAnchorRef}>
+            <button
+              ref={fileMenuButtonRef}
+              type="button"
+              className="icon-button file-menu-toggle"
+              aria-haspopup="menu"
+              aria-expanded={fileMenuOpen}
+              aria-controls="file-menu"
+              aria-label="文件"
+              title="文件"
+              onClick={() => setFileMenuOpen((open) => !open)}
+            >
+              <FileTextIcon size={20} />
+            </button>
+            {fileMenuOpen && (
+              <div
+                id="file-menu"
+                role="menu"
+                aria-label="文件"
+                className="file-menu"
+                onKeyDown={onFileMenuKeyDown}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runFileMenuAction(() => controller.newDocument())}
+                >
+                  新建
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runFileMenuAction(() => void controller.openFiles())}
+                >
+                  打开文件
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runFileMenuAction(openWorkspaceFromUser)}
+                >
+                  打开文件夹
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runFileMenuAction(() => void controller.saveAs(active?.id))}
+                >
+                  另存为…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    runFileMenuAction(() => {
+                      // Like the header settings button, remember the invoker
+                      // so the dialog can restore focus on close.
+                      previousFocusRef.current = fileMenuButtonRef.current;
+                      setSettingsRequested(true);
+                    })
+                  }
+                >
+                  设置
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {linuxNativeHeader ? (
+          // No window title on Linux (the native header bar is gone); the
+          // spacer keeps the right-side controls pinned to the far edge.
+          <span className="app-header-spacer" data-tauri-drag-region />
+        ) : (
+          <strong className="app-title" data-tauri-drag-region>
+            Opus
+          </strong>
+        )}
         {controller.state.tabs.length > 0 && (
           <>
             {fileActionsInHeader && (
@@ -1157,9 +1403,6 @@ export default function AppShell({
             tabIndex={0}
             className="sidebar-resizer"
             onPointerDown={startSidebarResize}
-            onPointerMove={moveSidebarResize}
-            onPointerUp={endSidebarResize}
-            onPointerCancel={cancelSidebarResize}
             onKeyDown={onSidebarResizerKeyDown}
           />
           )}
@@ -1355,9 +1598,6 @@ export default function AppShell({
                 tabIndex={0}
                 className="outline-resizer"
                 onPointerDown={startOutlineResize}
-                onPointerMove={moveOutlineResize}
-                onPointerUp={endOutlineResize}
-                onPointerCancel={cancelOutlineResize}
                 onKeyDown={onOutlineResizerKeyDown}
               />
             )}

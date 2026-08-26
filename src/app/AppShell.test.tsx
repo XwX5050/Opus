@@ -341,16 +341,20 @@ describe("AppShell", () => {
     const resizer = screen.getByRole("slider", { name: "调整大纲宽度" });
     fireEvent.pointerDown(resizer, { pointerId: 2, button: 0, clientX: 1000 });
     expect(document.body).toHaveClass("outline-resizing");
-    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 950 });
-    expect(outline).toHaveStyle({ width: "350px" });
-    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 0 });
+    // The drag resizes the panel live (dragging left from startX 1000 to 950
+    // grows it: 300 + 50); the width is committed once, on pointerup.
+    // waitFor flushes the animation frame.
+    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 950, buttons: 1 });
+    await waitFor(() => expect(outline).toHaveStyle({ width: "350px" }));
+    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 0, buttons: 1 });
     // The upper bound shrank with the jsdom window (1024px → 40% = 410px);
     // drags beyond it stop at the window-aware cap instead of 480.
-    expect(outline).toHaveStyle({ width: "410px" });
-    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 2000 });
-    expect(outline).toHaveStyle({ width: "200px" });
+    await waitFor(() => expect(outline).toHaveStyle({ width: "410px" }));
+    fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 2000, buttons: 1 });
+    await waitFor(() => expect(outline).toHaveStyle({ width: "200px" }));
     fireEvent.pointerUp(resizer, { pointerId: 2 });
     expect(document.body).not.toHaveClass("outline-resizing");
+    expect(outline).toHaveStyle({ width: "200px" });
 
     await waitFor(() => expect(port.session?.outline).toEqual({ width: 200 }));
 
@@ -382,13 +386,77 @@ describe("AppShell", () => {
 
     const resizer = screen.getByRole("slider", { name: "调整大纲宽度" });
     fireEvent.pointerDown(resizer, { pointerId: 3, button: 0, clientX: 1000 });
-    fireEvent.pointerMove(resizer, { pointerId: 3, clientX: 950 });
-    expect(outline).toHaveStyle({ width: "350px" });
+    fireEvent.pointerMove(resizer, { pointerId: 3, clientX: 950, buttons: 1 });
+    await waitFor(() => expect(outline).toHaveStyle({ width: "350px" }));
     fireEvent.pointerCancel(resizer, { pointerId: 3 });
 
-    // Cancelling snaps back to the committed width and persists nothing.
+    // Cancelling restores the committed width and nothing persists.
     expect(outline).toHaveStyle({ width: "300px" });
     expect(document.body).not.toHaveClass("outline-resizing");
+    expect(port.session?.outline).toEqual({ width: 300 });
+  });
+
+  it("commits the width and clears resizing when a pointermove arrives with buttons 0 but no pointerup", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
+    const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
+    expect(outline).toHaveStyle({ width: "300px" });
+
+    const resizer = screen.getByRole("slider", { name: "调整大纲宽度" });
+    fireEvent.pointerDown(resizer, { pointerId: 4, button: 0, clientX: 1000 });
+    fireEvent.pointerMove(resizer, { pointerId: 4, clientX: 950, buttons: 1 });
+    await waitFor(() => expect(outline).toHaveStyle({ width: "350px" }));
+
+    // The button is gone (`buttons: 0`) but no pointerup ever arrived. The
+    // drag must unstrand itself by committing the current width. (Dragging the
+    // outline left from startX 1000 to 950 grows it: 300 + (1000-950) = 350.)
+    fireEvent.pointerMove(resizer, { pointerId: 4, clientX: 950, buttons: 0 });
+
+    expect(document.body).not.toHaveClass("outline-resizing");
+    expect(outline).toHaveStyle({ width: "350px" });
+    expect(port.session?.outline).toEqual({ width: 350 });
+  });
+
+  it("cancels an in-flight resize when the window loses focus mid-drag", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
+    const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
+    expect(outline).toHaveStyle({ width: "300px" });
+
+    const resizer = screen.getByRole("slider", { name: "调整大纲宽度" });
+    fireEvent.pointerDown(resizer, { pointerId: 5, button: 0, clientX: 1000 });
+    fireEvent.pointerMove(resizer, { pointerId: 5, clientX: 950, buttons: 1 });
+    await waitFor(() => expect(outline).toHaveStyle({ width: "350px" }));
+
+    // Losing focus cancels the drag: the committed width is restored.
+    fireEvent(window, new Event("blur"));
+
+    expect(document.body).not.toHaveClass("outline-resizing");
+    expect(outline).toHaveStyle({ width: "300px" });
     expect(port.session?.outline).toEqual({ width: 300 });
   });
 
@@ -1114,18 +1182,20 @@ describe("AppShell workspace drawer", () => {
     fireEvent.pointerDown(resizer, { pointerId: 1, button: 0, clientX: 300 });
     expect(document.body.classList.contains("sidebar-resizing")).toBe(true);
 
-    // Dragging right widens from the 260px start.
-    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 340 });
-    expect(sidebar).toHaveStyle({ width: "300px" });
+    // Dragging right resizes the panel live from the 260px start; the width
+    // is committed (and persisted) only on pointerup. waitFor flushes frames.
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 340, buttons: 1 });
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "300px" }));
 
     // Out-of-range deltas clamp to [200, window-aware cap (1024px → 410px)].
-    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 3000 });
-    expect(sidebar).toHaveStyle({ width: "410px" });
-    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: -500 });
-    expect(sidebar).toHaveStyle({ width: "200px" });
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 3000, buttons: 1 });
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "410px" }));
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: -500, buttons: 1 });
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "200px" }));
 
     fireEvent.pointerUp(resizer, { pointerId: 1 });
     expect(document.body.classList.contains("sidebar-resizing")).toBe(false);
+    expect(sidebar).toHaveStyle({ width: "200px" });
 
     // The final width is persisted through the session.
     await waitFor(() => expect(port.session?.sidebar?.width).toBe(200));
@@ -1155,9 +1225,10 @@ describe("AppShell workspace drawer", () => {
       const sidebarResizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
       expect(sidebarResizer).toHaveAttribute("aria-valuemax", "304");
       fireEvent.pointerDown(sidebarResizer, { pointerId: 6, button: 0, clientX: 300 });
-      fireEvent.pointerMove(sidebarResizer, { pointerId: 6, clientX: 3000 });
-      expect(sidebar).toHaveStyle({ width: "304px" });
+      fireEvent.pointerMove(sidebarResizer, { pointerId: 6, clientX: 3000, buttons: 1 });
+      await waitFor(() => expect(sidebar).toHaveStyle({ width: "304px" }));
       fireEvent.pointerUp(sidebarResizer, { pointerId: 6 });
+      expect(sidebar).toHaveStyle({ width: "304px" });
       await waitFor(() => expect(port.session?.sidebar?.width).toBe(304));
 
       // The outline obeys the same window-aware cap and persists it too.
@@ -1166,9 +1237,10 @@ describe("AppShell workspace drawer", () => {
       const outlineResizer = screen.getByRole("slider", { name: "调整大纲宽度" });
       expect(outlineResizer).toHaveAttribute("aria-valuemax", "304");
       fireEvent.pointerDown(outlineResizer, { pointerId: 7, button: 0, clientX: 600 });
-      fireEvent.pointerMove(outlineResizer, { pointerId: 7, clientX: 0 });
-      expect(outline).toHaveStyle({ width: "304px" });
+      fireEvent.pointerMove(outlineResizer, { pointerId: 7, clientX: 0, buttons: 1 });
+      await waitFor(() => expect(outline).toHaveStyle({ width: "304px" }));
       fireEvent.pointerUp(outlineResizer, { pointerId: 7 });
+      expect(outline).toHaveStyle({ width: "304px" });
       await waitFor(() => expect(port.session?.outline?.width).toBe(304));
     } finally {
       viewport.mockRestore();
@@ -1185,11 +1257,11 @@ describe("AppShell workspace drawer", () => {
 
     const resizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
     fireEvent.pointerDown(resizer, { pointerId: 4, button: 0, clientX: 300 });
-    fireEvent.pointerMove(resizer, { pointerId: 4, clientX: 340 });
-    expect(sidebar).toHaveStyle({ width: "300px" });
+    fireEvent.pointerMove(resizer, { pointerId: 4, clientX: 340, buttons: 1 });
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "300px" }));
     fireEvent.pointerCancel(resizer, { pointerId: 4 });
 
-    // Cancelling snaps back to the committed width and persists nothing.
+    // Cancelling restores the committed width and nothing persists.
     expect(sidebar).toHaveStyle({ width: "260px" });
     expect(document.body).not.toHaveClass("sidebar-resizing");
     expect(port.session?.sidebar?.width).toBe(260);

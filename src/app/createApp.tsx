@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import type { DocumentPort } from "../document/DocumentPort";
+import { detectPathPlatform } from "../document/platform";
 import { subscribeToImageDrops, subscribeToMenuActions, subscribeToOpenPaths } from "../document/tauriDocumentPort";
 import AppShell from "./AppShell";
 
@@ -23,6 +24,12 @@ export function createApp(
   options: CreateAppOptions = {},
 ): ReactElement {
   const browserShell = options.browserShell ?? false;
+  // Linux native builds drop the native menu bar and window decorations: the
+  // header carries a compact file menu and window-level shortcuts instead.
+  const linuxNativeHeader =
+    !browserShell &&
+    "__TAURI_INTERNALS__" in window &&
+    detectPathPlatform() === "linux";
   return (
     <AppShell
       port={port}
@@ -32,6 +39,7 @@ export function createApp(
       // Browser shells have no native menu bar, so they keep the file actions
       // in the header; production moves them into the macOS menu instead.
       fileActionsInHeader={browserShell}
+      linuxNativeHeader={linuxNativeHeader}
       externalError={options.externalError ?? null}
       onDismissExternalError={options.onDismissExternalError}
     />

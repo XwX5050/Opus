@@ -193,6 +193,49 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--text-muted);
 }
 
+/* Linux native header: no window title (the native header bar is gone); the
+ * spacer keeps the right-side controls pinned to the far edge. */
+.app-header-spacer {
+  flex: 1;
+  align-self: stretch;
+}
+
+/* The file menu replaces the removed native menu bar on Linux. */
+.file-menu-anchor {
+  position: relative;
+  display: flex;
+}
+
+.file-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  margin: 0;
+  padding: var(--space-0-5);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-popover);
+}
+
+.file-menu [role="menuitem"] {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-small);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.file-menu [role="menuitem"]:hover:not(:disabled),
+.file-menu [role="menuitem"]:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 /* Header controls are ghost buttons: quiet until hovered. */
 .app-header button {
   border-color: transparent;
@@ -787,6 +830,22 @@ body.outline-resizing * {
   border-left-color: var(--text-primary);
 }
 
+/* IME composition (WebKitGTK): the platform reports the selection one
+ * character into the preedit, so the drawn caret layer is wrong while
+ * composing; editor/imeCaret.ts hides it and positions .cm-ime-caret at the
+ * preedit end instead. */
+.cm-editor.cm-ime-composing .cm-cursorLayer {
+  display: none;
+}
+
+.cm-ime-caret {
+  position: fixed;
+  width: 0;
+  border-left: 1.2px solid var(--text-primary);
+  pointer-events: none;
+  z-index: 100;
+}
+
 /* Reading mode is read-only and fully rendered; the cursor never shows. */
 .markdown-editor[data-view-mode="reading"] .cm-cursor {
   display: none;
@@ -828,7 +887,7 @@ body.outline-resizing * {
 }
 
 .cm-live-preview-inline-code {
-  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.88em;
   background: var(--surface);
   border: 1px solid var(--divider);
@@ -843,7 +902,7 @@ body.outline-resizing * {
 }
 
 .cm-live-preview-code-block {
-  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.88em;
 }
 
