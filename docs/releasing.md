@@ -1,10 +1,11 @@
 # Releasing
 
-How to build, sign, notarize, and verify an Opus release for macOS.
-Releases are Developer ID signed with the Hardened Runtime, notarized by
-Apple, and distributed as a DMG — **without the App Sandbox** (design spec
-§5.4; see `src-tauri/entitlements.plist`, which must stay free of
-`com.apple.security.app-sandbox`).
+How to build, sign, and verify an Opus release. macOS releases are
+Developer ID signed with the Hardened Runtime, notarized by Apple, and
+distributed as a DMG — **without the App Sandbox** (design spec §5.4; see
+`src-tauri/entitlements.plist`, which must stay free of
+`com.apple.security.app-sandbox`). Windows releases are NSIS installers
+(see §Windows builds below).
 
 ## Prerequisites
 
@@ -71,9 +72,44 @@ Publish the stapled DMG to GitHub Releases. Never distribute unsigned or
 ad-hoc-signed builds to users; they are for local development only and the
 verification script labels them **non-release**.
 
+## Windows builds
+
+Build the NSIS installer locally:
+
+```sh
+npm run tauri build -- --bundles nsis
+```
+
+The installer (`Opus_*_x64-setup.exe`) lands in
+`src-tauri/target/release/bundle/nsis/` and registers the `.md`/`.markdown`
+file associations on install. Windows keeps the standard window decorations
+(the overlay `titleBarStyle` in `tauri.conf.json` is macOS-only), and a
+second launch while the app is running forwards its paths to the existing
+instance via `tauri-plugin-single-instance` instead of starting a new
+process.
+
+Code signing is optional. Set `TAURI_SIGNING_CERTIFICATE` (path to a `.pfx`)
+and `TAURI_SIGNING_CERTIFICATE_PASSWORD` and `tauri build` signs the
+installer during the build; alternatively sign the finished installer with
+`signtool` and a code-signing certificate. Unsigned installers are fine for
+internal testing, but Windows SmartScreen shows a "Windows protected your
+PC" prompt on first run — expected, not a defect (a signing certificate
+trusted on the target machine suppresses it). The updater artifacts are
+unaffected by code signing: they use the same minisign `latest.json` scheme
+as macOS and Linux.
+
+`release-windows` in `.github/workflows/release.yml` builds the NSIS
+installer on `windows-latest` for the same `v*` tag. tauri-action merges the
+`windows-x86_64` updater artifacts (the setup executable and its `.sig`)
+into the same `latest.json` as the macOS and Linux jobs, so Windows clients
+update through the existing `tauri-plugin-updater` channel with no updater
+changes. The job does not configure a code-signing certificate, so CI
+installers are unsigned.
+
 ## Release candidate gate
 
-Run from a clean checkout on the Apple Silicon release machine:
+Run from a clean checkout on the release machine for the platform being
+released. macOS (Apple Silicon release machine):
 
 ```sh
 npm ci
@@ -84,12 +120,18 @@ npm run tauri build -- --bundles app,dmg
 ./scripts/verify-macos-bundle.sh "src-tauri/target/release/bundle/macos/Opus.app"
 ```
 
-Expected: all automated tests and budgets PASS; the `.app` and `.dmg` exist;
-the verification script reports a valid Developer ID signature and passes
-Gatekeeper assessment (with credentials configured). Ad-hoc local builds are
-labeled `NON-RELEASE` and skip Gatekeeper assessment — everything else is
-still verified. Then run the manual acceptance checklist in
-`docs/testing.md`.
+Expected (macOS): all automated tests and budgets PASS; the `.app` and
+`.dmg` exist; the verification script reports a valid Developer ID
+signature and passes Gatekeeper assessment (with credentials configured).
+Ad-hoc local builds are labeled `NON-RELEASE` and skip Gatekeeper
+assessment — everything else is still verified. Then run the manual macOS
+acceptance checklist in `docs/testing.md`.
+
+Windows: the same gate with `npm run tauri build -- --bundles nsis` and no
+bundle-verification script; the installer must exist in
+`src-tauri/target/release/bundle/nsis/`, and an unsigned build's SmartScreen
+warning on first run is expected. Then run the manual Windows acceptance
+checklist in `docs/testing.md`.
 
 **Local ad-hoc note:** without `APPLE_SIGNING_IDENTITY`, Tauri skips
 re-signing and the bundle keeps the linker's ad-hoc signature, which current
@@ -149,9 +191,11 @@ and notarized automatically.
 
 Push a `v*` tag. The workflow runs the release gate (`npm run check`), then
 `tauri-action` builds the `app,dmg` bundles and creates a GitHub Release
-for the tag. Because `createUpdaterArtifacts` is enabled in
-`tauri.conf.json`, the release also carries the updater artifacts:
-`Opus.app.tar.gz`, its `.sig` signature, and a fresh `latest.json`.
+for the tag; the `release-linux` and `release-windows` jobs upload their
+AppImage and NSIS artifacts into the same release. Because
+`createUpdaterArtifacts` is enabled in `tauri.conf.json`, the release also
+carries the updater artifacts: `Opus.app.tar.gz` and `Opus_*_x64-setup.exe`,
+each with its `.sig` signature, and a fresh `latest.json`.
 
 ```sh
 git tag v0.2.0

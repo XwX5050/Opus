@@ -19,6 +19,7 @@ Opus uses React, TypeScript, CodeMirror 6, and Vite for the interface. Tauri 2 a
 ## Requirements
 
 - macOS 12 or later, or Linux with WebKitGTK 4.1 (e.g. `webkit2gtk-4.1` on Arch, `libwebkit2gtk-4.1-dev` on Debian/Ubuntu)
+- Windows 10 or 11 with the WebView2 Runtime (preinstalled on Windows 11)
 - Node.js 22 and npm
 - A stable Rust toolchain
 - Xcode Command Line Tools (macOS only)
@@ -61,9 +62,17 @@ npm run tauri build -- --bundles appimage   # or deb / rpm
 
 Linux bundles are written under `src-tauri/target/release/bundle/`.
 
+Windows:
+
+```sh
+npm run tauri build -- --bundles nsis
+```
+
+The bundle is written to `src-tauri/target/release/bundle/nsis/`.
+
 ## Project Status
 
-Opus is under active development and targets Apple Silicon macOS and Linux. Automated coverage includes frontend, Rust, and browser-shell E2E tests; native acceptance remains a separate release gate.
+Opus is under active development and targets Apple Silicon macOS, Windows, and Linux. Automated coverage includes frontend, Rust, and browser-shell E2E tests; native acceptance remains a separate release gate.
 
 ## License
 

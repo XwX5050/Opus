@@ -13,9 +13,10 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.10` (kept in sync across `package.json`,
+- Version: `0.1.11` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
-- Target platform: macOS 12+ (Apple Silicon first) and Linux (WebKitGTK)
+- Target platform: macOS 12+ (Apple Silicon first), Windows 10/11 (WebView2),
+  and Linux (WebKitGTK)
 - UI language: Chinese (`zh-CN`); code, comments, and docs are in English
 - License: MIT
 
@@ -34,7 +35,10 @@ Rust/Tauri backend.
 - **Key Rust crates**: `tauri` 2.11 (with `protocol-asset`),
   `tauri-plugin-dialog/fs/opener/process/store/updater/log`, `notify` 8.2,
   `trash` 5.2, `sha2`, `serde`, `tempfile`, `reqwest` 0.13 (rustls with the
-  ring provider pinned); macOS-only
+  ring provider pinned); Windows-only `tauri-plugin-single-instance`
+  (second-launch argv → open-with), `winreg` (installed-font registry
+  enumeration), and `windows-sys` (file identity — volume serial + file index
+  — via `BY_HANDLE_FILE_INFORMATION`, see `document_io.rs`); macOS-only
   `objc2-app-kit`/`objc2-foundation`/`objc2-web-kit`/`objc2-core-foundation`/
   `objc2-core-text` 0.3 (pinned to wry's locked versions so the types line up
   with the webview handles from `with_webview`).
@@ -54,7 +58,7 @@ Rust/Tauri backend.
 │   ├── conflict/           # External-change conflict dialog
 │   └── recovery/           # Crash-recovery drafts and UI
 ├── src-tauri/src/          # Rust backend
-│   ├── lib.rs              # Tauri builder: plugins, commands, macOS menu, open/drop events
+│   ├── lib.rs              # Tauri builder: plugins, commands, macOS menu, open/drop events; Windows single-instance (tauri-plugin-single-instance) forwards second-launch argv as open-with
 │   ├── document_io.rs      # Lossless atomic file reads/writes
 │   ├── document_commands.rs# Tauri commands for documents/images/scopes
 │   ├── workspace.rs        # Directory listing and workspace mutations
@@ -64,7 +68,7 @@ Rust/Tauri backend.
 │   ├── asset_scope.rs      # Webview asset-scope registry
 │   ├── open_events.rs      # Deep-link / drag-drop / argv normalization
 │   ├── menu.rs             # Native macOS menu bar
-│   ├── fonts.rs            # Installed-font enumeration (Core Text, macOS-only)
+│   ├── fonts.rs            # Installed-font enumeration (Core Text on macOS, registry on Windows)
 │   ├── linux_env.rs        # Linux-only pre-init env (Wayland backend, DMA-BUF)
 │   ├── perf_mark.rs        # Startup instrumentation hook
 │   └── window_background.rs# Native window/webview background sync
@@ -87,9 +91,12 @@ Rust/Tauri backend.
   performance-mode hook (`usePerformanceMode.ts`), in-app update checks
   (`updates.ts`), and the E2E fixture bridge (`e2e.ts`). The header is
   platform-specific: macOS keeps the native menu bar (so the header stays
-  minimal) while Linux native gets a file-icon dropdown next to the sidebar
-  toggle plus frontend keybindings (Ctrl+N/O/Shift+O/S/Shift+S/W/,) replacing
-  the native menu accelerators (see `AppShell.linuxHeader.test.tsx`).
+  minimal) while Linux and Windows native builds get a file-icon dropdown
+  next to the sidebar toggle plus frontend keybindings
+  (Ctrl+N/O/Shift+O/S/Shift+S/W/,) replacing the native menu accelerators
+  (see `AppShell.customFileHeader.test.tsx`). Windows, whose window is
+  undecorated (`set_decorations(false)`), additionally draws its own caption
+  buttons and window-edge resize handles (`WindowControls.tsx`).
 - `src/document/`: the `DocumentPort` contract (`DocumentPort.ts`), pure
   document reducer (`documentReducer.ts`), shared types (`types.ts`), and two
   implementations:
@@ -158,16 +165,19 @@ Rust/Tauri backend.
   newline style; writes atomically via sibling temp file + `fsync` + rename.
 - `src-tauri/src/document_commands.rs`: Tauri command handlers for open, save,
   clipboard images, asset scopes, workspace operations, watches, and recovery.
-- `src-tauri/src/fonts.rs`: macOS-only `list_installed_fonts` command backed
-  by Core Text; WKWebView has no `queryLocalFonts`, so the settings dialog's
-  font picker gets family names from the native side.
-- `src-tauri/src/window_background.rs`: macOS-only; paints the NSWindow
-  background and the WKWebView under-page background with the resolved
-  `--canvas` color so live resizes never flash white; seeded dark at startup,
-  synced from `useTheme` on every theme change. Linux has no native chrome to
-  theme: the window runs without decorations and no GTK menu bar is installed
-  (both removed because the extra titlebar/menu layers were redundant under
-  tiling compositors), so the module compiles away there.
+- `src-tauri/src/fonts.rs`: `list_installed_fonts` command backed by Core
+  Text on macOS and by the `CurrentVersion\Fonts` registry keys on Windows;
+  neither WKWebView nor WebView2 has `queryLocalFonts`, so the settings
+  dialog's font picker gets family names from the native side.
+- `src-tauri/src/window_background.rs`: paints the window background with the
+  resolved `--canvas` color so live resizes never flash white — on macOS
+  additionally the NSWindow background and the WKWebView under-page
+  background; on Windows only the cross-platform window background (WebView2
+  has no under-page layer). Seeded dark at startup, synced from `useTheme` on
+  every theme change. Linux has no native chrome to theme: the window runs
+  without decorations and no GTK menu bar is installed (both removed because
+  the extra titlebar/menu layers were redundant under tiling compositors), so
+  the module compiles away there.
 - `src-tauri/src/linux_env.rs`: Linux-only, runs before any GTK/WebKit init in
   `run()`. The Tauri-generated AppImage launcher force-exports
   `GDK_BACKEND=x11` (linuxdeploy GTK hook), which strands the app on XWayland
@@ -226,6 +236,7 @@ npm run tauri build -- --bundles app,dmg     # also produce a DMG
 NO_STRIP=1 npm run tauri build -- --bundles appimage    # Linux -> src-tauri/target/release/bundle/appimage/
 # (NO_STRIP=1: linuxdeploy's bundled strip predates RELR and fails on
 #  bleeding-edge distro libraries, e.g. CachyOS/.relr.dyn sections)
+npm run tauri build -- --bundles nsis        # Windows -> src-tauri/target/release/bundle/nsis/
 ```
 
 Automated testing:
@@ -295,7 +306,8 @@ CI:
 - `.github/workflows/ci.yml` runs on `macos-latest` with two jobs: `check`
   (`npm ci`, `npm test`, `npm run build`, Rust fmt/clippy/tests) and `e2e`
   (`npm run test:e2e` on Chromium, uploading `test-results/` traces on
-  failure).
+  failure), plus `check-windows` on `windows-latest` (frontend tests/build
+  and Rust fmt/clippy/tests against the Windows toolchain).
 
 ## Security considerations
 
