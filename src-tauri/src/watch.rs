@@ -339,15 +339,30 @@ impl WatchRegistry {
     /// Returns true when any active watch covers `path`: exact match for
     /// document watches, prefix match for recursive workspace watches.
     pub fn matches<P: AsRef<Path>>(&self, path: P) -> bool {
-        let candidate = resolve(path.as_ref());
+        let candidate = match_key(resolve(path.as_ref()));
         self.watches.keys().any(|key| {
+            let watched = match_key(key.path.clone());
             if key.recursive {
-                candidate.starts_with(&key.path)
+                candidate.starts_with(&watched)
             } else {
-                candidate == key.path
+                candidate == watched
             }
         })
     }
+}
+
+/// Comparison key for watch matching. Windows filesystems are
+/// case-insensitive but watcher events report the on-disk casing while a tab
+/// may carry any casing, so matching compares lowercased paths there; other
+/// platforms keep the exact byte-for-byte comparison.
+#[cfg(windows)]
+fn match_key(path: PathBuf) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
+}
+
+#[cfg(not(windows))]
+fn match_key(path: PathBuf) -> PathBuf {
+    path
 }
 
 /// The on-disk state of a path at flush time.
@@ -741,10 +756,18 @@ mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
 
-    fn key(path: &str, recursive: bool) -> WatchKey {
-        WatchKey {
-            path: PathBuf::from(path),
-            recursive,
+    fn key(path: PathBuf, recursive: bool) -> WatchKey {
+        WatchKey { path, recursive }
+    }
+
+    /// Builds an absolute path from a POSIX-style fixture path: rooted at
+    /// `C:` on Windows (a bare `/…` path is not absolute there) and at `/`
+    /// elsewhere.
+    fn abs(path: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:{path}"))
+        } else {
+            PathBuf::from(path)
         }
     }
 
@@ -787,21 +810,21 @@ mod tests {
     fn watches_are_reference_counted_per_consumer() {
         let mut registry = WatchRegistry::default();
         let first = registry
-            .watch_document("tab-1", Path::new("/notes/a.md"))
+            .watch_document("tab-1", &abs("/notes/a.md"))
             .unwrap();
         let second = registry
-            .watch_document("tab-2", Path::new("/notes/a.md"))
+            .watch_document("tab-2", &abs("/notes/a.md"))
             .unwrap();
         assert!(first.newly_added);
         assert!(!second.newly_added);
 
         let released = registry.release_consumer("tab-1").unwrap();
         assert!(released.is_empty(), "shared watch survives first release");
-        assert!(registry.matches(Path::new("/notes/a.md")));
+        assert!(registry.matches(abs("/notes/a.md")));
 
         let released = registry.release_consumer("tab-2").unwrap();
         assert_eq!(released.len(), 1);
-        assert!(!registry.matches(Path::new("/notes/a.md")));
+        assert!(!registry.matches(abs("/notes/a.md")));
     }
 
     #[test]
@@ -819,31 +842,47 @@ mod tests {
     fn document_matching_is_exact_and_workspace_matching_is_recursive() {
         let mut registry = WatchRegistry::default();
         registry
-            .watch_document("tab-1", Path::new("/notes/a.md"))
+            .watch_document("tab-1", &abs("/notes/a.md"))
             .unwrap();
-        registry.watch_workspace("ws", Path::new("/ws")).unwrap();
+        registry.watch_workspace("ws", &abs("/ws")).unwrap();
 
-        assert!(registry.matches(Path::new("/notes/a.md")));
-        assert!(!registry.matches(Path::new("/notes/b.md")));
-        assert!(!registry.matches(Path::new("/notes/sub/a.md")));
-        assert!(registry.matches(Path::new("/ws/deep/nested/x.md")));
-        assert!(!registry.matches(Path::new("/wsx/a.md")));
+        assert!(registry.matches(abs("/notes/a.md")));
+        assert!(!registry.matches(abs("/notes/b.md")));
+        assert!(!registry.matches(abs("/notes/sub/a.md")));
+        assert!(registry.matches(abs("/ws/deep/nested/x.md")));
+        assert!(!registry.matches(abs("/wsx/a.md")));
+    }
+
+    /// Windows filesystems are case-insensitive, so a tab opened with a
+    /// different casing than the watcher event still matches.
+    #[cfg(windows)]
+    #[test]
+    fn matching_is_case_insensitive_on_windows() {
+        let mut registry = WatchRegistry::default();
+        registry
+            .watch_document("tab-1", &abs("/Notes/A.md"))
+            .unwrap();
+        registry.watch_workspace("ws", &abs("/WorkSpace")).unwrap();
+
+        assert!(registry.matches(abs("/notes/a.md")));
+        assert!(registry.matches(abs("/workspace/deep/x.md")));
+        assert!(!registry.matches(abs("/workspace2/x.md")));
     }
 
     #[test]
     fn release_one_removes_a_single_key() {
         let mut registry = WatchRegistry::default();
         registry
-            .watch_document("tab-1", Path::new("/notes/a.md"))
+            .watch_document("tab-1", &abs("/notes/a.md"))
             .unwrap();
         registry
-            .watch_document("tab-1", Path::new("/notes/b.md"))
+            .watch_document("tab-1", &abs("/notes/b.md"))
             .unwrap();
 
-        let released = registry.release_one("tab-1", &key("/notes/a.md", false));
+        let released = registry.release_one("tab-1", &key(abs("/notes/a.md"), false));
         assert!(released.is_some());
-        assert!(registry.matches(Path::new("/notes/b.md")));
-        assert!(!registry.matches(Path::new("/notes/a.md")));
+        assert!(registry.matches(abs("/notes/b.md")));
+        assert!(!registry.matches(abs("/notes/a.md")));
         // The consumer still holds b.md, so a full release succeeds.
         assert!(registry.release_consumer("tab-1").is_ok());
     }

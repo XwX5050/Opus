@@ -24,12 +24,12 @@ export function createApp(
   options: CreateAppOptions = {},
 ): ReactElement {
   const browserShell = options.browserShell ?? false;
-  // Linux native builds drop the native menu bar and window decorations: the
-  // header carries a compact file menu and window-level shortcuts instead.
-  const linuxNativeHeader =
+  // Non-macOS native builds get no native menu bar: the header carries a
+  // compact file menu and window-level shortcuts instead.
+  const customFileHeader =
     !browserShell &&
     "__TAURI_INTERNALS__" in window &&
-    detectPathPlatform() === "linux";
+    detectPathPlatform() !== "macos";
   return (
     <AppShell
       port={port}
@@ -39,7 +39,7 @@ export function createApp(
       // Browser shells have no native menu bar, so they keep the file actions
       // in the header; production moves them into the macOS menu instead.
       fileActionsInHeader={browserShell}
-      linuxNativeHeader={linuxNativeHeader}
+      customFileHeader={customFileHeader}
       externalError={options.externalError ?? null}
       onDismissExternalError={options.onDismissExternalError}
     />

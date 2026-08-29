@@ -72,9 +72,22 @@ fn list_directory_rejects_escapes_outside_the_root() {
     assert!(is_outside_root(
         &list_directory(&root, Path::new("notes/../../..")).unwrap_err()
     ));
-    assert!(is_outside_root(
-        &list_directory(&root, Path::new("/etc")).unwrap_err()
-    ));
+    // An existing absolute path outside the root. On Windows, `/etc`
+    // resolves to `C:\etc`, which does not exist and would surface
+    // NotFound instead of OutsideRoot, so use a sibling tempdir there.
+    #[cfg(unix)]
+    {
+        assert!(is_outside_root(
+            &list_directory(&root, Path::new("/etc")).unwrap_err()
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let outside = tempfile::tempdir().unwrap();
+        assert!(is_outside_root(
+            &list_directory(&root, outside.path()).unwrap_err()
+        ));
+    }
 }
 
 #[cfg(unix)]

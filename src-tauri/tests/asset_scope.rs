@@ -4,17 +4,23 @@ use markdown_edit_lib::asset_scope::AssetScopeRegistry;
 
 #[test]
 fn shared_parent_scope_is_removed_only_after_last_tab_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let notes = dir.path().join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let document_a = notes.join("a.md");
+    let document_b = notes.join("b.md");
+    let image = notes.join("image.png");
+    std::fs::write(&document_a, b"# A\n").unwrap();
+    std::fs::write(&document_b, b"# B\n").unwrap();
+    std::fs::write(&image, b"png").unwrap();
+
     let mut scopes = AssetScopeRegistry::default();
-    scopes
-        .acquire_document("tab-a", Path::new("/notes/a.md"))
-        .unwrap();
-    scopes
-        .acquire_document("tab-b", Path::new("/notes/b.md"))
-        .unwrap();
+    scopes.acquire_document("tab-a", &document_a).unwrap();
+    scopes.acquire_document("tab-b", &document_b).unwrap();
     scopes.release_consumer("tab-a").unwrap();
-    assert!(scopes.allows(Path::new("/notes/image.png")));
+    assert!(scopes.allows(&image));
     scopes.release_consumer("tab-b").unwrap();
-    assert!(!scopes.allows(Path::new("/notes/image.png")));
+    assert!(!scopes.allows(&image));
 }
 
 #[test]

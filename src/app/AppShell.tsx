@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useGSAP } from "@gsap/react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Text } from "@codemirror/state";
 import type { ClipboardImageInput, DocumentPort } from "../document/DocumentPort";
+import { detectPathPlatform } from "../document/platform";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import {
   clampSidebarWidthToWindow,
@@ -35,6 +37,10 @@ import {
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
+import WindowControls, {
+  isWindowsNative,
+  WindowResizeHandles,
+} from "./WindowControls";
 import {
   checkUpdate,
   relaunchApp,
@@ -88,12 +94,14 @@ export interface AppShellProps {
    */
   fileActionsInHeader?: boolean;
   /**
-   * Linux native builds have no native menu bar or window title: the header
-   * drops the "Opus" title, shows a compact file-menu dropdown next to the
-   * sidebar toggle, and owns the menu keyboard shortcuts at the window level
-   * (routed through the same handler the macOS native menu drives).
+   * Non-macOS native builds have no native menu bar: the header shows a
+   * compact file-menu dropdown next to the sidebar toggle and owns the menu
+   * keyboard shortcuts at the window level (routed through the same handler
+   * the macOS native menu drives). Linux also drops the "Opus" title (its
+   * window is undecorated); Windows keeps the title and draws its own
+   * caption buttons (WindowControls) because its window is undecorated too.
    */
-  linuxNativeHeader?: boolean;
+  customFileHeader?: boolean;
   externalError?: string | null;
   onDismissExternalError?: () => void;
 }
@@ -174,7 +182,7 @@ export default function AppShell({
   subscribeToImageDrops = null,
   subscribeToMenuActions = null,
   fileActionsInHeader = true,
-  linuxNativeHeader = false,
+  customFileHeader = false,
   externalError = null,
   onDismissExternalError,
 }: AppShellProps) {
@@ -929,8 +937,8 @@ export default function AppShell({
     };
   }, [subscribeToMenuActions]);
 
-  // Linux native header: a compact dropdown standing in for the removed
-  // native menu bar. It closes on Escape, on an outside pointerdown, and
+  // Custom file header (non-macOS native builds): a compact dropdown
+  // standing in for the absent native menu bar. It closes on Escape, on an outside pointerdown, and
   // after choosing an item; focus moves into the menu on open and returns
   // to the toggle on dismiss.
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
@@ -995,13 +1003,13 @@ export default function AppShell({
     }
   };
 
-  // Linux native builds install no native menu bar, so its accelerators are
-  // re-bound at the window level and routed through the same handler the
+  // Non-macOS native builds install no native menu bar, so its accelerators
+  // are re-bound at the window level and routed through the same handler the
   // macOS menu drives (which gates them while a modal dialog is open).
   // Chords the editor already owns — CodeMirror's Mod-s keymap calls
   // preventDefault — are left to it, so nothing double-fires.
   useEffect(() => {
-    if (!linuxNativeHeader) return;
+    if (!customFileHeader) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (!event.ctrlKey || event.metaKey || event.altKey) return;
@@ -1022,7 +1030,7 @@ export default function AppShell({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [linuxNativeHeader]);
+  }, [customFileHeader]);
 
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (anyDialogOpen) return;
@@ -1162,6 +1170,15 @@ export default function AppShell({
     trapDialogFocus(event);
   };
 
+  // The undecorated Windows window has no native titlebar double-click
+  // handling: double-clicking empty header space toggles maximization.
+  // Buttons (window controls, toggles) keep their own double-click behavior.
+  const onHeaderDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!isWindowsNative()) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    void getCurrentWindow().toggleMaximize();
+  };
+
   return (
     <main
       ref={shellRef}
@@ -1180,6 +1197,7 @@ export default function AppShell({
         aria-label="应用标题栏"
         className="app-header"
         data-tauri-drag-region
+        onDoubleClick={onHeaderDoubleClick}
       >
         {sidebarAvailable && (
           <button
@@ -1196,7 +1214,7 @@ export default function AppShell({
             <PanelLeftIcon />
           </button>
         )}
-        {linuxNativeHeader && (
+        {customFileHeader && (
           <div className="file-menu-anchor" ref={fileMenuAnchorRef}>
             <button
               ref={fileMenuButtonRef}
@@ -1265,8 +1283,9 @@ export default function AppShell({
             )}
           </div>
         )}
-        {linuxNativeHeader ? (
-          // No window title on Linux (the native header bar is gone); the
+        {customFileHeader && detectPathPlatform() === "linux" ? (
+          // No window title on Linux (the native header bar is gone);
+          // Windows shows the title plus its custom caption buttons. The
           // spacer keeps the right-side controls pinned to the far edge.
           <span className="app-header-spacer" data-tauri-drag-region />
         ) : (
@@ -1313,7 +1332,10 @@ export default function AppShell({
             设置
           </button>
         )}
+        <WindowControls />
       </header>
+
+      <WindowResizeHandles />
 
       <section className="app-body">
         {sidebarAvailable && (

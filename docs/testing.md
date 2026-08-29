@@ -1,7 +1,8 @@
 # Testing
 
 How Opus is verified: automated gates, browser-shell E2E, the
-performance benchmark, and the manual macOS acceptance checklist. Run every
+performance benchmark, and the manual acceptance checklists (macOS and
+Windows). Run every
 applicable section before a release; the release candidate gate is
 `docs/releasing.md` §Release candidate gate.
 
@@ -240,18 +241,115 @@ build SHA, chip, and macOS version with the results.
     report PASS for every budgeted metric; process-level hot-start samples
     come from the packaged build (quit all running instances first).
 
+## Manual Windows acceptance checklist
+
+Requires a release build on Windows
+(`npm run tauri build -- --bundles nsis`; install from the NSIS setup
+executable or run the built binary in place). Check each item and record the
+build SHA, Windows version, and WebView2 runtime version with the results.
+
+### Open paths
+
+1. **资源管理器打开方式**: right-click a `.md` file in Explorer → 打开方式 →
+   Opus (the NSIS installer registers the association). The file opens in a
+   tab showing its content. Repeat with the app already running: the file
+   opens as a new tab in the same window.
+2. **Double-click open**: double-click an associated `.md` file. With the app
+   not running it launches and opens the file; with it already running the
+   path is forwarded to the existing instance (`tauri-plugin-single-instance`)
+   — the file opens as a new tab in the same window, which is raised and
+   unminimized; no second process is started.
+3. **File drag**: drag a `.md` file from Explorer onto the window. It opens
+   in a tab; content matches the original (no copy/import).
+4. **File dropdown menu**: Windows has no native menu bar, so the file
+   dropdown next to the sidebar toggle (same as Linux) offers 新建, 打开文件,
+   打开文件夹, 另存为…, and 设置. The pickers open and respond normally —
+   selecting and cancelling both work and the app does not freeze. The
+   dropdown is keyboard-accessible and offers the same actions as the
+   empty-state buttons.
+
+### Editing
+
+5. **Shortcuts**: with the window focused, Ctrl+N creates an untitled tab,
+   Ctrl+O opens the file picker, Ctrl+Shift+O the folder picker, Ctrl+S saves
+   (save panel on an untitled tab), Ctrl+Shift+S saves a copy as, Ctrl+W
+   closes the active tab, and Ctrl+, opens 设置. Shortcuts are gated while a
+   modal dialog is open.
+6. **Chinese IME (微软拼音)**: switch to Microsoft Pinyin, type a sentence
+   mid-document. Composition underlines appear during input and commit
+   correctly; no dropped or duplicated characters; the dirty indicator
+   appears only after committed text changes.
+7. **CRLF/BOM preservation**: prepare a UTF-8-with-BOM, CRLF file (e.g.
+   `printf '\xef\xbb\xbfline1\r\nline2\r\n' > bom-crlf.md`). Open, edit,
+   Ctrl+S. Verify with `xxd bom-crlf.md | head` that the BOM survives and
+   `file`/`xxd` shows CRLF line endings unchanged. Repeat for an LF, no-BOM
+   file: it must not gain a BOM or CRLF.
+8. **Close protection**: dirty a tab, click its ×. The dialog offers
+   保存 / 放弃 / 取消; 取消 returns to the dirty tab unchanged, 放弃 closes
+   without writing, 保存 writes and closes. Repeat for the window close
+   button (×) with unsaved changes.
+
+### Images
+
+9. **Paste cancel / save**: copy an image (e.g. screenshot region), paste
+   into a saved document, then cancel the save panel. No file is created and
+   the document is unchanged. Paste again and confirm: the image file appears
+   on disk and a relative `![](…)` reference renders inline. In an untitled
+   document the panel defaults to the system recent location and an absolute
+   path is inserted.
+10. **Image drop**: drag an existing image file from Explorer into the
+    editor. No copy is made; a path to the original file is inserted
+    (relative when expressible from the document directory).
+
+### External changes
+
+11. **External edit / delete / move**: with a clean tab, editing the file in
+    another editor reloads the tab without prompting. With a dirty tab the
+    conflict dialog offers 载入磁盘版本 / 保留当前版本 / 另存为…; each choice
+    behaves as labeled and none loses data silently. Deleting the open file
+    retains the buffer and offers 另存为; moving it follows the new path (when
+    inside the watched root) or keeps the buffer with a prompt.
+
+### Recovery and session
+
+12. **Crash recovery**: dirty a tab, wait ~3 s (draft debounce is 2 s), then
+    end the process (Task Manager → End task, or
+    `taskkill /F /IM Opus.exe`). Relaunch: the recovery dialog lists the
+    draft; 查看源码 shows the draft text; 恢复 opens it as a dirty tab;
+    丢弃 removes it. A clean relaunch shows no dialog.
+13. **Session restore**: open several tabs and a folder, close the window,
+    relaunch. Tabs, order, active tab, and sidebar reopen. Recent files and
+    folders appear in the empty state (max 10).
+
+### Appearance
+
+14. **Light / dark / system**: 设置 → theme. Light and Dark apply
+    immediately and persist across relaunch; 跟随系统 tracks the Windows
+    appearance mode (toggle in Settings → Personalization → Colors while the
+    app runs). Do a visual pass in both themes against `docs/screenshots/`
+    with the same expectations as the macOS checklist §Appearance: tab row
+    states and status dots, icon buttons with tooltips, 阅读/编辑 toggle,
+    sidebar drag-resize, thin scrollbars, and accent-tinted focus rings.
+
 ## Intentional environment-only limitations
 
 - **Browser-shell E2E and perf metrics run in headless Chromium**, not the
-  packaged WKWebView build. They verify the React/CodeMirror layer and the
-  port contract; native behavior (Finder integration, file dialogs, IME,
-  real disk watching, drag-in from Finder) is covered by the manual
-  checklist above. Numbers are recorded separately from, and never mixed
-  with, the M1/8 GB release baseline (see `docs/performance.md`).
+  packaged native builds (WKWebView on macOS, WebView2 on Windows). They
+  verify the React/CodeMirror layer and the port contract; native behavior
+  (Finder/Explorer integration, file dialogs, IME, real disk watching,
+  drag-in from the OS file manager) is covered by the manual checklists
+  above. Numbers are recorded separately from, and never mixed with, the
+  M1/8 GB release baseline (see `docs/performance.md`).
+- **WebView2 vs WKWebView rendering differences are expected**: the packaged
+  Windows build renders with WebView2 (Chromium) while the macOS build uses
+  WKWebView. Minor engine differences — font metrics, scrollbar styling, IME
+  composition details — are expected and are not regressions. The
+  browser-shell E2E and perf harnesses run Chromium, so their numbers track
+  the Windows engine more closely than the macOS one.
 - **E2E uses the in-memory port**, so native save dialogs, asset scopes, and
   the Rust watcher are exercised by unit/component tests
   (`MemoryDocumentPort` shares the same `DocumentPort` contract) plus the
-  manual checklist — not by Playwright.
+  manual checklists — not by Playwright.
 - **Cold start and Gatekeeper first launch** cannot be measured in a single
   session: cold samples require one launch per reboot cycle and the
   Gatekeeper sample requires installing the signed/notarized build. They

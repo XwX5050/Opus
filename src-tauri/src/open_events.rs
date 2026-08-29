@@ -136,6 +136,10 @@ mod tests {
     use super::*;
     #[test]
     fn normalizes_urls_deduplicates_and_rejects_invalid_inputs() {
+        // On Windows a `file:` URL needs a drive letter and a bare
+        // `/tmp/...` path is not absolute, so the fixtures differ per
+        // platform while covering the same cases.
+        #[cfg(unix)]
         let paths = normalize_open_paths([
             "file:///tmp/a%20b.md",
             "/tmp/a b.md",
@@ -144,7 +148,20 @@ mod tests {
             "/tmp/a.txt",
             "--flag",
         ]);
-        assert_eq!(paths, vec![PathBuf::from("/tmp/a b.md")]);
+        #[cfg(windows)]
+        let paths = normalize_open_paths([
+            "file:///C:/tmp/a%20b.md",
+            "C:\\tmp\\a b.md",
+            "https://x/a.md",
+            "relative.md",
+            "C:\\tmp\\a.txt",
+            "--flag",
+        ]);
+        #[cfg(unix)]
+        let expected = vec![PathBuf::from("/tmp/a b.md")];
+        #[cfg(windows)]
+        let expected = vec![PathBuf::from("C:\\tmp\\a b.md")];
+        assert_eq!(paths, expected);
     }
 
     #[test]

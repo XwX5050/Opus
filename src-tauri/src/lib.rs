@@ -1,7 +1,10 @@
 pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
-#[cfg(target_os = "macos")]
+// Neither WKWebView (macOS) nor WebView2 (Windows) exposes
+// `queryLocalFonts`, so the settings dialog's font picker needs the native
+// enumeration on both platforms.
+#[cfg(any(target_os = "macos", windows))]
 pub mod fonts;
 #[cfg(target_os = "linux")]
 pub mod linux_env;
@@ -14,7 +17,9 @@ pub mod perf_mark;
 pub mod recovery;
 pub mod translate;
 pub mod watch;
-#[cfg(target_os = "macos")]
+// Native window background sync: macOS paints NSWindow/WKWebView, Windows
+// the plain window background (see window_background.rs).
+#[cfg(any(target_os = "macos", windows))]
 pub mod window_background;
 pub mod workspace;
 
@@ -32,7 +37,33 @@ pub fn run() {
     let open_queue = Arc::new(Mutex::new(open_events::OpenPathQueue::default()));
     let setup_queue = Arc::clone(&open_queue);
     let run_queue = Arc::clone(&open_queue);
-    let app = tauri::Builder::default()
+    // Windows has no RunEvent::Opened: a second launch's argv reaches the
+    // already-running instance through this plugin instead. Its paths are
+    // normalized into the same OpenPathQueue / `open-paths` channel as
+    // macOS `RunEvent::Opened` below, and the main window is raised so the
+    // launch is not silently swallowed. Registered first so no second
+    // instance slips past it.
+    #[cfg(windows)]
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init({
+        let single_instance_queue = Arc::clone(&open_queue);
+        move |app, argv, _cwd| {
+            let paths = open_events::normalize_open_paths(argv.into_iter().skip(1));
+            if let Some(payload) = single_instance_queue
+                .lock()
+                .expect("open path queue poisoned")
+                .enqueue(paths)
+            {
+                let _ = app.emit("open-paths", payload);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }
+    }));
+    #[cfg(not(windows))]
+    let builder = tauri::Builder::default();
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -62,18 +93,18 @@ pub fn run() {
             translate::translate_segments,
             translate::list_translation_models,
             perf_mark::perf_mark_editor_editable,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             fonts::list_installed_fonts,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             window_background::set_window_background
         ])
         .setup(move |app| {
             // Seed the native chrome with the dark default canvas before the
-            // webview renders: the NSWindow/WKWebView underlying background
-            // (both default to white and flash along the resized edge).
+            // webview renders: the window/webview underlying backgrounds
+            // default to white and flash along the resized edge.
             // useTheme keeps it in sync with the resolved theme via
             // set_window_background.
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window_background::apply_background(
                     &window,
@@ -81,13 +112,15 @@ pub fn run() {
                         .expect("default canvas is a valid hex color"),
                 );
             }
-            // Linux runs without any native chrome: the window is undecorated
-            // (tiling-WM users drive it with their WM; the CSD header bar's
-            // title and window buttons are useless) and no menu bar is
-            // installed below. The setup hook runs before the event loop maps
-            // the window, so dropping decorations here applies ahead of the
-            // first frame with no header-bar flash.
-            #[cfg(target_os = "linux")]
+            // Linux and Windows run without native chrome: the window is
+            // undecorated — on Linux tiling-WM users drive it with their WM
+            // (the CSD header bar's title and window buttons are useless) and
+            // no menu bar is built for it; on Windows the frontend draws its
+            // own caption buttons (minimize/maximize/close). The setup hook
+            // runs before the event loop maps the window, so dropping
+            // decorations here applies ahead of the first frame with no
+            // header-bar flash.
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_decorations(false);
             }
@@ -105,7 +138,14 @@ pub fn run() {
                     }
                 });
             }
-            let initial = open_events::normalize_open_paths(std::env::args().skip(1));
+            // args() panics on non-UTF-8 arguments (Windows argv is UTF-16
+            // and can contain lone surrogates), so go through args_os() and
+            // lossy-convert; garbled arguments simply fail normalization.
+            let initial = open_events::normalize_open_paths(
+                std::env::args_os()
+                    .skip(1)
+                    .map(|arg| arg.to_string_lossy().into_owned()),
+            );
             setup_queue
                 .lock()
                 .expect("open path queue poisoned")

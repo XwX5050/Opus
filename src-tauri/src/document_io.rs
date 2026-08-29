@@ -84,7 +84,7 @@ pub fn read_document(path: &Path) -> Result<OpenedDocument, DocumentIoError> {
         text,
         has_utf8_bom,
         modified_unix_ms: modified_unix_ms(&metadata, path)?,
-        version: version_for_bytes_and_metadata(&bytes, &metadata),
+        version: version_for_bytes_and_file(&bytes, &file, path)?,
     })
 }
 
@@ -100,7 +100,7 @@ pub fn probe_version(path: &Path) -> Result<(u128, String), DocumentIoError> {
     let metadata = file.metadata().map_err(|error| map_io_error(path, error))?;
     Ok((
         modified_unix_ms(&metadata, path)?,
-        version_for_bytes_and_metadata(&bytes, &metadata),
+        version_for_bytes_and_file(&bytes, &file, path)?,
     ))
 }
 
@@ -109,34 +109,44 @@ fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn version_for_bytes_and_metadata(bytes: &[u8], metadata: &fs::Metadata) -> String {
-    format!(
+fn version_for_bytes_and_file(
+    bytes: &[u8],
+    file: &fs::File,
+    path: &Path,
+) -> Result<String, DocumentIoError> {
+    Ok(format!(
         "sha256:{}:{}",
         content_hash(bytes),
-        identity_token(metadata)
-    )
+        identity_token(file, path)?
+    ))
 }
 
 #[cfg(unix)]
-fn identity_token(metadata: &fs::Metadata) -> String {
+fn identity_token(file: &fs::File, path: &Path) -> Result<String, DocumentIoError> {
     use std::os::unix::fs::MetadataExt;
-    format!("unix:{}:{}", metadata.dev(), metadata.ino())
+    let metadata = file.metadata().map_err(|error| map_io_error(path, error))?;
+    Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()))
 }
 
+/// std's `MetadataExt` volume-serial/file-index accessors are still
+/// unstable (`windows_by_handle`), so read the same fields through the
+/// Win32 API from the already-open file handle.
 #[cfg(windows)]
-fn identity_token(metadata: &fs::Metadata) -> String {
-    use std::os::windows::fs::MetadataExt;
-    format!(
-        "windows:{:?}:{:?}:{}:{}",
-        metadata.volume_serial_number(),
-        metadata.file_index(),
-        metadata.creation_time(),
-        metadata.file_size()
-    )
+fn identity_token(file: &fs::File, path: &Path) -> Result<String, DocumentIoError> {
+    let info = by_handle_file_information(file, path)?;
+    Ok(format!(
+        "windows:{}:{}:{}:{}",
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        (u64::from(info.ftCreationTime.dwHighDateTime) << 32)
+            | u64::from(info.ftCreationTime.dwLowDateTime),
+        (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow),
+    ))
 }
 
 #[cfg(not(any(unix, windows)))]
-fn identity_token(metadata: &fs::Metadata) -> String {
+fn identity_token(file: &fs::File, path: &Path) -> Result<String, DocumentIoError> {
+    let metadata = file.metadata().map_err(|error| map_io_error(path, error))?;
     let created = metadata
         .created()
         .ok()
@@ -147,7 +157,60 @@ fn identity_token(metadata: &fs::Metadata) -> String {
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|value| value.as_nanos());
-    format!("fallback:{}:{created:?}:{modified:?}", metadata.len())
+    Ok(format!(
+        "fallback:{}:{created:?}:{modified:?}",
+        metadata.len()
+    ))
+}
+
+/// Queries `BY_HANDLE_FILE_INFORMATION` for an open file: the stable source
+/// of the volume serial number and file index that `MetadataExt` only
+/// exposes on nightly.
+#[cfg(windows)]
+fn by_handle_file_information(
+    file: &fs::File,
+    path: &Path,
+) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, DocumentIoError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    // SAFETY: every field is a plain integer, so a zeroed struct is valid.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is a live file handle and `info` is valid for writes of
+    // the expected size.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return Err(map_io_error(path, io::Error::last_os_error()));
+    }
+    Ok(info)
+}
+
+/// Identity snapshot of an already-open file for the checked-write commit
+/// guard (`same_identity` below).
+#[cfg(not(windows))]
+fn identity_of_open_file(file: &fs::File, path: &Path) -> Result<fs::Metadata, DocumentIoError> {
+    file.metadata().map_err(|error| map_io_error(path, error))
+}
+
+#[cfg(windows)]
+fn identity_of_open_file(
+    file: &fs::File,
+    path: &Path,
+) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, DocumentIoError> {
+    by_handle_file_information(file, path)
+}
+
+#[cfg(not(windows))]
+fn identity_of_path(path: &Path) -> Result<fs::Metadata, DocumentIoError> {
+    fs::metadata(path).map_err(|error| map_io_error(path, error))
+}
+
+#[cfg(windows)]
+fn identity_of_path(
+    path: &Path,
+) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, DocumentIoError> {
+    let file = fs::File::open(path).map_err(|error| map_io_error(path, error))?;
+    by_handle_file_information(&file, path)
 }
 
 pub fn write_document_checked(
@@ -201,7 +264,7 @@ where
         .metadata()
         .map_err(|error| map_io_error(&destination, error))?;
     let modified = modified_unix_ms(&temporary_metadata, &destination)?;
-    let version = version_for_bytes_and_metadata(&output, &temporary_metadata);
+    let version = version_for_bytes_and_file(&output, temporary.as_file(), &destination)?;
 
     if let Some(expected) = expected_version {
         let mut current = fs::File::open(&destination).map_err(|error| {
@@ -213,14 +276,12 @@ where
                 map_io_error(&destination, error)
             }
         })?;
-        let identity = current
-            .metadata()
-            .map_err(|error| map_io_error(&destination, error))?;
+        let identity = identity_of_open_file(&current, &destination)?;
         let mut bytes = Vec::new();
         current
             .read_to_end(&mut bytes)
             .map_err(|error| map_io_error(&destination, error))?;
-        if version_for_bytes_and_metadata(&bytes, &identity) != expected {
+        if version_for_bytes_and_file(&bytes, &current, &destination)? != expected {
             return Err(DocumentIoError::Conflict {
                 path: path.to_path_buf(),
             });
@@ -234,13 +295,16 @@ where
                 })
             }
         }
-        let current_identity =
-            fs::metadata(&destination).map_err(|error| map_io_error(&destination, error))?;
+        let current_identity = identity_of_path(&destination)?;
         if !same_identity(&identity, &current_identity) {
             return Err(DocumentIoError::Conflict {
                 path: path.to_path_buf(),
             });
         }
+        // Windows refuses to rename over a file that still has an open
+        // handle (ACCESS_DENIED), so close the conflict-check handle before
+        // committing; the identity guard above already passed.
+        drop(current);
         temporary
             .persist(&destination)
             .map_err(|error| map_io_error(&destination, error.error))?;
@@ -274,12 +338,17 @@ fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 
 #[cfg(windows)]
-fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
+fn same_identity(
+    left: &windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
+    right: &windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
+) -> bool {
+    left.dwVolumeSerialNumber == right.dwVolumeSerialNumber
+        && left.nFileIndexHigh == right.nFileIndexHigh
+        && left.nFileIndexLow == right.nFileIndexLow
+        && left.nFileSizeHigh == right.nFileSizeHigh
+        && left.nFileSizeLow == right.nFileSizeLow
+        && left.ftLastWriteTime.dwLowDateTime == right.ftLastWriteTime.dwLowDateTime
+        && left.ftLastWriteTime.dwHighDateTime == right.ftLastWriteTime.dwHighDateTime
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -448,11 +517,20 @@ fn parent_directory(path: &Path) -> Result<&Path, DocumentIoError> {
 }
 
 /// Syncs the parent directory of `path` so a completed rename is durable.
+#[cfg(not(windows))]
 fn sync_parent_directory(path: &Path) -> Result<(), DocumentIoError> {
     let parent = parent_directory(path)?;
     fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| map_io_error(parent, error))
+}
+
+/// No-op on Windows: directories cannot be opened for fsync there
+/// (ERROR_ACCESS_DENIED) and NTFS already journals directory metadata, so
+/// the Unix directory-fsync durability idiom has no equivalent to perform.
+#[cfg(windows)]
+fn sync_parent_directory(_path: &Path) -> Result<(), DocumentIoError> {
+    Ok(())
 }
 
 fn existing_mode_permissions(path: &Path) -> Result<Option<fs::Permissions>, DocumentIoError> {
