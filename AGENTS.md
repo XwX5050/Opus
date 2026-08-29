@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 This document is the single source of truth for AI agents working on Opus, a
-macOS-first Markdown editor. Read it before making changes.
+cross-platform Markdown editor. Read it before making changes.
 
 ## Project overview
 
