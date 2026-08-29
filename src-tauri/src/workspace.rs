@@ -75,9 +75,27 @@ fn is_markdown(path: &Path) -> bool {
 }
 
 fn is_hidden(path: &Path) -> bool {
-    path.file_name()
+    let dot_hidden = path
+        .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with('.'))
+        .is_some_and(|name| name.starts_with('.'));
+    dot_hidden || has_hidden_attribute(path)
+}
+
+/// Windows has no dotfile convention in most tooling; Explorer hides entries
+/// through the hidden file attribute instead.
+#[cfg(windows)]
+fn has_hidden_attribute(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    fs::metadata(path)
+        .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn has_hidden_attribute(_path: &Path) -> bool {
+    false
 }
 
 /// Canonicalizes the opened root. Temp directories on macOS live behind a

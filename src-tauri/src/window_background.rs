@@ -1,7 +1,8 @@
-//! Native window background sync (src/theme/useTheme.ts), macOS-only.
+//! Native window background sync (src/theme/useTheme.ts).
 //!
-//! During live window resizes the WKWebView repaints a step behind the drag,
-//! so white flashes along the resized edge. Two layers need the canvas color:
+//! During live window resizes the webview repaints a step behind the drag,
+//! so white flashes along the resized edge. On macOS two layers need the
+//! canvas color:
 //!
 //! - the native NSWindow background (white by default) — `set_background_color`;
 //! - the WKWebView's under-page background (`underPageBackgroundColor`, white
@@ -9,13 +10,16 @@
 //!   the webview lags behind the drag. wry only sets it under its
 //!   `transparent` feature, so an opaque app must set it explicitly.
 //!
+//! On Windows only the cross-platform `set_background_color` exists; WebView2
+//! has no separate under-page layer to paint.
+//!
 //! The frontend reports the resolved canvas color (`--canvas` in
 //! src/theme/tokens.css) whenever the theme changes; `lib.rs` also seeds the
 //! initial background with the dark default canvas before the first frame.
 //!
 //! Linux has no equivalent: the window is undecorated and carries no native
 //! menu bar (see lib.rs), so there is no native chrome left to theme and the
-//! module is compiled on macOS only.
+//! module is not compiled there.
 
 use tauri::window::Color;
 
@@ -43,14 +47,16 @@ pub fn parse_hex_color(input: &str) -> Result<Color, String> {
     ))
 }
 
-/// Paints the window's native background and its WKWebView under-page
-/// background with the given opaque color. The under-page layer is what
-/// flashes during live resizes: AppKit paints it into newly exposed regions
-/// before the webview reflows and repaints.
+/// Paints the window's native background with the given opaque color. On
+/// macOS the WKWebView under-page background is painted too: that layer is
+/// what flashes during live resizes, because AppKit paints it into newly
+/// exposed regions before the webview reflows and repaints. Windows has no
+/// such under-page layer, so `set_background_color` is all there is to do.
 pub(crate) fn apply_background(window: &tauri::WebviewWindow, color: Color) -> Result<(), String> {
     window
         .set_background_color(Some(color))
         .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
     window
         .with_webview(move |webview| {
             // SAFETY: `inner()` returns this webview's live WKWebView, and
@@ -68,11 +74,12 @@ pub(crate) fn apply_background(window: &tauri::WebviewWindow, color: Color) -> R
                 view.setUnderPageBackgroundColor(Some(&ns_color));
             }
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
-/// Sets the calling window's native background and its WKWebView under-page
-/// background to the given opaque hex color.
+/// Sets the calling window's native background (and on macOS its WKWebView
+/// under-page background) to the given opaque hex color.
 #[tauri::command]
 pub fn set_window_background(window: tauri::WebviewWindow, color: String) -> Result<(), String> {
     apply_background(&window, parse_hex_color(&color)?)

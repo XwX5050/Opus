@@ -334,6 +334,7 @@ fn draft_info_from_stored(stored: &StoredDraftInfo, updated_unix_ms: u128) -> Dr
     }
 }
 
+#[cfg(not(windows))]
 fn sync_directory(dir: &Path) -> Result<(), RecoveryError> {
     fs::File::open(dir)
         .and_then(|directory| directory.sync_all())
@@ -341,6 +342,14 @@ fn sync_directory(dir: &Path) -> Result<(), RecoveryError> {
             path: dir.to_path_buf(),
             source: error,
         })
+}
+
+/// No-op on Windows: directories cannot be opened for fsync there
+/// (ERROR_ACCESS_DENIED) and NTFS already journals directory metadata, so
+/// the Unix directory-fsync durability idiom has no equivalent to perform.
+#[cfg(windows)]
+fn sync_directory(_dir: &Path) -> Result<(), RecoveryError> {
+    Ok(())
 }
 
 fn modified_unix_ms(metadata: &fs::Metadata, path: &Path) -> Result<u128, RecoveryError> {

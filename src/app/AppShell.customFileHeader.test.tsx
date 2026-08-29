@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { OpenedFile } from "../document/types";
 import AppShell from "./AppShell";
@@ -23,13 +23,39 @@ const file = (path: string, text = "saved"): OpenedFile => ({
   version: `version:${path}`,
 });
 
-// The Linux native header replaces the native menu bar: no header text
-// buttons (fileActionsInHeader is false in production), the file menu and
-// window-level shortcuts take over.
-const renderLinux = (port: MemoryDocumentPort) =>
-  render(
-    <AppShell port={port} fileActionsInHeader={false} linuxNativeHeader />,
+// The header reads the platform from the user agent (see
+// src/document/platform.ts); jsdom's UA reflects the host OS, so pin one per
+// render to keep the tests platform-independent.
+const originalUserAgent = navigator.userAgent;
+
+const stubUserAgent = (value: string) =>
+  Object.defineProperty(window.navigator, "userAgent", {
+    value,
+    configurable: true,
+  });
+
+afterEach(() => {
+  stubUserAgent(originalUserAgent);
+});
+
+// The custom file header replaces the native menu bar on non-macOS native
+// builds: no header text buttons (fileActionsInHeader is false in
+// production), the file menu and window-level shortcuts take over. Linux
+// additionally drops the window title (its window is undecorated); Windows
+// keeps the standard decorations and the title.
+const renderLinuxHeader = (port: MemoryDocumentPort) => {
+  stubUserAgent("Mozilla/5.0 (X11; Linux x86_64)");
+  return render(
+    <AppShell port={port} fileActionsInHeader={false} customFileHeader />,
   );
+};
+
+const renderWindowsHeader = (port: MemoryDocumentPort) => {
+  stubUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+  return render(
+    <AppShell port={port} fileActionsInHeader={false} customFileHeader />,
+  );
+};
 
 const titlebar = () => screen.getByRole("banner", { name: "应用标题栏" });
 const fileMenuToggle = () =>
@@ -42,9 +68,9 @@ const replaceEditorText = (text: string) => {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
 };
 
-describe("AppShell Linux native header", () => {
-  it("drops the window title and the header text buttons", () => {
-    renderLinux(new MemoryDocumentPort(new Map()));
+describe("AppShell custom file header", () => {
+  it("drops the window title and the header text buttons on Linux", () => {
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     expect(screen.queryByText("Opus")).not.toBeInTheDocument();
     const toggle = fileMenuToggle();
@@ -61,9 +87,49 @@ describe("AppShell Linux native header", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps the window title and the file menu on Windows", async () => {
+    const user = userEvent.setup();
+    renderWindowsHeader(new MemoryDocumentPort(new Map()));
+
+    // Windows keeps the standard OS decorations, so the title stays.
+    expect(screen.getByText("Opus")).toBeInTheDocument();
+
+    await user.click(fileMenuToggle());
+    const menu = screen.getByRole("menu", { name: "文件" });
+    expect(fileMenuToggle()).toHaveAttribute("aria-expanded", "true");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "新建",
+      "打开文件",
+      "打开文件夹",
+      "另存为…",
+      "设置",
+    ]);
+  });
+
+  it("opens the settings dialog from the menu on Windows", async () => {
+    const user = userEvent.setup();
+    renderWindowsHeader(new MemoryDocumentPort(new Map()));
+
+    await user.click(fileMenuToggle());
+    await user.click(
+      within(screen.getByRole("menu")).getByRole("menuitem", { name: "设置" }),
+    );
+
+    expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
+  });
+
+  it("binds Ctrl+N to 新建 at the window level on Windows", async () => {
+    renderWindowsHeader(new MemoryDocumentPort(new Map()));
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+
+    expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+  });
+
   it("opens the file menu with focus on the first item", async () => {
     const user = userEvent.setup();
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     await user.click(fileMenuToggle());
 
@@ -82,7 +148,7 @@ describe("AppShell Linux native header", () => {
 
   it("runs 新建 from the menu, closes it, and keeps focus on the toggle", async () => {
     const user = userEvent.setup();
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     await user.click(fileMenuToggle());
     await user.click(
@@ -96,7 +162,7 @@ describe("AppShell Linux native header", () => {
 
   it("closes on Escape and restores focus to the toggle", async () => {
     const user = userEvent.setup();
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     await user.click(fileMenuToggle());
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
@@ -108,7 +174,7 @@ describe("AppShell Linux native header", () => {
 
   it("closes on an outside pointerdown", async () => {
     const user = userEvent.setup();
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     await user.click(fileMenuToggle());
     expect(screen.getByRole("menu")).toBeInTheDocument();
@@ -119,7 +185,7 @@ describe("AppShell Linux native header", () => {
 
   it("supports roving focus with arrow keys", async () => {
     const user = userEvent.setup();
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     await user.click(fileMenuToggle());
     const menu = screen.getByRole("menu");
@@ -137,7 +203,7 @@ describe("AppShell Linux native header", () => {
 
   it("opens the settings dialog from the menu and restores focus on close", async () => {
     const user = userEvent.setup();
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     await user.click(fileMenuToggle());
     await user.click(
@@ -155,7 +221,7 @@ describe("AppShell Linux native header", () => {
   });
 
   it("binds Ctrl+N to 新建 and Ctrl+O to 打开文件 at the window level", async () => {
-    renderLinux(
+    renderLinuxHeader(
       new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]])),
     );
 
@@ -167,7 +233,7 @@ describe("AppShell Linux native header", () => {
   });
 
   it("binds Ctrl+Shift+O to 打开文件夹", async () => {
-    renderLinux(
+    renderLinuxHeader(
       new MemoryDocumentPort(new Map(), {
         workspace: { path: "/ws", title: "ws" },
       }),
@@ -181,7 +247,7 @@ describe("AppShell Linux native header", () => {
   });
 
   it("binds Ctrl+W to closing the active tab", async () => {
-    renderLinux(
+    renderLinuxHeader(
       new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]])),
     );
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
@@ -195,7 +261,7 @@ describe("AppShell Linux native header", () => {
   });
 
   it("binds Ctrl+, to settings and gates shortcuts while a dialog is open", async () => {
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
@@ -211,7 +277,7 @@ describe("AppShell Linux native header", () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", file("/notes/a.md", "saved")]]),
     );
-    renderLinux(port);
+    renderLinuxHeader(port);
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
     await screen.findByRole("tab", { name: /a\.md/ });
     act(() => replaceEditorText("changed"));
@@ -229,7 +295,7 @@ describe("AppShell Linux native header", () => {
   });
 
   it("ignores chords that were already handled (defaultPrevented)", () => {
-    renderLinux(new MemoryDocumentPort(new Map()));
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
     const sink = document.createElement("div");
     sink.addEventListener("keydown", (event) => event.preventDefault());
     document.body.appendChild(sink);
@@ -249,7 +315,7 @@ describe("AppShell Linux native header", () => {
       within(titlebar()).queryByRole("button", { name: "文件" }),
     ).not.toBeInTheDocument();
 
-    // Window-level menu shortcuts stay off outside Linux native builds.
+    // Window-level menu shortcuts stay off outside non-macOS native builds.
     fireEvent.keyDown(window, { key: "n", ctrlKey: true });
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });

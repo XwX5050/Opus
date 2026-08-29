@@ -8,11 +8,21 @@ use markdown_edit_lib::document_io::Newline;
 
 #[test]
 fn failed_asset_scope_mirroring_releases_the_registry_reference() {
+    // The fixture paths only need to be absolute; resolution is lexical.
+    #[cfg(windows)]
+    const DOC: &str = "C:\\notes\\a.md";
+    #[cfg(not(windows))]
+    const DOC: &str = "/notes/a.md";
+    #[cfg(windows)]
+    const SIBLING: &str = "C:\\notes\\image.png";
+    #[cfg(not(windows))]
+    const SIBLING: &str = "/notes/image.png";
+
     let scopes = SharedAssetScopes::new(AssetScopeRegistry::default());
     let result = acquire_scoped(
         &scopes,
         "tab-a",
-        |registry| registry.acquire_document("tab-a", std::path::Path::new("/notes/a.md")),
+        |registry| registry.acquire_document("tab-a", std::path::Path::new(DOC)),
         |_acquired| {
             Err(CommandError {
                 code: "io".into(),
@@ -23,14 +33,14 @@ fn failed_asset_scope_mirroring_releases_the_registry_reference() {
 
     assert_eq!(result.unwrap_err().message, "asset scope mirroring failed");
     let registry = scopes.lock().unwrap();
-    assert!(!registry.allows(std::path::Path::new("/notes/image.png")));
+    assert!(!registry.allows(std::path::Path::new(SIBLING)));
     drop(registry);
     // The compensating release removed the consumer, so a later acquire for
     // the same id reports the scope as newly added instead of double-counting.
     let acquired = acquire_scoped(
         &scopes,
         "tab-a",
-        |registry| registry.acquire_document("tab-a", std::path::Path::new("/notes/a.md")),
+        |registry| registry.acquire_document("tab-a", std::path::Path::new(DOC)),
         |_acquired| Ok(()),
     );
     assert!(acquired.is_ok());

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "minimal permissions for document dialogs, the open-path event handshake, session persistence, and window geometry",
+  "description": "minimal permissions for document dialogs, the open-path event handshake, session persistence, window geometry, and window controls",
   "windows": [
     "main"
   ],
@@ -16,6 +16,13 @@
     "core:window:allow-outer-position",
     "core:window:allow-available-monitors",
     "core:window:allow-destroy",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-resize-dragging",
     "dialog:allow-open",
     "dialog:allow-save",
     "store:allow-load",

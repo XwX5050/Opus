@@ -43,7 +43,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["app", "dmg"],
+    "targets": ["app", "dmg", "nsis"],
     "fileAssociations": [
       { "ext": ["md", "markdown"], "name": "Markdown Document", "role": "Editor" }
     ],

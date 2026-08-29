@@ -12,7 +12,10 @@ rust-version = "1.77.2"
 
 [lib]
 name = "markdown_edit_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop-only crate: the template's `staticlib`/`cdylib` exist for mobile
+# builds, and the cdylib also fails to link on windows-gnu — every symbol is
+# exported there, blowing past the 65535-entry PE export table limit.
+crate-type = ["rlib"]
 
 [build-dependencies]
 # The explicit `features = []` is the tauri CLI's normalized form — it
@@ -58,6 +61,16 @@ objc2-core-foundation = { version = "0.3.2", features = ["std", "CFArray", "CFSt
 objc2-core-text = { version = "0.3.2", features = ["std", "CTFontManager"] }
 objc2-foundation = { version = "0.3.2", features = ["std", "objc2-core-foundation"] }
 objc2-web-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "objc2-app-kit", "WKWebView"] }
+
+# Windows-only: single-instance forwards a second launch's argv to the
+# running instance (see lib.rs; Windows has no RunEvent::Opened), winreg
+# reads the installed-font registry keys (see fonts.rs), and windows-sys
+# reads file identities (volume serial + file index; the std accessors are
+# still nightly-only — see document_io.rs).
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-single-instance = "2"
+winreg = "0.56"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

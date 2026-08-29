@@ -183,7 +183,9 @@ impl TranslationCache {
 
     /// Stores a translation atomically: write a sibling temp file, fsync it,
     /// rename over the destination, then fsync the directory so the rename
-    /// itself is durable (same discipline as recovery drafts).
+    /// itself is durable (same discipline as recovery drafts). The directory
+    /// fsync is Unix-only: Windows cannot open directories for fsync
+    /// (ERROR_ACCESS_DENIED) and NTFS already journals directory metadata.
     pub fn store(&self, key: &str, translated: &str) -> Result<(), io::Error> {
         fs::create_dir_all(&self.dir)?;
         let payload = serde_json::to_vec(&CachedTranslation {
@@ -196,6 +198,7 @@ impl TranslationCache {
         temporary
             .persist(&destination)
             .map_err(|error| error.error)?;
+        #[cfg(not(windows))]
         fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
@@ -575,7 +578,14 @@ mod tests {
             std::fs::write(&path, "x").unwrap();
             let times = fs::FileTimes::new()
                 .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(i * 3600));
-            fs::File::open(&path).unwrap().set_times(times).unwrap();
+            // Windows requires a handle with write access for SetFileTime, so
+            // a plain File::open (read-only) fails there with ACCESS_DENIED.
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(times)
+                .unwrap();
         }
         // A non-json file must never be counted or removed.
         std::fs::write(cache.dir().join("README"), "keep me").unwrap();

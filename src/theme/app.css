@@ -297,6 +297,132 @@ input[type="number"]::-webkit-inner-spin-button {
   background: var(--selection);
 }
 
+/* ---------- Windows caption controls + edge-resize hotzones ---------- */
+
+/* The Windows build is undecorated (set_decorations(false)), so the header
+ * draws its own caption buttons: 46x32 like the native controls, flush at
+ * the window's right edge (the negative margin cancels the header padding).
+ * The buttons opt out of the titlebar drag via the generic
+ * .app-header button rule above; the container carries no drag region. */
+.window-controls {
+  display: flex;
+  align-items: center;
+  margin-right: calc(var(--space-3) * -1);
+  -webkit-app-region: no-drag;
+}
+
+.window-controls .window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.window-controls .window-control:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.window-controls .window-control:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
+/* Close follows the Windows convention: red hover with a white glyph. The
+ * red is the Windows caption-button color (--window-close-hover), the same
+ * literal in both themes. */
+.window-controls .window-control-close:hover:not(:disabled),
+.window-controls .window-control-close:active:not(:disabled) {
+  background: var(--window-close-hover);
+  color: var(--text-on-accent);
+}
+
+/* Invisible resize border replacing the one lost to set_decorations(false):
+ * 6px strips along each window edge plus 10px corner squares. The container
+ * never intercepts pointer events; only the strips do. It covers app
+ * content (z-index 5) but sits below dialogs (z-index 10). Rendered only on
+ * the Windows native build, so macOS/Linux never see these. */
+.window-resize-hotzones {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.window-resize-hotzone {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.window-resize-hotzone-n {
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.window-resize-hotzone-s {
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.window-resize-hotzone-e {
+  top: 10px;
+  bottom: 10px;
+  right: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.window-resize-hotzone-w {
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.window-resize-hotzone-ne {
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nesw-resize;
+}
+
+.window-resize-hotzone-nw {
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
+}
+
+.window-resize-hotzone-se {
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
+}
+
+.window-resize-hotzone-sw {
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nesw-resize;
+}
+
 /* ---------- Sidebar sections + vertical tab list ---------- */
 
 .sidebar-section {

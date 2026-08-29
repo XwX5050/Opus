@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::{fs::symlink, fs::PermissionsExt};
 
 use markdown_edit_lib::document_io::write_document_checked_with_hook;
@@ -144,6 +145,7 @@ fn document_io_write_reports_a_missing_parent() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn document_io_write_to_read_only_target_keeps_bytes_and_cleans_up_temp_siblings() {
     let dir = tempfile::tempdir().unwrap();
@@ -160,6 +162,7 @@ fn document_io_write_to_read_only_target_keeps_bytes_and_cleans_up_temp_siblings
     assert_eq!(directory_entry_names(dir.path()), vec!["note.md"]);
 }
 
+#[cfg(unix)]
 #[test]
 fn document_io_writing_a_symlink_updates_its_target_without_replacing_the_link() {
     let dir = tempfile::tempdir().unwrap();
@@ -177,6 +180,7 @@ fn document_io_writing_a_symlink_updates_its_target_without_replacing_the_link()
     assert_eq!(std::fs::read(target).unwrap(), b"replacement\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn document_io_write_preserves_existing_unix_mode_bits_and_reports_metadata_time() {
     let dir = tempfile::tempdir().unwrap();
@@ -195,6 +199,29 @@ fn document_io_write_preserves_existing_unix_mode_bits_and_reports_metadata_time
         modified_unix_ms
     );
     assert_eq!(directory_entry_names(dir.path()), vec!["note.md"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn document_io_write_to_read_only_target_reports_permission_denied() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let bytes = b"original\n";
+    std::fs::write(&path, bytes).unwrap();
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&path, permissions).unwrap();
+
+    assert!(matches!(
+        write_document(&path, "replacement\n", false, Newline::Lf),
+        Err(DocumentIoError::PermissionDenied { .. })
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(directory_entry_names(dir.path()), vec!["note.md"]);
+    // Clear the read-only attribute so TempDir cleanup can delete the file.
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&path, permissions).unwrap();
 }
 
 #[test]
