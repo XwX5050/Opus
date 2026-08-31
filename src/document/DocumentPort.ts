@@ -65,6 +65,14 @@ export interface DocumentPort {
   listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>>;
   createMarkdownFile(root: string, relative: string): Promise<DirectoryEntry>;
   renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry>;
+  /**
+   * Renames an open document in place: `newBaseName` is a base name without
+   * an extension, the original extension is kept, and the rename stays in
+   * the document's own directory. Unlike `renameEntry` no workspace anchor
+   * is required — individually opened documents rename too. Resolves to the
+   * new absolute path.
+   */
+  renameDocument(path: string, newBaseName: string): Promise<string>;
   trashEntry(root: string, relative: string): Promise<void>;
   /**
    * Watches one open document (the file does not need to exist). Watches are

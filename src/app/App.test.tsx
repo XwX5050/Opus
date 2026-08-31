@@ -28,6 +28,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
       async listDirectory() { return []; },
       async createMarkdownFile() { throw new DocumentPortError("io", "not supported"); },
       async renameEntry() { throw new DocumentPortError("io", "not supported"); },
+      async renameDocument() { throw new DocumentPortError("io", "not supported"); },
       async trashEntry() {},
       async watchDocument() {},
       async watchWorkspace() {},

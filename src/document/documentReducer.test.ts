@@ -1355,6 +1355,58 @@ describe("documentReducer disk events", () => {
     expect(state.tabs[1].path).toBe("/Users/Alice/Notes/other.md");
   });
 
+  it("updates a clean tab's path and title on tabRenamed", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      {
+        type: "tabRenamed",
+        id: "doc-1",
+        path: "/Users/Alice/Notes/renamed.md",
+        title: "renamed.md",
+      },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      path: "/Users/Alice/Notes/renamed.md",
+      title: "renamed.md",
+      text: "saved",
+      status: "clean",
+    });
+  });
+
+  it("moves a dirty tab's path and title on tabRenamed while keeping its edits", () => {
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "local edits" },
+      {
+        type: "tabRenamed",
+        id: "doc-1",
+        path: "/Users/Alice/Notes/renamed.md",
+        title: "renamed.md",
+      },
+    ]);
+
+    expect(state.tabs[0]).toMatchObject({
+      path: "/Users/Alice/Notes/renamed.md",
+      title: "renamed.md",
+      text: "local edits",
+      savedText: "saved",
+      status: "dirty",
+    });
+  });
+
+  it("ignores tabRenamed for unknown tab ids", () => {
+    const before = reduce([{ type: "fileOpened", id: "doc-1", file: openedFile() }]);
+    const after = documentReducer(before, {
+      type: "tabRenamed",
+      id: "ghost",
+      path: "/Users/Alice/Notes/renamed.md",
+      title: "renamed.md",
+    });
+
+    expect(after).toBe(before);
+  });
+
   it("restores a recovery draft as a dirty tab keyed by its original path", () => {
     const state = reduce([
       {

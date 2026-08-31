@@ -5,6 +5,7 @@ import {
   documentReducer,
   initialDocumentState,
   normalizePathKey,
+  titleFromPath,
   type DocumentAction,
 } from "../document/documentReducer";
 import { detectPathPlatform } from "../document/platform";
@@ -98,6 +99,21 @@ const parentPathKey = (path: string): string => {
   const normalized = path.replaceAll("\\", "/");
   const index = normalized.lastIndexOf("/");
   return normalizePathKey(index <= 0 ? "/" : normalized.slice(0, index), PATH_PLATFORM);
+};
+
+/**
+ * Computes the absolute path an in-app rename lands on: same directory and
+ * original extension as `path`, with `newBaseName` as the new base — the
+ * exact path the backend's rename_document command constructs.
+ */
+const renamedDocumentPath = (path: string, newBaseName: string): string => {
+  const normalized = path.replaceAll("\\", "/");
+  const index = normalized.lastIndexOf("/");
+  const directory =
+    index === -1 ? "" : index === 0 ? "/" : normalized.slice(0, index);
+  const lastDot = normalized.lastIndexOf(".");
+  const extension = lastDot === -1 ? "" : normalized.slice(lastDot);
+  return `${directory}/${newBaseName}${extension}`;
 };
 
 /**
@@ -791,6 +807,38 @@ export function useAppController(
     }
   }, [acquireDocumentScope, dispatch, watchConsumer]);
 
+  /**
+   * Renames the document behind a tab in place. `newBaseName` carries no
+   * extension: the original extension and directory of the tab's path are
+   * kept. On success the tab follows to the new path regardless of its
+   * status, and recent entries pointing at the old path are re-pointed the
+   * same way disk moves update paths. On failure nothing is committed and
+   * the error propagates to the caller.
+   */
+  const renameDocument = useCallback(async (tabId: string, newBaseName: string) => {
+    const tab = stateRef.current.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || tab.path === null) {
+      throw new Error(`No open document for tab: ${tabId}`);
+    }
+    const oldPath = tab.path;
+    const newPath = renamedDocumentPath(oldPath, newBaseName);
+    await port.renameDocument(oldPath, newBaseName);
+    dispatch({
+      type: "tabRenamed",
+      id: tabId,
+      path: newPath,
+      title: titleFromPath(newPath, PATH_PLATFORM),
+    });
+    setRecent((current) =>
+      current.map((entry) =>
+        normalizePathKey(entry.path, PATH_PLATFORM) ===
+        normalizePathKey(oldPath, PATH_PLATFORM)
+          ? { ...entry, path: newPath }
+          : entry,
+      ),
+    );
+  }, [dispatch, port]);
+
   // Release every still-held scope and watch when the controller unmounts,
   // keeping the same acquire-then-release serialization as tab closes.
   useEffect(() => {
@@ -1372,5 +1420,6 @@ export function useAppController(
     restoreDraft,
     discardRecoveryDraft,
     openRecent,
+    renameDocument,
   };
 }

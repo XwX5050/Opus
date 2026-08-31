@@ -302,6 +302,55 @@ pub fn create_markdown_file(
     })
 }
 
+/// Validates an entry name for a rename: non-empty, not hidden (no leading
+/// dot), and exactly one normal path component (no separators). Shared by
+/// workspace entry renames and document renames.
+pub fn validate_entry_name(name: &str) -> Result<(), WorkspaceError> {
+    let valid = !name.is_empty()
+        && !name.starts_with('.')
+        && Path::new(name).components().count() == 1
+        && matches!(
+            Path::new(name).components().next(),
+            Some(Component::Normal(_))
+        );
+    if valid {
+        Ok(())
+    } else {
+        Err(WorkspaceError::InvalidName { name: name.into() })
+    }
+}
+
+/// Renames `source` to `to_name` inside the same directory. `to_name` must
+/// be a plain entry name (see `validate_entry_name`); Markdown files keep a
+/// Markdown extension so they cannot be renamed out of the listing. Renaming
+/// to the current name succeeds as a no-op, and an existing target is
+/// rejected instead of being overwritten. Used by `rename_entry`, which
+/// resolves the source inside the workspace root, and by the
+/// `rename_document` command, which renames an individually opened file by
+/// its absolute path.
+pub fn rename_to_name(source: &Path, to_name: &str) -> Result<DirectoryEntry, WorkspaceError> {
+    validate_entry_name(to_name)?;
+    let target = source
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(to_name);
+    if source.is_file() && !is_markdown(&target) {
+        return Err(WorkspaceError::NotMarkdown { path: target });
+    }
+    if target != source && target.exists() {
+        return Err(WorkspaceError::AlreadyExists { path: target });
+    }
+    fs::rename(source, &target).map_err(|error| WorkspaceError::Io {
+        path: source.to_path_buf(),
+        source: error,
+    })?;
+    Ok(DirectoryEntry {
+        name: to_name.into(),
+        is_directory: target.is_dir(),
+        path: target,
+    })
+}
+
 /// Renames an entry within its own directory. `to_name` must be a plain
 /// entry name (no separators, not hidden); Markdown files keep a Markdown
 /// extension so they cannot be renamed out of the listing. Renaming an
@@ -313,34 +362,7 @@ pub fn rename_entry(
     to_name: &str,
 ) -> Result<DirectoryEntry, WorkspaceError> {
     let source = resolve_entry_for_mutation(root, from)?;
-    let valid_name = !to_name.is_empty()
-        && !to_name.starts_with('.')
-        && Path::new(to_name).components().count() == 1
-        && matches!(
-            Path::new(to_name).components().next(),
-            Some(Component::Normal(_))
-        );
-    if !valid_name {
-        return Err(WorkspaceError::InvalidName {
-            name: to_name.into(),
-        });
-    }
-    let target = source.parent().unwrap().join(to_name);
-    if source.is_file() && !is_markdown(&target) {
-        return Err(WorkspaceError::NotMarkdown { path: target });
-    }
-    if target != source && target.exists() {
-        return Err(WorkspaceError::AlreadyExists { path: target });
-    }
-    fs::rename(&source, &target).map_err(|error| WorkspaceError::Io {
-        path: source.clone(),
-        source: error,
-    })?;
-    Ok(DirectoryEntry {
-        name: to_name.into(),
-        is_directory: target.is_dir(),
-        path: target,
-    })
+    rename_to_name(&source, to_name)
 }
 
 /// Moves an entry to the operating system's trash so the operation stays

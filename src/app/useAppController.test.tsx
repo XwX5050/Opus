@@ -52,6 +52,7 @@ class InspectableControllerPort implements DocumentPort {
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async renameDocument(): Promise<string> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
   async watchDocument() {}
   async watchWorkspace() {}
@@ -108,6 +109,7 @@ class ScopeAwareControllerPort implements DocumentPort {
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async renameDocument(): Promise<string> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
   async watchDocument() {}
   async watchWorkspace() {}
@@ -244,6 +246,7 @@ describe("useAppController", () => {
       async listTranslationModels() { return []; },
       async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
       async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
+      async renameDocument(): Promise<string> { throw new DocumentPortError("io", "not supported"); },
       async trashEntry() {},
       async watchDocument() {},
       async watchWorkspace() {},
@@ -726,6 +729,114 @@ describe("useAppController disk watching", () => {
     resolveWrite({ path: file.path, modifiedUnixMs: 2, version: "v2" });
     await act(() => saving);
     expect(hook.result.current.state.tabs[0].status).toBe("clean");
+    hook.unmount();
+  });
+});
+
+describe("useAppController renameDocument", () => {
+  const memoryFile = (path: string, text = "saved"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  it("renames the file, follows the tab, and re-points recent entries", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", memoryFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    expect(hook.result.current.recent.map((item) => item.path)).toEqual(["/notes/a.md"]);
+
+    await act(async () => {
+      await hook.result.current.renameDocument(tab.id, "renamed");
+    });
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/renamed.md",
+      title: "renamed.md",
+      status: "clean",
+    });
+    expect(hook.result.current.recent.map((item) => item.path)).toEqual([
+      "/notes/renamed.md",
+    ]);
+    // The in-memory file system followed the rename too.
+    await expect(port.openPath("/notes/renamed.md")).resolves.toMatchObject({
+      text: "saved",
+    });
+    await expect(port.openPath("/notes/a.md")).rejects.toMatchObject({
+      code: "not_found",
+    });
+    hook.unmount();
+  });
+
+  it("moves a dirty tab's path while keeping its unsaved text dirty", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", memoryFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    act(() => hook.result.current.changeText(tab.id, "local edits"));
+
+    await act(async () => {
+      await hook.result.current.renameDocument(tab.id, "renamed");
+    });
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/renamed.md",
+      title: "renamed.md",
+      text: "local edits",
+      status: "dirty",
+    });
+    hook.unmount();
+  });
+
+  it("rejects on failure without touching the tab or the recent list", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/a.md", memoryFile("/notes/a.md")],
+        ["/notes/renamed.md", memoryFile("/notes/renamed.md")],
+      ]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    expect(hook.result.current.recent.map((item) => item.path)).toEqual(["/notes/a.md"]);
+
+    await act(async () => {
+      await expect(hook.result.current.renameDocument(tab.id, "renamed")).rejects.toMatchObject({
+        code: "conflict",
+      });
+    });
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/a.md",
+      title: "a.md",
+      status: "clean",
+    });
+    expect(hook.result.current.recent.map((item) => item.path)).toEqual(["/notes/a.md"]);
+    await expect(port.openPath("/notes/a.md")).resolves.toMatchObject({ text: "saved" });
+    hook.unmount();
+  });
+
+  it("throws when the tab has no path to rename", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    const hook = renderHook(() => useAppController(port));
+    hook.result.current.newDocument();
+    const id = hook.result.current.state.activeId!;
+
+    await act(async () => {
+      await expect(hook.result.current.renameDocument(id, "renamed")).rejects.toThrow();
+    });
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: null,
+      title: "Untitled",
+    });
     hook.unmount();
   });
 });

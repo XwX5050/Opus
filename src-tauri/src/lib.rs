@@ -82,6 +82,7 @@ pub fn run() {
             document_commands::list_directory,
             document_commands::create_markdown_file,
             document_commands::rename_entry,
+            document_commands::rename_document,
             document_commands::trash_entry,
             document_commands::watch_document,
             document_commands::watch_workspace,

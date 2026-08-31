@@ -498,6 +498,41 @@ export class MemoryDocumentPort implements DocumentPort {
     return { name: toName, path: toPath, isDirectory: true };
   }
 
+  async renameDocument(path: string, newBaseName: string): Promise<string> {
+    if (!/\.(md|markdown)$/i.test(path)) {
+      throw new DocumentPortError(
+        "io",
+        `Documents must have a .md or .markdown extension: ${path}`,
+      );
+    }
+    const file = this.#files.get(this.#key(path));
+    if (!file) {
+      throw new DocumentPortError("not_found", `Document not found: ${path}`);
+    }
+    if (!newBaseName || newBaseName.includes("/") || newBaseName.startsWith(".")) {
+      throw new DocumentPortError("io", `Invalid entry name: ${newBaseName}`);
+    }
+    // The stored display path (not the input) is the canonical source for
+    // the parent directory and the original extension, mirroring the
+    // backend, which also derives the new path from the canonical path.
+    const lastDot = file.path.lastIndexOf(".");
+    const extension = lastDot === -1 ? "" : file.path.slice(lastDot);
+    const basename = file.path.split("/").at(-1) ?? file.path;
+    const parent = file.path.slice(0, file.path.length - basename.length);
+    const toPath = `${parent}${newBaseName}${extension}`;
+    if (
+      toPath !== file.path &&
+      (this.#files.has(this.#key(toPath)) ||
+        this.#directories.has(this.#key(toPath)))
+    ) {
+      throw new DocumentPortError("conflict", `Already exists: ${toPath}`);
+    }
+    if (toPath === file.path) return file.path;
+    this.#files.delete(this.#key(path));
+    this.#files.set(this.#key(toPath), { ...file, path: toPath });
+    return toPath;
+  }
+
   async trashEntry(root: string, relative: string): Promise<void> {
     const path = this.#resolvePathIn(root, relative);
     if (this.trashFailure) throw this.trashFailure;

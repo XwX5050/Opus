@@ -52,6 +52,12 @@ export type DocumentAction =
       pathPlatform?: PathPlatform;
     }
   | {
+      type: "tabRenamed";
+      id: string;
+      path: string;
+      title: string;
+    }
+  | {
       type: "documentRestored";
       id: string;
       draft: RecoveryDraft;
@@ -450,6 +456,17 @@ export const documentReducer = (
       }));
     }
 
+    case "tabRenamed":
+      // An in-app rename replaces the tab's path and title unconditionally:
+      // unlike externalMoved, the user just renamed the very file this tab
+      // owns, so dirty/conflicted buffers keep their text and follow to the
+      // new location. Unknown tab ids are a no-op.
+      return replaceTab(state, action.id, (document) => ({
+        ...document,
+        path: action.path,
+        title: action.title,
+      }));
+
     case "documentRestored": {
       const sameId = state.tabs.find((tab) => tab.id === action.id);
       if (sameId) return { ...state, activeId: sameId.id };
@@ -606,4 +623,5 @@ export const documentReducer = (
   }
 };
 
+export { titleFromPath };
 export type { DocumentState, PathPlatform } from "./types";

@@ -341,6 +341,9 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     async renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry> {
       try { return directoryEntry(await invoke<DirectoryEntryDto>("rename_entry", { root, from, toName })); } catch (error) { throw failure(error); }
     },
+    async renameDocument(path: string, newBaseName: string): Promise<string> {
+      try { return await invoke<string>("rename_document", { path, newBaseName }); } catch (error) { throw failure(error); }
+    },
     async trashEntry(root: string, relative: string): Promise<void> {
       try { await invoke("trash_entry", { root, relative }); } catch (error) { throw failure(error); }
     },

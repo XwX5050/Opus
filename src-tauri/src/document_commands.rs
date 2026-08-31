@@ -49,6 +49,12 @@ pub struct SavedDocumentDto {
     pub version: String,
 }
 
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| x.eq_ignore_ascii_case("md") || x.eq_ignore_ascii_case("markdown"))
+}
+
 fn validate(path: &Path) -> Result<(), CommandError> {
     if !path.is_absolute() {
         return Err(CommandError {
@@ -56,11 +62,7 @@ fn validate(path: &Path) -> Result<(), CommandError> {
             message: "path must be absolute".into(),
         });
     }
-    let markdown = path
-        .extension()
-        .and_then(|x| x.to_str())
-        .is_some_and(|x| x.eq_ignore_ascii_case("md") || x.eq_ignore_ascii_case("markdown"));
-    if !markdown {
+    if !is_markdown_path(path) {
         return Err(CommandError {
             code: "io".into(),
             message: "path must have a .md or .markdown extension".into(),
@@ -396,6 +398,57 @@ pub fn rename_entry(
     to_name: String,
 ) -> Result<DirectoryEntry, CommandError> {
     rename_entry_impl(&anchor, root, from, to_name)
+}
+
+/// Renames an open document in place. `path` must be an existing absolute
+/// .md/.markdown file; `new_base_name` is the new base name without an
+/// extension (non-empty, no separators, not hidden). The original extension
+/// is kept so the document never leaves the Markdown listing, and the file
+/// is renamed within its own directory. Unlike the workspace rename, no
+/// workspace anchor is required — individually opened documents rename too.
+/// Returns the new absolute path.
+pub fn rename_document_impl(path: PathBuf, new_base_name: String) -> Result<String, CommandError> {
+    if !path.is_absolute() {
+        return Err(CommandError {
+            code: "io".into(),
+            message: "path must be absolute".into(),
+        });
+    }
+    if !is_markdown_path(&path) {
+        return Err(CommandError {
+            code: "io".into(),
+            message: "path must have a .md or .markdown extension".into(),
+        });
+    }
+    let metadata = std::fs::metadata(&path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => CommandError {
+            code: "not_found".into(),
+            message: error.to_string(),
+        },
+        _ => CommandError {
+            code: "io".into(),
+            message: error.to_string(),
+        },
+    })?;
+    if !metadata.is_file() {
+        return Err(CommandError {
+            code: "io".into(),
+            message: "path must identify a regular file".into(),
+        });
+    }
+    let extension = path
+        .extension()
+        .and_then(|x| x.to_str())
+        .unwrap_or("")
+        .to_owned();
+    let entry = workspace::rename_to_name(&path, &format!("{new_base_name}.{extension}"))
+        .map_err(map_workspace_error)?;
+    Ok(entry.path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn rename_document(path: PathBuf, new_base_name: String) -> Result<String, CommandError> {
+    rename_document_impl(path, new_base_name)
 }
 
 pub fn trash_entry_impl(

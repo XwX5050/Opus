@@ -358,6 +358,71 @@ describe("MemoryDocumentPort workspace operations", () => {
     });
   });
 
+  it("renames a document in place and keeps its extension", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.markdown", openedFile("/notes/a.markdown")]]),
+      { pathPlatform: "linux" },
+    );
+    await expect(port.renameDocument("/notes/a.markdown", "renamed")).resolves.toBe(
+      "/notes/renamed.markdown",
+    );
+    await expect(port.openPath("/notes/renamed.markdown")).resolves.toMatchObject({
+      path: "/notes/renamed.markdown",
+      text: "saved",
+    });
+    await expect(port.openPath("/notes/a.markdown")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+
+  it("rejects renaming a document onto an existing file or directory", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/notes/a.md", openedFile("/notes/a.md")],
+        ["/notes/b.md", openedFile("/notes/b.md")],
+      ]),
+      { directories: ["/notes/sub.md"], pathPlatform: "linux" },
+    );
+    await expect(port.renameDocument("/notes/a.md", "b")).rejects.toMatchObject({
+      code: "conflict",
+    });
+    await expect(port.renameDocument("/notes/a.md", "sub")).rejects.toMatchObject({
+      code: "conflict",
+    });
+  });
+
+  it("treats renaming a document to its own base name as a no-op success", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      { pathPlatform: "linux" },
+    );
+    await expect(port.renameDocument("/notes/a.md", "a")).resolves.toBe("/notes/a.md");
+    await expect(port.openPath("/notes/a.md")).resolves.toMatchObject({ text: "saved" });
+  });
+
+  it("rejects missing, non-Markdown, hidden, and separator-carrying document renames", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openedFile("/notes/a.md")]]),
+      { pathPlatform: "linux" },
+    );
+    await expect(port.renameDocument("/notes/ghost.md", "x")).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await expect(port.renameDocument("/notes/a.txt", "x")).rejects.toMatchObject({
+      code: "io",
+    });
+    await expect(port.renameDocument("/notes/a.md", ".hidden")).rejects.toMatchObject({
+      code: "io",
+    });
+    await expect(port.renameDocument("/notes/a.md", "nested/name")).rejects.toMatchObject({
+      code: "io",
+    });
+    await expect(port.renameDocument("/notes/a.md", "")).rejects.toMatchObject({
+      code: "io",
+    });
+    await expect(port.openPath("/notes/a.md")).resolves.toMatchObject({ text: "saved" });
+  });
+
   it("refuses to create a Markdown file that collides with a directory", async () => {
     const port = new MemoryDocumentPort(new Map(), {
       directories: ["/notes/new.md"],
