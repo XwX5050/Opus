@@ -27,8 +27,6 @@ body {
   font-size: var(--font-ui-size);
   color: var(--text-primary);
   background-color: var(--canvas);
-  /* Optional faint canvas aura (dark theme); flat in light theme. */
-  background-image: var(--canvas-glow, none);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -236,6 +234,68 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--text-primary);
 }
 
+/* ---------- Context menu (right-click) ---------- */
+
+/* Shared menu used by the sidebar rows, tabs, editor and the shell
+   fallback. Rendered in a body portal, so its z-index must beat the
+   editor (autocomplete 100) and the sidebar; dialogs (10) and alerts (20)
+   stay below it while the menu is open. */
+.context-menu {
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 180px;
+  margin: 0;
+  padding: var(--space-0-5);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-popover);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.context-menu-item:hover:not(:disabled),
+.context-menu-item:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.context-menu-item:disabled {
+  color: var(--text-muted);
+}
+
+.context-menu-shortcut {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+}
+
+.context-menu-item-danger,
+.context-menu-item-danger:disabled {
+  color: var(--danger);
+}
+
+.context-menu-item-danger:hover:not(:disabled),
+.context-menu-item-danger:focus-visible {
+  background: var(--surface-hover);
+  color: var(--danger);
+}
+
 /* Header controls are ghost buttons: quiet until hovered. */
 .app-header button {
   border-color: transparent;
@@ -256,6 +316,18 @@ input[type="number"]::-webkit-inner-spin-button {
 .app-header button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* The right-panel toggle already signals state through its animated icon;
+   keep it quiet instead of the pressed accent wash. */
+.app-header .icon-button.right-sidebar-toggle[aria-pressed="true"] {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.app-header .icon-button.right-sidebar-toggle[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 /* Icon-only header controls: square ghost buttons, quiet until hovered. */
@@ -287,13 +359,18 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--accent);
 }
 
-.editor-toolbar .icon-button[aria-pressed="true"] {
+/* The translate/view-mode toggles live in the header while the outline panel
+   is open; their pressed state keeps the quieter selection-tinted wash. */
+.app-header .icon-button.translate-toggle[aria-pressed="true"],
+.app-header .icon-button.view-mode-toggle[aria-pressed="true"] {
   background: var(--selection);
   color: var(--accent);
 }
 
-.editor-toolbar .icon-button[aria-pressed="true"]:hover,
-.editor-toolbar .icon-button[aria-pressed="true"]:active {
+.app-header .icon-button.translate-toggle[aria-pressed="true"]:hover,
+.app-header .icon-button.translate-toggle[aria-pressed="true"]:active,
+.app-header .icon-button.view-mode-toggle[aria-pressed="true"]:hover,
+.app-header .icon-button.view-mode-toggle[aria-pressed="true"]:active {
   background: var(--selection);
 }
 
@@ -528,6 +605,7 @@ input[type="number"]::-webkit-inner-spin-button {
   min-height: 0;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
 
 .sidebar-rail {
@@ -545,18 +623,47 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .sidebar {
-  /* Width comes from inline style (draggable, clamped 200–480px). */
+  /* Width comes from inline style (draggable, clamped 120–1200px). */
   flex-shrink: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
   min-height: 0;
   padding: var(--space-3);
   border-right: 1px solid var(--divider);
-  background: var(--surface);
+  background: var(--surface-panel);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* The sections scroll; the footer (settings gear) stays pinned to the
+   bottom so long content never pushes it out of view. */
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.sidebar-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-2);
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--divider);
+}
+
+/* Settings reachable in the empty state (no tabs, no workspace): the same
+   gear floats at the window's bottom-left corner. */
+.settings-fab {
+  position: absolute;
+  bottom: var(--space-3);
+  left: var(--space-3);
+  z-index: 2;
 }
 
 /* Drag handle between the sidebar and the editor: a slim hit area whose
@@ -570,6 +677,10 @@ input[type="number"]::-webkit-inner-spin-button {
   touch-action: none;
   position: relative;
   z-index: 1;
+  /* WebKit decides whether a press-drag becomes a text selection at
+     pointerdown; the body class React adds afterwards is too late, so the
+     handle itself must always be unselectable. */
+  user-select: none;
 }
 
 .sidebar-resizer::after {
@@ -598,6 +709,10 @@ body.sidebar-resizing .sidebar-rail {
 
 body.sidebar-resizing * {
   cursor: col-resize !important;
+  /* The body-level rule alone cannot win against .cm-content's explicit
+     user-select: text — without this, pressing the resizer and sweeping over
+     the editor paints a text selection. */
+  user-select: none !important;
 }
 
 /* ---------- Right outline sidebar ---------- */
@@ -617,14 +732,14 @@ body.sidebar-resizing * {
 }
 
 .outline-sidebar {
-  /* Width comes from inline style (draggable, clamped 200–480px). */
+  /* Width comes from inline style (draggable, clamped 120–1200px). */
   flex-shrink: 0;
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--divider);
-  background: var(--surface);
+  background: var(--surface-panel);
   overflow: hidden;
 }
 
@@ -778,6 +893,8 @@ body.sidebar-resizing * {
   touch-action: none;
   position: relative;
   z-index: 1;
+  /* See .sidebar-resizer: unselectable from pointerdown, not just mid-drag. */
+  user-select: none;
 }
 
 .outline-resizer::after {
@@ -806,6 +923,7 @@ body.outline-resizing .outline-rail {
 
 body.outline-resizing * {
   cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .editor-area {
@@ -822,13 +940,64 @@ body.outline-resizing * {
   min-height: 0;
 }
 
-/* Editor-pane toolbar: quiet row above the editor (Obsidian-style pane
- * header); hosts the view-mode toggle, right-aligned. */
-.editor-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  padding: var(--space-1) var(--space-3);
+/* Editable document title (Obsidian-style): the file name above the editor
+   toolbar, constrained to the same reading-column width as .cm-content so
+   it aligns with the text. The click-to-edit button keeps the title's
+   typography; the inline input matches it exactly. */
+.document-title {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: min(
+    clamp(
+      var(--editor-content-width),
+      68%,
+      calc(var(--editor-content-width) * 1.6)
+    ),
+    calc(100% - var(--space-5) * 2)
+  );
+  margin-inline: auto;
+  padding: var(--space-3) var(--space-2) var(--space-1);
+}
+
+.document-title-button,
+.document-title-static,
+.document-title input {
+  width: 100%;
+  /* Obsidian-scale inline title. */
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+
+.document-title-button {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-small);
+  background: transparent;
+  text-align: left;
+}
+
+.document-title-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.document-title-static {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-title input {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-small);
+  background: var(--surface);
 }
 
 /* Large-document light-mode notice: inline, dismissible, token-driven. */

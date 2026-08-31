@@ -83,6 +83,7 @@ class InspectablePort implements DocumentPort {
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
+  async renameDocument(): Promise<string> { throw new DocumentPortError("io", "not supported"); }
   async trashEntry() {}
   async watchDocument() {}
   async watchWorkspace() {}
@@ -146,7 +147,7 @@ describe("AppShell", () => {
     expect(subscribeToImageDrops).toHaveBeenCalledOnce();
   });
 
-  it("defaults to editing and toggles view modes through the editor-toolbar icon button in the same editor", async () => {
+  it("defaults to editing and toggles view modes through the header icon button in the same editor", async () => {
     const user = userEvent.setup();
     render(
       <AppShell
@@ -156,6 +157,7 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     const view = EditorView.findFromDOM(editor());
     if (!view) throw new Error("EditorView not found");
     view.dispatch({ selection: { anchor: view.state.doc.length } });
@@ -200,6 +202,7 @@ describe("AppShell", () => {
     const port = new InspectablePort([file("/notes/table.md", source)]);
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("button", { name: "编辑模式" }));
 
     await user.click(tableCell(3));
@@ -227,6 +230,7 @@ describe("AppShell", () => {
     ]);
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("tab", { name: /a\.md/ }));
     await user.click(screen.getByRole("button", { name: "编辑模式" }));
     await user.click(tableCell(3));
@@ -256,6 +260,7 @@ describe("AppShell", () => {
     ]);
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("tab", { name: /a\.md/ }));
     await user.click(screen.getByRole("button", { name: "编辑模式" }));
     await user.click(tableCell(3));
@@ -294,10 +299,8 @@ describe("AppShell", () => {
     render(<AppShell port={port} fileActionsInHeader={false} />);
 
     const toggle = await screen.findByRole("button", { name: "展开右侧栏" });
-    const mode = screen.getByRole("button", { name: "编辑模式" });
-    // The view-mode control lives in the editor-pane toolbar; the header
-    // carries only the right-sidebar toggle.
-    expect(mode.closest(".editor-toolbar")).not.toBeNull();
+    // Both toggles live in the header; the view-mode/translation controls
+    // render only while the outline panel is open.
     expect(toggle.closest(".app-header")).not.toBeNull();
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toggle).toHaveAttribute("aria-controls", "app-outline");
@@ -310,6 +313,8 @@ describe("AppShell", () => {
     expect(outline?.parentElement).toHaveStyle({ width: "0px" });
 
     await userEvent.click(toggle);
+    const mode = screen.getByRole("button", { name: "编辑模式" });
+    expect(mode.closest(".app-header")).not.toBeNull();
     expect(screen.getByRole("complementary", { name: "大纲侧栏" })).toBeVisible();
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(outline?.parentElement).toHaveStyle({ width: "340px" });
@@ -347,23 +352,23 @@ describe("AppShell", () => {
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 950, buttons: 1 });
     await waitFor(() => expect(outline).toHaveStyle({ width: "350px" }));
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 0, buttons: 1 });
-    // The upper bound shrank with the jsdom window (1024px → 40% = 410px);
-    // drags beyond it stop at the window-aware cap instead of 480.
-    await waitFor(() => expect(outline).toHaveStyle({ width: "410px" }));
+    // The upper bound shrank with the jsdom window (1024px → 50% = 512px);
+    // drags beyond it stop at the window-aware cap instead of 1200.
+    await waitFor(() => expect(outline).toHaveStyle({ width: "512px" }));
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 2000, buttons: 1 });
-    await waitFor(() => expect(outline).toHaveStyle({ width: "200px" }));
+    await waitFor(() => expect(outline).toHaveStyle({ width: "120px" }));
     fireEvent.pointerUp(resizer, { pointerId: 2 });
     expect(document.body).not.toHaveClass("outline-resizing");
-    expect(outline).toHaveStyle({ width: "200px" });
+    expect(outline).toHaveStyle({ width: "120px" });
 
-    await waitFor(() => expect(port.session?.outline).toEqual({ width: 200 }));
+    await waitFor(() => expect(port.session?.outline).toEqual({ width: 120 }));
 
     fireEvent.keyDown(resizer, { key: "ArrowLeft" });
-    expect(outline).toHaveStyle({ width: "216px" });
-    await waitFor(() => expect(port.session?.outline).toEqual({ width: 216 }));
+    expect(outline).toHaveStyle({ width: "136px" });
+    await waitFor(() => expect(port.session?.outline).toEqual({ width: 136 }));
 
     fireEvent.keyDown(resizer, { key: "ArrowRight" });
-    expect(outline).toHaveStyle({ width: "200px" });
+    expect(outline).toHaveStyle({ width: "120px" });
   });
 
   it("restores the committed width when an outline drag is cancelled without persisting", async () => {
@@ -533,6 +538,7 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     const view = EditorView.findFromDOM(editor());
     if (!view) throw new Error("EditorView not found");
 
@@ -556,6 +562,7 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
 
     screen.getByRole("main").focus();
     await user.keyboard("{Control>}e{/Control}");
@@ -584,6 +591,7 @@ describe("AppShell", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     const currentMode = () =>
       screen.getByRole("button", { name: /^(阅读|编辑)模式$/ }).getAttribute("aria-label");
 
@@ -597,6 +605,53 @@ describe("AppShell", () => {
     expect(currentMode()).toBe("编辑模式");
     await user.click(screen.getByRole("tab", { name: /b\.md/ }));
     expect(currentMode()).toBe("阅读模式");
+  });
+
+  it("view/translation toggles hide with the outline panel but keep state", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell port={new InspectablePort([file("/notes/a.md", "**world** rest")])} />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+
+    // Reading mode is per-tab state, not a property of the button's presence.
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    expect(screen.getByRole("button", { name: "阅读模式" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Closing the outline removes both toggles from the DOM entirely.
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+    expect(
+      screen.queryByRole("button", { name: /^(阅读|编辑)模式$/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "翻译文档" })).not.toBeInTheDocument();
+
+    // Reopening restores them with the per-tab state intact.
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    expect(screen.getByRole("button", { name: "阅读模式" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "翻译文档" })).toBeInTheDocument();
+  });
+
+  it("hides the toggles when the outline is closed", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell port={new InspectablePort([file("/notes/a.md", "body")])} />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    // The right-sidebar toggle is always available; the view-mode and
+    // translation toggles exist only while the outline panel is open.
+    expect(screen.getByRole("button", { name: "展开右侧栏" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑模式" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "阅读模式" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "翻译文档" })).not.toBeInTheDocument();
   });
 
   it("opens two files as tabs and focuses an equivalent path instead of duplicating it", async () => {
@@ -1187,23 +1242,23 @@ describe("AppShell workspace drawer", () => {
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 340, buttons: 1 });
     await waitFor(() => expect(sidebar).toHaveStyle({ width: "300px" }));
 
-    // Out-of-range deltas clamp to [200, window-aware cap (1024px → 410px)].
+    // Out-of-range deltas clamp to [120, window-aware cap (1024px → 512px)].
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 3000, buttons: 1 });
-    await waitFor(() => expect(sidebar).toHaveStyle({ width: "410px" }));
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "512px" }));
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: -500, buttons: 1 });
-    await waitFor(() => expect(sidebar).toHaveStyle({ width: "200px" }));
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "120px" }));
 
     fireEvent.pointerUp(resizer, { pointerId: 1 });
     expect(document.body.classList.contains("sidebar-resizing")).toBe(false);
-    expect(sidebar).toHaveStyle({ width: "200px" });
+    expect(sidebar).toHaveStyle({ width: "120px" });
 
     // The final width is persisted through the session.
-    await waitFor(() => expect(port.session?.sidebar?.width).toBe(200));
+    await waitFor(() => expect(port.session?.sidebar?.width).toBe(120));
   });
 
-  it("shrinks both panel caps with the window so the editor keeps room", async () => {
-    // 760px window ≈ the macOS minimum; without a window-aware clamp the two
-    // panels could each reach 480 and squeeze the editor to nothing.
+  it("caps each panel at half the window width", async () => {
+    // 760px window ≈ the macOS minimum; the window-aware clamp caps each
+    // panel at 50% (380px) so one panel can never swallow the editor.
     const viewport = vi.spyOn(window, "innerWidth", "get").mockReturnValue(760);
     try {
       const user = userEvent.setup();
@@ -1223,25 +1278,25 @@ describe("AppShell workspace drawer", () => {
       await user.click(screen.getByRole("button", { name: "打开文件夹" }));
       const sidebar = await screen.findByRole("complementary", { name: "侧栏" });
       const sidebarResizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
-      expect(sidebarResizer).toHaveAttribute("aria-valuemax", "304");
+      expect(sidebarResizer).toHaveAttribute("aria-valuemax", "380");
       fireEvent.pointerDown(sidebarResizer, { pointerId: 6, button: 0, clientX: 300 });
       fireEvent.pointerMove(sidebarResizer, { pointerId: 6, clientX: 3000, buttons: 1 });
-      await waitFor(() => expect(sidebar).toHaveStyle({ width: "304px" }));
+      await waitFor(() => expect(sidebar).toHaveStyle({ width: "380px" }));
       fireEvent.pointerUp(sidebarResizer, { pointerId: 6 });
-      expect(sidebar).toHaveStyle({ width: "304px" });
-      await waitFor(() => expect(port.session?.sidebar?.width).toBe(304));
+      expect(sidebar).toHaveStyle({ width: "380px" });
+      await waitFor(() => expect(port.session?.sidebar?.width).toBe(380));
 
       // The outline obeys the same window-aware cap and persists it too.
       await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
       const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
       const outlineResizer = screen.getByRole("slider", { name: "调整大纲宽度" });
-      expect(outlineResizer).toHaveAttribute("aria-valuemax", "304");
+      expect(outlineResizer).toHaveAttribute("aria-valuemax", "380");
       fireEvent.pointerDown(outlineResizer, { pointerId: 7, button: 0, clientX: 600 });
       fireEvent.pointerMove(outlineResizer, { pointerId: 7, clientX: 0, buttons: 1 });
-      await waitFor(() => expect(outline).toHaveStyle({ width: "304px" }));
+      await waitFor(() => expect(outline).toHaveStyle({ width: "380px" }));
       fireEvent.pointerUp(outlineResizer, { pointerId: 7 });
-      expect(outline).toHaveStyle({ width: "304px" });
-      await waitFor(() => expect(port.session?.outline?.width).toBe(304));
+      expect(outline).toHaveStyle({ width: "380px" });
+      await waitFor(() => expect(port.session?.outline?.width).toBe(380));
     } finally {
       viewport.mockRestore();
     }
@@ -1778,9 +1833,16 @@ describe("AppShell conflict and save-failure dialogs", () => {
       expect(screen.queryByRole("button", { name: "打开文件" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "打开文件夹" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
-      // The sidebar toggle stays in the header; the view-mode icon lives in
-      // the editor-pane toolbar.
+      // Settings left the header; the entry point is the sidebar footer gear.
+      expect(
+        within(screen.getByRole("banner", { name: "应用标题栏" })).queryByRole("button", {
+          name: "设置",
+        }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "设置" })).toBeVisible();
+      // The sidebar toggle stays in the header; the view-mode/translation
+      // toggles render beside it only while the outline panel is open.
+      await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
       expect(screen.getByRole("button", { name: "编辑模式" })).toBeVisible();
     });
   });
@@ -1824,6 +1886,7 @@ describe("AppShell document translation", () => {
     };
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
 
     const translate = screen.getByRole("button", { name: "翻译文档" });
     expect(translate).toHaveAttribute("aria-pressed", "false");
@@ -1876,6 +1939,7 @@ describe("AppShell document translation", () => {
       });
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
     // Eight chunks start as eight requests; with nothing completed yet the
@@ -1915,6 +1979,7 @@ describe("AppShell document translation", () => {
     port.translateSegments = () => new Promise<string[]>(() => {});
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
     const banner = screen.getByRole("status");
@@ -1941,6 +2006,7 @@ describe("AppShell document translation", () => {
     };
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
     // The two automatic retries (300ms + 900ms backoff) must elapse before the
@@ -1969,6 +2035,7 @@ describe("AppShell document translation", () => {
     );
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
 
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
@@ -1994,7 +2061,7 @@ describe("AppShell manual update check", () => {
     // The startup check has already consumed the default mock result by now.
     vi.mocked(checkUpdate).mockImplementationOnce(() => pending.promise);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     await user.click(updateCheckButton());
 
     expect(updateCheckButton()).toBeDisabled();
@@ -2013,7 +2080,7 @@ describe("AppShell manual update check", () => {
     const view = render(<AppShell port={new InspectablePort()} />);
     vi.mocked(checkUpdate).mockImplementationOnce(() => pending.promise);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     await user.click(updateCheckButton());
     view.unmount();
 
@@ -2027,9 +2094,288 @@ describe("AppShell manual update check", () => {
     );
 
     render(<AppShell port={new InspectablePort()} />);
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(updateCheckButton()).toBeEnabled();
+  });
+});
+
+describe("AppShell context menus and document title", () => {
+  const menuItems = () => {
+    const menu = screen.getByRole("menu");
+    return within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => {
+        // Shortcuts ride in the same button, so drop the hint span before
+        // comparing labels (platform-dependent ⌘/Ctrl rendering).
+        item.querySelector(".context-menu-shortcut")?.remove();
+        return item.textContent?.trim();
+      });
+  };
+  const menuItem = (name: string | RegExp) => {
+    const menu = screen.getByRole("menu");
+    const matcher = typeof name === "string" ? new RegExp(name) : name;
+    return within(menu).getByRole("menuitem", { name: matcher });
+  };
+
+  it("shows the editor context menu in editing mode and its read-only variant in reading mode", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell port={new InspectablePort([file("/notes/menu.md", "body")])} />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    const panel = screen.getByRole("tabpanel");
+
+    fireEvent.contextMenu(panel, { clientX: 120, clientY: 120 });
+    expect(menuItems()).toEqual([
+      "撤销",
+      "重做",
+      "剪切",
+      "复制",
+      "粘贴",
+      "全选",
+      "切换到阅读模式",
+    ]);
+    expect(menuItem("撤销")).toBeEnabled();
+    expect(menuItem("复制")).toBeEnabled();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // Reading mode: editing commands are disabled, copy/select-all and the
+    // mode switch stay available.
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    fireEvent.contextMenu(panel, { clientX: 120, clientY: 120 });
+    expect(menuItem("撤销")).toBeDisabled();
+    expect(menuItem("剪切")).toBeDisabled();
+    expect(menuItem("复制")).toBeEnabled();
+    expect(menuItem("全选")).toBeEnabled();
+
+    await user.click(menuItem("切换到编辑模式"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "编辑模式" }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("opens the fallback menu in the empty state with new/open/settings actions", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={new InspectablePort()} />);
+
+    fireEvent.contextMenu(
+      screen.getByRole("region", { name: "空白状态" }),
+      { clientX: 80, clientY: 80 },
+    );
+    expect(menuItems()).toEqual([
+      "新建",
+      "打开文件",
+      "打开文件夹",
+      "设置",
+    ]);
+
+    await user.click(menuItem("新建"));
+    expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens the tab context menu with rename, save and close; save enables when dirty", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([file("/notes/a.md", "saved")]);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    const tab = screen.getByRole("tab", { name: /a\.md/ });
+    fireEvent.contextMenu(tab, { clientX: 100, clientY: 100 });
+    expect(menuItems()).toEqual([
+      "重命名",
+      "保存",
+      "关闭标签",
+    ]);
+    // A clean tab has nothing to save; the command is disabled.
+    expect(menuItem("保存")).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    // A dirty tab can save from the menu.
+    act(() => replaceEditorText("changed"));
+    fireEvent.contextMenu(tab, { clientX: 100, clientY: 100 });
+    expect(menuItem("保存")).toBeEnabled();
+    await user.click(menuItem("保存"));
+    await waitFor(() => expect(port.writes).toHaveLength(1));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // Rename routes into the title editor on the active tab.
+    fireEvent.contextMenu(tab, { clientX: 100, clientY: 100 });
+    await user.click(menuItem("重命名"));
+    expect(
+      await screen.findByRole("textbox", { name: "文档标题" }),
+    ).toHaveValue("a");
+  });
+
+  it("names an untitled document through Save As from the tab menu and closes through the menu", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([], {
+      path: "/notes/named.md",
+      expectedVersion: null,
+    });
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "新建" }));
+
+    // An untitled document has no file to rename; 重命名 routes to Save As.
+    const tab = screen.getByRole("tab", { name: /Untitled/ });
+    fireEvent.contextMenu(tab, { clientX: 100, clientY: 100 });
+    expect(menuItem("重命名")).toBeEnabled();
+    await user.click(menuItem("重命名"));
+    await waitFor(() => expect(port.writes).toHaveLength(1));
+    expect(port.writes[0]).toMatchObject({ targetPath: "/notes/named.md" });
+    const namedTab = await screen.findByRole("tab", { name: /named\.md/ });
+
+    fireEvent.contextMenu(namedTab, { clientX: 100, clientY: 100 });
+    await user.click(menuItem("关闭标签"));
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("names an untitled document through Save As from its title button", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([], {
+      path: "/notes/named.md",
+      expectedVersion: null,
+    });
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "新建" }));
+
+    await user.click(screen.getByRole("button", { name: "Untitled" }));
+    await waitFor(() => expect(port.writes).toHaveLength(1));
+    expect(port.writes[0]).toMatchObject({ targetPath: "/notes/named.md" });
+  });
+
+  it("renames the document from the title editor, updating the tab title", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "hello")]]),
+    );
+    const renameSpy = vi.spyOn(port, "renameDocument");
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    // The title drops the .md extension and opens an inline editor on click.
+    const title = screen.getByRole("button", { name: "a" });
+    expect(title).not.toHaveTextContent(".md");
+    await user.click(title);
+    const input = screen.getByRole("textbox", { name: "文档标题" });
+    expect(input).toHaveValue("a");
+
+    fireEvent.change(input, { target: { value: "renamed" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(renameSpy).toHaveBeenCalledWith("/notes/a.md", "renamed"));
+    expect(screen.getByRole("tab", { name: /renamed\.md/ })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "renamed" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("textbox", { name: "文档标题" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("cancels a title rename on Escape without touching the document", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "hello")]]),
+    );
+    const renameSpy = vi.spyOn(port, "renameDocument");
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    await user.click(screen.getByRole("button", { name: "a" }));
+    const input = screen.getByRole("textbox", { name: "文档标题" });
+    fireEvent.change(input, { target: { value: "renamed" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("textbox", { name: "文档标题" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: /a\.md/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "a" })).toBeVisible();
+  });
+
+  it("commits a title rename on blur so the editor is never left behind", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "hello")]]),
+    );
+    const renameSpy = vi.spyOn(port, "renameDocument");
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    await user.click(screen.getByRole("button", { name: "a" }));
+    const input = screen.getByRole("textbox", { name: "文档标题" });
+    fireEvent.change(input, { target: { value: "renamed" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(renameSpy).toHaveBeenCalledWith("/notes/a.md", "renamed"));
+    expect(
+      screen.queryByRole("textbox", { name: "文档标题" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /renamed\.md/ })).toBeVisible();
+  });
+
+  it("closes the title editor quietly when blurred without changes", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "hello")]]),
+    );
+    const renameSpy = vi.spyOn(port, "renameDocument");
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    await user.click(screen.getByRole("button", { name: "a" }));
+    fireEvent.blur(screen.getByRole("textbox", { name: "文档标题" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("textbox", { name: "文档标题" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "a" })).toBeVisible();
+  });
+
+  it("remounts and refocuses the title editor when rename is requested again", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "hello")]]),
+    );
+    const renameSpy = vi.spyOn(port, "renameDocument");
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    // Open the title editor, then re-request the rename from the tab menu:
+    // the editor must remount and retake focus instead of leaving a stale
+    // box in place. Blurring into the menu closes the first editor quietly
+    // (unchanged name), so no rename hits the backend.
+    await user.click(screen.getByRole("button", { name: "a" }));
+    const first = screen.getByRole("textbox", { name: "文档标题" });
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /a\.md/ }), {
+      clientX: 100,
+      clientY: 100,
+    });
+    await user.click(menuItem("重命名"));
+
+    const second = await screen.findByRole("textbox", { name: "文档标题" });
+    expect(second).not.toBe(first);
+    expect(second).toHaveValue("a");
+    await waitFor(() => expect(second).toHaveFocus());
+    expect(renameSpy).not.toHaveBeenCalled();
   });
 });
 

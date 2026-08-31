@@ -82,9 +82,14 @@ describe("AppShell custom file header", () => {
     expect(
       screen.queryByRole("button", { name: "另存为…" }),
     ).not.toBeInTheDocument();
+    // Settings left the header (and the file menu); the empty state floats
+    // the gear fallback instead.
     expect(
-      screen.queryByRole("button", { name: "设置" }),
+      within(titlebar()).queryByRole("button", { name: "设置" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toHaveClass(
+      "settings-fab",
+    );
   });
 
   it("keeps the window title and the file menu on Windows", async () => {
@@ -103,18 +108,34 @@ describe("AppShell custom file header", () => {
       "打开文件",
       "打开文件夹",
       "另存为…",
-      "设置",
     ]);
   });
 
-  it("opens the settings dialog from the menu on Windows", async () => {
+  it("opens the settings dialog from the sidebar gear on Windows", async () => {
     const user = userEvent.setup();
-    renderWindowsHeader(new MemoryDocumentPort(new Map()));
-
-    await user.click(fileMenuToggle());
-    await user.click(
-      within(screen.getByRole("menu")).getByRole("menuitem", { name: "设置" }),
+    renderWindowsHeader(
+      new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]])),
     );
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true });
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    await user.click(
+      within(screen.getByRole("complementary", { name: "侧栏" })).getByRole(
+        "button",
+        { name: "设置" },
+      ),
+    );
+
+    expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
+  });
+
+  it("floats a settings gear in the empty state that opens the dialog", async () => {
+    const user = userEvent.setup();
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
+
+    const fab = screen.getByRole("button", { name: "设置" });
+    expect(fab).toHaveClass("settings-fab");
+    await user.click(fab);
 
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
   });
@@ -141,7 +162,6 @@ describe("AppShell custom file header", () => {
       "打开文件",
       "打开文件夹",
       "另存为…",
-      "设置",
     ]);
     expect(items[0]).toHaveFocus();
   });
@@ -201,23 +221,26 @@ describe("AppShell custom file header", () => {
     expect(items[0]).toHaveFocus();
   });
 
-  it("opens the settings dialog from the menu and restores focus on close", async () => {
+  it("opens settings from the sidebar gear and restores focus on close", async () => {
     const user = userEvent.setup();
-    renderLinuxHeader(new MemoryDocumentPort(new Map()));
-
-    await user.click(fileMenuToggle());
-    await user.click(
-      within(screen.getByRole("menu")).getByRole("menuitem", { name: "设置" }),
+    renderLinuxHeader(
+      new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]])),
     );
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true });
+    await screen.findByRole("tab", { name: /a\.md/ });
+    const gear = within(
+      screen.getByRole("complementary", { name: "侧栏" }),
+    ).getByRole("button", { name: "设置" });
+
+    await user.click(gear);
 
     const dialog = await screen.findByRole("dialog", { name: "设置" });
     expect(dialog).toBeVisible();
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "完成" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "设置" })).not.toBeInTheDocument(),
     );
-    expect(fileMenuToggle()).toHaveFocus();
+    expect(gear).toHaveFocus();
   });
 
   it("binds Ctrl+N to 新建 and Ctrl+O to 打开文件 at the window level", async () => {

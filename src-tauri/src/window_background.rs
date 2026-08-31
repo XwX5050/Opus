@@ -25,7 +25,7 @@ use tauri::window::Color;
 
 /// The app's default (dark) canvas color, matching `--canvas` in
 /// src/theme/tokens.css for the initial theme before the session loads.
-pub const DEFAULT_CANVAS: &str = "#141519";
+pub const DEFAULT_CANVAS: &str = "#0b0b0e";
 
 /// Parses a `#rrggbb` hex color string into an opaque RGBA [`Color`].
 ///
@@ -92,8 +92,8 @@ mod tests {
     #[test]
     fn parses_valid_hex_colors() {
         assert_eq!(
-            parse_hex_color("#141519"),
-            Ok(Color(0x14, 0x15, 0x19, 0xff))
+            parse_hex_color("#0b0b0e"),
+            Ok(Color(0x0b, 0x0b, 0x0e, 0xff))
         );
         assert_eq!(
             parse_hex_color("#ffffff"),
@@ -120,7 +120,7 @@ mod tests {
     fn default_canvas_parses() {
         assert_eq!(
             parse_hex_color(DEFAULT_CANVAS),
-            Ok(Color(0x14, 0x15, 0x19, 0xff))
+            Ok(Color(0x0b, 0x0b, 0x0e, 0xff))
         );
     }
 }

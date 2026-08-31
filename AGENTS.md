@@ -96,7 +96,23 @@ Rust/Tauri backend.
   (Ctrl+N/O/Shift+O/S/Shift+S/W/,) replacing the native menu accelerators
   (see `AppShell.customFileHeader.test.tsx`). Windows, whose window is
   undecorated (`set_decorations(false)`), additionally draws its own caption
-  buttons and window-edge resize handles (`WindowControls.tsx`).
+  buttons and window-edge resize handles (`WindowControls.tsx`). Settings open
+  from a gear button pinned to the bottom of the left sidebar (a floating
+  gear in the bottom-left corner covers the empty state where the sidebar is
+  not rendered); the macOS native menu and Ctrl/Cmd+, remain. The translate
+  and view-mode toggles live on the right side of the header and only render
+  while the outline panel is open — hiding them never resets the per-tab
+  translation or view-mode state. `ContextMenu.tsx`
+  is the shared right-click menu (portal, keyboard navigation, edge flip)
+  used by the editor area, the sidebar tab list, the file tree, and the
+  shell-level fallback menu; selecting an item closes the menu itself, so
+  item handlers must not close it again. The editable document title above
+  the editor toolbar renames the underlying file through
+  `controller.renameDocument` (backend `rename_document`, no workspace anchor
+  required); for untitled documents — which have no file yet — the title and
+  the tab menu's rename entry route to Save As instead.
+  `InlineNameInput.tsx` is the shared inline rename input also
+  used by the file tree.
 - `src/document/`: the `DocumentPort` contract (`DocumentPort.ts`), pure
   document reducer (`documentReducer.ts`), shared types (`types.ts`), and two
   implementations:
@@ -131,7 +147,10 @@ Rust/Tauri backend.
   mode. Target counts are clamped (`MAX_EDITOR_MOTION_TARGETS`,
   `MAX_LIST_MOTION_TARGETS`) to bound animation cost.
 - `src/workspace/`: folder sidebar tree state (`treeReducer.ts`) and UI
-  (`FileSidebar.tsx`).
+  (`FileSidebar.tsx`). Tree rows have a right-click context menu (rename /
+  move to trash; folders additionally offer creating a file inside) built on
+  `src/app/ContextMenu.tsx`, reusing the same editing state machine as the
+  inline row buttons.
 - `src/translate/`: document translation pipeline. `types.ts` holds
   `TranslationSettings` (endpoint, API key, model, target language, concurrency
   — the number of chunk requests translated concurrently, configurable in
@@ -158,13 +177,20 @@ Rust/Tauri backend.
   `.cm-content`); the preference is the column's minimum/base width, and the
   scroller runs edge to edge so the scrollbar rides the window edge. Syntax
   highlight colors are `--syntax-*` tokens mapped in
-  `editor/editorExtensions.ts`.
+  `editor/editorExtensions.ts`. The canvas is a flat near-black:
+  `--canvas` must stay a plain hex (the native window background in
+  `window_background.rs` parses it as a solid color) and carries no glow or
+  texture overlays; side panels use the flat `--surface-panel` tone, one step
+  above the canvas.
 - `src/conflict/` and `src/recovery/`: dialogs and helpers for external
   conflicts and crash recovery.
 - `src-tauri/src/document_io.rs`: reads files while preserving UTF-8 BOM and
   newline style; writes atomically via sibling temp file + `fsync` + rename.
 - `src-tauri/src/document_commands.rs`: Tauri command handlers for open, save,
   clipboard images, asset scopes, workspace operations, watches, and recovery.
+  `rename_document` renames a Markdown file in place from a new base name
+  (extension preserved) without requiring a workspace anchor, so the editable
+  document title works for individually opened files too.
 - `src-tauri/src/fonts.rs`: `list_installed_fonts` command backed by Core
   Text on macOS and by the `CurrentVersion\Fonts` registry keys on Windows;
   neither WKWebView nor WebView2 has `queryLocalFonts`, so the settings

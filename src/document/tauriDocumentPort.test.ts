@@ -312,6 +312,23 @@ describe("tauri document port workspace commands", () => {
     expect(entry).toEqual({ name: "renamed.md", path: "/ws/renamed.md", isDirectory: false });
   });
 
+  it("forwards rename_document's base name and returns the new path", async () => {
+    invoke.mockResolvedValue("/ws/renamed.md");
+
+    const path = await createTauriDocumentPort().renameDocument("/ws/old.md", "renamed");
+
+    expect(invoke).toHaveBeenCalledWith("rename_document", { path: "/ws/old.md", newBaseName: "renamed" });
+    expect(path).toBe("/ws/renamed.md");
+  });
+
+  it("maps rename_document failures to DocumentPortError", async () => {
+    invoke.mockRejectedValue({ code: "conflict", message: "/ws/renamed.md already exists" });
+
+    await expect(
+      createTauriDocumentPort().renameDocument("/ws/old.md", "renamed"),
+    ).rejects.toMatchObject({ code: "conflict", message: "/ws/renamed.md already exists" });
+  });
+
   it("chooseWorkspace picks a directory through the dialog plugin and validates via open_workspace", async () => {
     open.mockResolvedValue("/ws");
     invoke.mockImplementation(async (command: string) => {
@@ -809,13 +826,13 @@ describe("tauri document port session, window geometry, and close requests", () 
     storeMocks.values.set("session", { ...base, sidebar: sidebar(40) });
     await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
       ...base,
-      sidebar: { ...sidebar(200) },
+      sidebar: { ...sidebar(120) },
     });
 
     storeMocks.values.set("session", { ...base, sidebar: sidebar(9999) });
     await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
       ...base,
-      sidebar: { ...sidebar(480) },
+      sidebar: { ...sidebar(1200) },
     });
 
     storeMocks.values.set("session", { ...base, sidebar: sidebar() });
@@ -838,7 +855,7 @@ describe("tauri document port session, window geometry, and close requests", () 
     });
     await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
       ...base,
-      outline: { width: 200 },
+      outline: { width: 120 },
     });
 
     storeMocks.values.set("session", {
@@ -847,7 +864,7 @@ describe("tauri document port session, window geometry, and close requests", () 
     });
     await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
       ...base,
-      outline: { width: 480 },
+      outline: { width: 1200 },
     });
 
     storeMocks.values.set("session", {

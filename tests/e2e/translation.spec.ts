@@ -81,6 +81,9 @@ test("translates a document, forces reading mode, and toggles back without new A
   await expect(content).toContainText("Hello Opus, 第一段文字。");
   await expect(content).not.toContainText("Ｈｅｌｌｏ");
 
+  // The translate/view-mode toggles render only while the outline is open.
+  await page.getByRole("button", { name: "展开右侧栏" }).click();
+
   // Translate: the pseudo-translation full-widths the ASCII letters.
   await page.getByRole("button", { name: "翻译文档", exact: true }).click();
   await expect(content).toContainText("Ｈｅｌｌｏ Ｏｐｕｓ, 第一段文字。");

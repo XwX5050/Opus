@@ -53,6 +53,7 @@ describe("AppShell rejected table-focus requests", () => {
     ]));
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("tab", { name: /a\.md/ }));
     await user.click(screen.getByRole("button", { name: "编辑模式" }));
     await user.click(tableCell(3));

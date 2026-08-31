@@ -54,16 +54,16 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Deep, low-luminance canvas with a slight blue-violet lean; the native
-     window background (window_background.rs) must stay exactly this hex. */
-  --canvas: #141519;
-  /* Faint violet aura layered over the canvas on <body> only; the native
-     under-page background stays the flat --canvas hex. */
-  --canvas-glow: radial-gradient(120% 70% at 50% -5%, rgba(127, 109, 242, 0.06), transparent 60%);
+  /* Near-black canvas with a hair of blue; the native window background
+     (window_background.rs) must stay exactly this hex. */
+  --canvas: #0b0b0e;
   --surface: #1b1c22;
+  /* Panels (sidebars): a flat, slightly lifted tone over the near-black
+     canvas — depth comes from the solid value, not gradients. */
+  --surface-panel: #14151a;
   --surface-hover: #23252c;
   --surface-active: #2b2d34;
-  --surface-inset: #101115;
+  --surface-inset: #060608;
   --text-primary: #e8e8ec;
   --text-secondary: #aaacb5;
   --text-muted: #757680;
@@ -99,6 +99,8 @@
   color-scheme: light;
   --canvas: #ffffff;
   --surface: #f5f5f7;
+  /* Panels (sidebars): flat tone, one step below the white canvas. */
+  --surface-panel: #f7f7f9;
   --surface-hover: #ececf0;
   --surface-active: #e2e2e8;
   --surface-inset: #ececf0;

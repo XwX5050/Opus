@@ -420,6 +420,7 @@ test("clicking a reading-mode Markdown table body cell enters editing and saves 
   const bodyCell = markdownTableCell(page, 2);
   await expect(table).toBeVisible();
 
+  await page.getByRole("button", { name: "展开右侧栏" }).click();
   await page.getByRole("button", { name: "编辑模式" }).click();
   await expect(host).toHaveAttribute("data-view-mode", "reading");
   await expect(bodyCell).not.toHaveAttribute("contenteditable");
@@ -514,6 +515,7 @@ test("navigates, appends, undoes, redoes, saves, and reads a Markdown table", as
   );
   expect(writes).toEqual([expected]);
 
+  await page.getByRole("button", { name: "展开右侧栏" }).click();
   await page.getByRole("button", { name: "编辑模式" }).click();
   await expect(table).toBeVisible();
   await expect(page.getByRole("table", { name: "Markdown 表格" })).toBeVisible();
@@ -565,6 +567,8 @@ test("switches between editing and reading modes", async ({
   const content = editorContent(page);
   await content.waitFor();
   const host = page.locator(".markdown-editor");
+  // The view-mode toggles exist only while the outline panel is open.
+  await page.getByRole("button", { name: "展开右侧栏" }).click();
   const toggle = page.getByRole("button", { name: "编辑模式" });
 
   // Editing (default): live preview hides markers while the cursor is away.
@@ -624,18 +628,18 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
     },
   });
 
-  const modeToggle = page.getByRole("button", { name: "编辑模式" });
   const outlineToggle = page.getByRole("button", { name: "展开右侧栏" });
-  await expect(modeToggle).toBeVisible();
   await expect(outlineToggle).toHaveAttribute("aria-expanded", "false");
-  // The view-mode control lives in the editor-pane toolbar while the
-  // right-sidebar toggle stays in the header.
-  await expect(page.locator(".editor-toolbar .view-mode-toggle")).toBeVisible();
-  await expect(page.locator(".app-header .right-sidebar-toggle")).toBeVisible();
 
   await outlineToggle.click();
   const outline = page.getByRole("complementary", { name: "大纲侧栏" });
   await expect(outline).toBeVisible();
+  // The view-mode/translation toggles live in the header beside the
+  // right-sidebar toggle and render only while the outline is open.
+  const modeToggle = page.getByRole("button", { name: "编辑模式" });
+  await expect(modeToggle).toBeVisible();
+  await expect(page.locator(".app-header .view-mode-toggle")).toBeVisible();
+  await expect(page.locator(".app-header .right-sidebar-toggle")).toBeVisible();
   await expect(outline).toHaveCSS("width", "336px");
   await expect(outline.locator(".outline-content")).toHaveAttribute(
     "data-motion-list",

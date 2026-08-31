@@ -9,11 +9,15 @@ import {
   clampSidebarWidthToWindow,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  type DocumentSnapshot,
   type RecentItem,
 } from "../document/types";
 import ConflictDialog from "../conflict/ConflictDialog";
+import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
+import InlineNameInput from "./InlineNameInput";
 import MarkdownEditor, {
   type EditorImageDrop,
+  type MarkdownEditorHandle,
   type OutlineNavigationRequest,
   type TableFocusRequest,
 } from "../editor/MarkdownEditor";
@@ -33,6 +37,7 @@ import {
   PanelLeftIcon,
   PanelRightIcon,
   PencilLineIcon,
+  SettingsIcon,
   TranslateIcon,
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
@@ -199,6 +204,35 @@ export default function AppShell({
   const activeTabVisible =
     sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
   const [settingsRequested, setSettingsRequested] = useState(false);
+  // The shared right-click context menu; at most one open at a time. Items
+  // carry their own handlers, so the state only needs the position and the
+  // item list. The menu itself is intentionally not part of anyDialogOpen:
+  // the background stays interactive behind it.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ReadonlyArray<ContextMenuItem>;
+  } | null>(null);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+  // Document-title rename (Obsidian-style): the title opens an inline editor
+  // on click; the tab menu's 重命名 routes through `titleEditRequest` so the
+  // target tab is activated before the editor opens. `sequence` lets a second
+  // request on the same tab re-trigger the effect after the first was consumed,
+  // and keys the input so every request remounts it (remount re-runs the
+  // focus/select effect — reusing a mounted editor would look like nothing
+  // happened).
+  const [titleEditing, setTitleEditing] = useState<{
+    tabId: string;
+    sequence: number;
+  } | null>(null);
+  const [titleEditRequest, setTitleEditRequest] = useState<{
+    tabId: string;
+    sequence: number;
+  } | null>(null);
+  const titleEditSequenceRef = useRef(0);
+  // Rename failures surface through the same app-alert channel, dismissible
+  // like external errors.
+  const [renameError, setRenameError] = useState<string | null>(null);
   // Startup update check result; non-null only while the update prompt is
   // still pending or downloading.
   const [updateOffer, setUpdateOffer] = useState<UpdateOffer | null>(null);
@@ -243,6 +277,11 @@ export default function AppShell({
     },
   ) => {
     if (event.button !== 0) return;
+    // Without this the press can start a text-selection gesture in WebKit
+    // before the resizing body class lands; selecting editor text mid-drag is
+    // never desirable on a resize handle. (Focus still reaches the handle
+    // via keyboard; pointer focus is unnecessary.)
+    event.preventDefault();
     const applyWidth = (width: number) => {
       const rail = options.railRef.current;
       const panel = options.panelRef.current;
@@ -687,6 +726,7 @@ export default function AppShell({
         sidebarAvailable,
         controller.state.tabs.length > 0,
         Boolean(active),
+        outlineOpen,
         fileActionsInHeader,
       ],
       revertOnUpdate: true,
@@ -855,6 +895,259 @@ export default function AppShell({
       pendingTabFocusRef.current = "close";
     }
     controller.close(id);
+  };
+
+  const errorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  /** The document title shown above the editor: file name without its
+   *  Markdown extension (Untitled documents carry no extension at all). */
+  const titleBaseName = (title: string): string =>
+    title.replace(/\.(md|markdown)$/i, "");
+
+  // The title editor is open while the active document can still be
+  // renamed; leaving the tab, losing editability, or a rename (success or
+  // failure) closes it again.
+  const titleEditableFor = (tab: DocumentSnapshot): boolean =>
+    tab.path !== null &&
+    tab.pendingSave === undefined &&
+    tab.status !== "missing" &&
+    tab.status !== "conflict";
+
+  const openSettingsFrom = (invoker: HTMLElement) => {
+    // Same pattern as the header button: remember the invoker so the dialog
+    // can restore focus on close.
+    previousFocusRef.current = invoker;
+    setSettingsRequested(true);
+  };
+
+  const submitDocumentRename = async (newBaseName: string) => {
+    if (!active || active.path === null) {
+      setTitleEditing(null);
+      return;
+    }
+    // Blur commits too, so an unchanged or empty name must close quietly
+    // instead of round-tripping a no-op rename through the backend.
+    const trimmed = newBaseName.trim();
+    if (trimmed === "" || trimmed === titleBaseName(active.title)) {
+      setTitleEditing(null);
+      return;
+    }
+    const tabId = active.id;
+    try {
+      await controller.renameDocument(tabId, trimmed);
+      setTitleEditing(null);
+    } catch (caught) {
+      // The title falls back to the still-valid old name; the error message
+      // explains why through the app-alert channel.
+      setRenameError(errorMessage(caught));
+      setTitleEditing(null);
+    }
+  };
+
+  // A tab-menu 重命名 requests the title editor; when the requested tab is
+  // not active yet, activate it and wait for the next render before editing.
+  useEffect(() => {
+    if (!titleEditRequest) return;
+    if (!controller.state.tabs.some((tab) => tab.id === titleEditRequest.tabId)) {
+      setTitleEditRequest(null);
+      return;
+    }
+    if (titleEditRequest.tabId !== active?.id) {
+      controller.activate(titleEditRequest.tabId);
+      return;
+    }
+    setTitleEditRequest(null);
+    setTitleEditing({
+      tabId: titleEditRequest.tabId,
+      sequence: titleEditRequest.sequence,
+    });
+    // Keyed on the request and the active tab; activate() is recreated each
+    // render, so it is intentionally not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [titleEditRequest, active?.id]);
+
+  // Close the title editor when the document stops being editable (status,
+  // pending save, translation shown) or the tab swaps underneath it.
+  useEffect(() => {
+    if (!titleEditing) return;
+    if (
+      !active ||
+      active.id !== titleEditing.tabId ||
+      !titleEditableFor(active) ||
+      translationShown
+    ) {
+      setTitleEditing(null);
+    }
+  }, [titleEditing, active, translationShown]);
+
+  // Fallback context menu for anything that does not handle right-clicks
+  // itself (header, empty state, banners, outline panel).
+  const openShellContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        {
+          id: "new",
+          label: "新建",
+          onSelect: () => controller.newDocument(),
+        },
+        {
+          id: "open-files",
+          label: "打开文件",
+          onSelect: () => void controller.openFiles(),
+        },
+        {
+          id: "open-folder",
+          label: "打开文件夹",
+          onSelect: openWorkspaceFromUser,
+        },
+        { type: "separator" },
+        {
+          id: "settings",
+          label: "设置",
+          onSelect: () => {
+            // Like the native menu's menu.settings: remember the current
+            // focus so the dialog can restore it on close.
+            previousFocusRef.current = document.activeElement as HTMLElement | null;
+            setSettingsRequested(true);
+          },
+        },
+      ],
+    });
+  };
+
+  // Editor-area context menu: undo/redo, clipboard, select-all and the
+  // view-mode switch. In reading mode or while a translation is on screen
+  // the editing commands are disabled; 复制/全选 and the mode switch stay
+  // available.
+  const runEditorCommand = (command: "cut" | "copy" | "paste" | "selectAll") => {
+    editorRef.current?.focus();
+    // jsdom and older engines lack execCommand; the editor still receives
+    // focus, which is the part the menu can guarantee.
+    document.execCommand?.(command);
+  };
+
+  const openEditorAreaContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    // No active tab: the empty state falls through to the shell fallback.
+    if (!active) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const isMac = detectPathPlatform() === "macos";
+    const mod = isMac ? "⌘" : "Ctrl+";
+    const shiftMod = isMac ? "⇧⌘" : "Ctrl+Shift+";
+    const editing = viewMode === "editing" && !translationShown;
+    const disabledItem = (id: string, label: string, shortcut: string) => ({
+      id,
+      label,
+      shortcut,
+      disabled: true,
+      onSelect: () => {},
+    });
+    const items: ReadonlyArray<ContextMenuItem> = [
+      editing
+        ? {
+            id: "undo",
+            label: "撤销",
+            shortcut: `${mod}Z`,
+            onSelect: () => {
+              editorRef.current?.undo();
+            },
+          }
+        : disabledItem("undo", "撤销", `${mod}Z`),
+      editing
+        ? {
+            id: "redo",
+            label: "重做",
+            shortcut: `${shiftMod}Z`,
+            onSelect: () => {
+              editorRef.current?.redo();
+            },
+          }
+        : disabledItem("redo", "重做", `${shiftMod}Z`),
+      { type: "separator" },
+      editing
+        ? {
+            id: "cut",
+            label: "剪切",
+            shortcut: `${mod}X`,
+            onSelect: () => runEditorCommand("cut"),
+          }
+        : disabledItem("cut", "剪切", `${mod}X`),
+      {
+        id: "copy",
+        label: "复制",
+        shortcut: `${mod}C`,
+        onSelect: () => runEditorCommand("copy"),
+      },
+      editing
+        ? {
+            id: "paste",
+            label: "粘贴",
+            shortcut: `${mod}V`,
+            onSelect: () => runEditorCommand("paste"),
+          }
+        : disabledItem("paste", "粘贴", `${mod}V`),
+      { type: "separator" },
+      {
+        id: "select-all",
+        label: "全选",
+        shortcut: `${mod}A`,
+        onSelect: () => runEditorCommand("selectAll"),
+      },
+      { type: "separator" },
+      {
+        id: "toggle-mode",
+        label: editing ? "切换到阅读模式" : "切换到编辑模式",
+        shortcut: `${mod}E`,
+        onSelect: () => controller.toggleReading(active.id),
+      },
+    ];
+    setContextMenu({ x: event.clientX, y: event.clientY, items });
+  };
+
+  // Tab context menu: rename (untitled documents have no file to rename, so
+  // naming one goes through Save As), save (only dirty), close.
+  const openTabContextMenu = (tabId: string, event: ReactMouseEvent) => {
+    const tab = controller.state.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        {
+          id: "rename",
+          label: "重命名",
+          onSelect: () => {
+            if (tab.path === null) {
+              void controller.saveAs(tabId);
+              return;
+            }
+            controller.activate(tabId);
+            titleEditSequenceRef.current += 1;
+            setTitleEditRequest({
+              tabId,
+              sequence: titleEditSequenceRef.current,
+            });
+          },
+        },
+        {
+          id: "save",
+          label: "保存",
+          disabled: tab.status !== "dirty" || Boolean(tab.pendingSave),
+          onSelect: () => void controller.save(tabId),
+        },
+        { type: "separator" },
+        {
+          id: "close",
+          label: "关闭标签",
+          danger: true,
+          onSelect: () => closeTab(tabId),
+        },
+      ],
+    });
   };
 
   const installUpdate = () => {
@@ -1186,6 +1479,7 @@ export default function AppShell({
       className="app-shell"
       data-motion-shell="true"
       onKeyDown={onShellKeyDown}
+      onContextMenu={openShellContextMenu}
     >
       <div
         data-testid="app-background"
@@ -1265,20 +1559,6 @@ export default function AppShell({
                 >
                   另存为…
                 </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() =>
-                    runFileMenuAction(() => {
-                      // Like the header settings button, remember the invoker
-                      // so the dialog can restore focus on close.
-                      previousFocusRef.current = fileMenuButtonRef.current;
-                      setSettingsRequested(true);
-                    })
-                  }
-                >
-                  设置
-                </button>
               </div>
             )}
           </div>
@@ -1301,6 +1581,33 @@ export default function AppShell({
                 <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
                 <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
                 <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
+              </>
+            )}
+            {active && outlineOpen && (
+              // Document actions live on the header's right side, but only
+              // while the outline panel is open; hiding them never resets
+              // the per-tab translation or view-mode state.
+              <>
+                <button
+                  type="button"
+                  className="icon-button translate-toggle"
+                  aria-pressed={translationReady}
+                  aria-label={translationLabel}
+                  title={translationLabel}
+                  onClick={() => controller.toggleTranslation(active.id)}
+                >
+                  <TranslateIcon />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button view-mode-toggle"
+                  aria-pressed={viewMode === "reading"}
+                  aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                  title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                  onClick={() => controller.toggleReading(active.id)}
+                >
+                  {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+                </button>
               </>
             )}
             {active && (
@@ -1356,6 +1663,7 @@ export default function AppShell({
             className="sidebar"
             style={{ width: sidebar.width }}
           >
+            <div className="sidebar-scroll">
             {controller.state.tabs.length > 0 && (
               <section className="sidebar-section">
                 <button
@@ -1379,6 +1687,7 @@ export default function AppShell({
                       activeId={controller.state.activeId}
                       onActivate={controller.activate}
                       onClose={closeTab}
+                      onTabContextMenu={openTabContextMenu}
                     />
                   )}
                 </div>
@@ -1412,6 +1721,18 @@ export default function AppShell({
                 </div>
               </section>
             )}
+            </div>
+            <div className="sidebar-footer">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="设置"
+                title="设置"
+                onClick={(event) => openSettingsFrom(event.currentTarget)}
+              >
+                <SettingsIcon />
+              </button>
+            </div>
           </aside>
           </div>
           {!sidebar.collapsed && (
@@ -1437,29 +1758,52 @@ export default function AppShell({
             active && activeTabVisible ? `document-tab-${active.id}` : undefined
           }
           className="editor-area"
+          onContextMenu={openEditorAreaContextMenu}
         >
         {active && (
-          <div className="editor-toolbar">
-            <button
-              type="button"
-              className="icon-button translate-toggle"
-              aria-pressed={translationReady}
-              aria-label={translationLabel}
-              title={translationLabel}
-              onClick={() => controller.toggleTranslation(active.id)}
-            >
-              <TranslateIcon />
-            </button>
-            <button
-              type="button"
-              className="icon-button view-mode-toggle"
-              aria-pressed={viewMode === "reading"}
-              aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-              title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-              onClick={() => controller.toggleReading(active.id)}
-            >
-              {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
-            </button>
+          <div className="document-title">
+            {titleEditing?.tabId === active.id && titleEditableFor(active) ? (
+              <InlineNameInput
+                key={titleEditing.sequence}
+                ariaLabel="文档标题"
+                defaultValue={titleBaseName(active.title)}
+                commitOnBlur
+                onCommit={(name) => void submitDocumentRename(name)}
+                onCancel={() => setTitleEditing(null)}
+              />
+            ) : titleEditableFor(active) && !translationShown ? (
+              <button
+                type="button"
+                className="document-title-button"
+                title="重命名"
+                onClick={() => {
+                  titleEditSequenceRef.current += 1;
+                  setTitleEditing({
+                    tabId: active.id,
+                    sequence: titleEditSequenceRef.current,
+                  });
+                }}
+              >
+                {titleBaseName(active.title)}
+              </button>
+            ) : active.path === null &&
+              active.pendingSave === undefined &&
+              !translationShown ? (
+              // An untitled document has no file to rename; clicking its
+              // title names it by saving it.
+              <button
+                type="button"
+                className="document-title-button"
+                title="命名并保存"
+                onClick={() => void controller.saveAs(active.id)}
+              >
+                {active.title}
+              </button>
+            ) : (
+              <span className="document-title-static">
+                {titleBaseName(active.title)}
+              </span>
+            )}
           </div>
         )}
         {showPerfBanner && active && (
@@ -1518,6 +1862,7 @@ export default function AppShell({
         {active ? (
           <MarkdownEditor
             key={active.id}
+            ref={editorRef}
             value={
               translationReady
                 ? activeTranslation.state.translatedText
@@ -1657,14 +2002,35 @@ export default function AppShell({
             </div>
           </>
         )}
+        {!sidebarAvailable && (
+          <button
+            type="button"
+            className="icon-button settings-fab"
+            aria-label="设置"
+            title="设置"
+            onClick={(event) => openSettingsFrom(event.currentTarget)}
+          >
+            <SettingsIcon />
+          </button>
+        )}
       </section>
       </div>
 
-      {(controller.error || externalError) && (
+      {(controller.error || externalError || renameError) && (
         <div role="alert" className="app-alert" data-motion-panel="alert">
-          <span>{controller.error || externalError}</span>
-          {!controller.error && externalError && onDismissExternalError && (
-            <button type="button" aria-label="关闭错误提示" onClick={onDismissExternalError}>×</button>
+          <span>{renameError ?? controller.error ?? externalError}</span>
+          {renameError ? (
+            <button
+              type="button"
+              aria-label="关闭错误提示"
+              onClick={() => setRenameError(null)}
+            >
+              ×
+            </button>
+          ) : (
+            !controller.error && externalError && onDismissExternalError && (
+              <button type="button" aria-label="关闭错误提示" onClick={onDismissExternalError}>×</button>
+            )
           )}
         </div>
       )}
@@ -1783,6 +2149,14 @@ export default function AppShell({
           </div>
         </div>
         </div>
+      )}
+
+      {contextMenu && (
+        <ContextMenu
+          position={{ x: contextMenu.x, y: contextMenu.y }}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </main>
   );

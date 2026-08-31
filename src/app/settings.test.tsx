@@ -168,7 +168,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("主题"), "light");
 
@@ -181,7 +181,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     fireEvent.change(bodySize, { target: { value: "20" } });
@@ -201,7 +201,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     await user.clear(bodySize);
@@ -228,7 +228,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const width = within(dialog).getByLabelText("内容宽度");
     await user.clear(width);
@@ -251,7 +251,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     await user.clear(bodySize);
@@ -267,7 +267,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const bodySize = within(dialog).getByLabelText("正文字号");
     fireEvent.change(bodySize, { target: { value: "99" } });
@@ -284,7 +284,7 @@ describe("settings: theme and editor preferences", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
     fireEvent.change(within(dialog).getByLabelText("自定义字体"), {
@@ -313,7 +313,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -339,7 +339,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -395,7 +395,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -438,7 +438,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -473,7 +473,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -506,7 +506,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -540,7 +540,7 @@ describe("settings: installed font enumeration", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
@@ -581,7 +581,7 @@ describe("settings: manual update check", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     expect(within(dialog).getByText(/v\d+\.\d+\.\d+/)).toBeInTheDocument();
     // Presence, not visibility: the rows are mid intro animation.
@@ -595,7 +595,7 @@ describe("settings: manual update check", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.click(
       within(dialog).getByRole("button", { name: "检查更新" }),
@@ -627,7 +627,7 @@ describe("settings: manual update check", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const checkButton = within(dialog).getByRole("button", {
       name: "检查更新",
@@ -664,7 +664,7 @@ describe("settings: manual update check", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.click(
       within(dialog).getByRole("button", { name: "检查更新" }),
@@ -695,7 +695,7 @@ describe("settings: manual update check", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     await user.click(
       within(dialog).getByRole("button", { name: "检查更新" }),

@@ -23,6 +23,14 @@ const replaceEditorText = (text: string) => {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
 };
 
+// The shell exposes two 设置 buttons in the empty state — the header text
+// action and the floating gear — both opening the same dialog; queries here
+// target the header one (first in document order).
+const headerSettingsButton = () =>
+  within(screen.getByRole("banner", { name: "应用标题栏" })).getByRole("button", {
+    name: "设置",
+  });
+
 // Opening a file, folder, or dialog — click -> async port call -> controller
 // state -> render — spans several React commits plus CodeMirror construction
 // for the editor. CI runners under parallel load exceed the 1s default
@@ -44,7 +52,7 @@ describe("accessibility: roles and names", () => {
     expect(within(titlebar).getByText("Opus")).toHaveAttribute(
       "data-tauri-drag-region",
     );
-    expect(screen.getByRole("button", { name: "设置" })).toBeVisible();
+    expect(headerSettingsButton()).toBeVisible();
     for (const button of within(titlebar).getAllByRole("button")) {
       expect(button).not.toHaveAttribute("data-tauri-drag-region");
     }
@@ -106,9 +114,9 @@ describe("accessibility: roles and names", () => {
     const sidebar = screen.getByRole("slider", { name: "调整侧栏宽度" });
     expect(sidebar).toHaveAttribute("aria-orientation", "vertical");
     expect(sidebar).toHaveAttribute("aria-valuenow", "260");
-    expect(sidebar).toHaveAttribute("aria-valuemin", "200");
-    // The max follows the window-aware clamp (jsdom 1024px → 40% = 410).
-    expect(sidebar).toHaveAttribute("aria-valuemax", "410");
+    expect(sidebar).toHaveAttribute("aria-valuemin", "120");
+    // The max follows the window-aware clamp (jsdom 1024px → 50% = 512).
+    expect(sidebar).toHaveAttribute("aria-valuemax", "512");
 
     await user.click(screen.getByRole("button", { name: "打开文件" }));
     await user.click(
@@ -121,8 +129,8 @@ describe("accessibility: roles and names", () => {
     const outline = screen.getByRole("slider", { name: "调整大纲宽度" });
     expect(outline).toHaveAttribute("aria-orientation", "vertical");
     expect(outline).toHaveAttribute("aria-valuenow", "300");
-    expect(outline).toHaveAttribute("aria-valuemin", "200");
-    expect(outline).toHaveAttribute("aria-valuemax", "410");
+    expect(outline).toHaveAttribute("aria-valuemin", "120");
+    expect(outline).toHaveAttribute("aria-valuemax", "512");
   });
 
   it("exposes the workspace tree with a name and levelled items", async () => {
@@ -158,7 +166,7 @@ describe("accessibility: roles and names", () => {
     const user = userEvent.setup();
     render(<AppShell port={new MemoryDocumentPort(new Map())} />);
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(headerSettingsButton());
     // The role query's name comes from the dialog's visible heading:
     // aria-labelledby -> settings-dialog-title (h2 "设置").
     const dialog = screen.getByRole("dialog", { name: "设置" });
@@ -223,6 +231,7 @@ describe("accessibility: roles and names", () => {
     );
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(await screen.findByRole("button", { name: "展开右侧栏" }));
 
     const grid = screen.getByRole("grid", { name: "Markdown 表格" });
     expect(within(grid).getAllByRole("columnheader")).toHaveLength(2);
@@ -349,7 +358,7 @@ describe("accessibility: keyboard-only flows", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    screen.getByRole("button", { name: "设置" }).focus();
+    headerSettingsButton().focus();
     await user.keyboard("{Enter}");
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const themeSelect = within(dialog).getByLabelText("主题");
@@ -368,7 +377,7 @@ describe("accessibility: keyboard-only flows", () => {
     await waitFor(
       () => {
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "设置" })).toHaveFocus();
+        expect(headerSettingsButton()).toHaveFocus();
       },
       { timeout: APP_ASYNC_TIMEOUT_MS },
     );
@@ -454,7 +463,11 @@ describe("accessibility: stylesheet guarantees", () => {
     );
     expect(appCss).toMatch(/\.app-body\s*\{[^}]*overflow:\s*hidden;/s);
     expect(appCss).toMatch(/\.sidebar\s*\{[^}]*height:\s*100%;/s);
-    expect(appCss).toMatch(/\.sidebar\s*\{[^}]*overflow-y:\s*auto;/s);
+    // The sidebar pins its footer (settings gear); the sections scroll
+    // inside a dedicated wrapper.
+    expect(appCss).toMatch(/\.sidebar\s*\{[^}]*overflow:\s*hidden;/s);
+    expect(appCss).toMatch(/\.sidebar-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
+    expect(appCss).toMatch(/\.sidebar-footer\s*\{[^}]*flex-shrink:\s*0;/s);
   });
 
   it("uses larger titlebar icon controls", () => {
@@ -528,10 +541,10 @@ describe("accessibility: stylesheet guarantees", () => {
 
   it("uses the text-selection color to highlight reading mode", () => {
     expect(appCss).toMatch(
-      /\.editor-toolbar \.icon-button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.app-header \.icon-button\.(translate-toggle|view-mode-toggle)\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
     expect(appCss).toMatch(
-      /\.editor-toolbar \.icon-button\[aria-pressed="true"\]:hover,\s*\.editor-toolbar \.icon-button\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.app-header \.icon-button\.(translate-toggle|view-mode-toggle)\[aria-pressed="true"\]:hover,[^}]*\.app-header \.icon-button\.(translate-toggle|view-mode-toggle)\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
   });
 

@@ -106,17 +106,19 @@ export interface RecentItem {
   readonly kind: "file" | "folder";
 }
 
-/** Drag-resize bounds for the sidebar, in pixels. */
-export const SIDEBAR_MIN_WIDTH = 200;
-export const SIDEBAR_MAX_WIDTH = 480;
+/**
+ * Drag-resize bounds for the sidebar, in pixels: 120 (min) to 1200 (max).
+ * The window-aware clamp may shrink the max further on narrow windows.
+ */
+export const SIDEBAR_MIN_WIDTH = 120;
+export const SIDEBAR_MAX_WIDTH = 1200;
 
 /**
  * Share of the window width a single panel may occupy at most once the
- * clamp is aware of the viewport. Two open panels at this cap together leave
- * the editor roughly a fifth of the window, even at the macOS minimum window
- * width (680px), so a narrow window cannot squeeze it to nothing.
+ * clamp is aware of the viewport: half the window, so a panel can be opened
+ * wide on demand while a single panel still cannot swallow the editor.
  */
-export const SIDEBAR_WINDOW_WIDTH_FRACTION = 0.4;
+export const SIDEBAR_WINDOW_WIDTH_FRACTION = 0.5;
 
 export const clampSidebarWidth = (width: number): number =>
   Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));

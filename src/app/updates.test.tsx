@@ -256,7 +256,7 @@ describe("AppShell update dialog", () => {
     await act(async () => {
       render(<AppShell port={new MemoryDocumentPort(new Map())} />);
     });
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const settingsDialog = screen.getByRole("dialog", { name: "设置" });
     await act(async () => {
       resolveCheck(updateOffer("2.0.0"));
