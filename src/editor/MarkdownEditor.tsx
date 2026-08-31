@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { redo, undo } from "@codemirror/commands";
 import { forceParsing } from "@codemirror/language";
 import {
   Annotation,
@@ -93,6 +94,20 @@ export interface TableFocusRequest extends TableCellEditRequest {
   readonly sequence: number;
 }
 
+/**
+ * Imperative commands exposed to host components (e.g. the AppShell context
+ * menu). undo/redo are routed to the live EditorView; both return false when
+ * there is nothing to undo/redo or the editor is not mounted.
+ */
+export interface MarkdownEditorHandle {
+  /** Focuses the editor content. */
+  focus(): void;
+  /** Undoes one history group. */
+  undo(): boolean;
+  /** Redoes one history group. */
+  redo(): boolean;
+}
+
 export interface MarkdownEditorProps {
   value: string;
   onChange(value: string): void;
@@ -122,24 +137,26 @@ export interface MarkdownEditorProps {
   performanceMode?: PerformanceMode;
 }
 
-export default function MarkdownEditor({
-  value,
-  onChange,
-  onSave,
-  onReopenClosed,
-  onToggleReading,
-  viewMode,
-  documentPath,
-  saveClipboardImage,
-  resolveImageUrl,
-  imageDrop = null,
-  onOutlineChange,
-  outlineNavigation = null,
-  onRequestTableEdit,
-  tableFocusRequest = null,
-  onTableFocusConsumed,
-  performanceMode = "full",
-}: MarkdownEditorProps) {
+const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
+  function MarkdownEditor(props, ref) {
+    const {
+      value,
+      onChange,
+      onSave,
+      onReopenClosed,
+      onToggleReading,
+      viewMode,
+      documentPath,
+      saveClipboardImage,
+      resolveImageUrl,
+      imageDrop = null,
+      onOutlineChange,
+      outlineNavigation = null,
+      onRequestTableEdit,
+      tableFocusRequest = null,
+      onTableFocusConsumed,
+      performanceMode = "full",
+    } = props;
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewCompartmentRef = useRef(new Compartment());
@@ -391,6 +408,16 @@ export default function MarkdownEditor({
     );
   }, [imageDrop]);
 
+  // Public imperative API for host components: the CodeMirror undo/redo
+  // commands already consult the history and read-only state, so the handle
+  // only forwards to the mounted EditorView (false when it is gone). No
+  // transaction is ever dispatched from here on its own.
+  useImperativeHandle(ref, () => ({
+    focus: () => viewRef.current?.focus(),
+    undo: () => (viewRef.current ? undo(viewRef.current) : false),
+    redo: () => (viewRef.current ? redo(viewRef.current) : false),
+  }), []);
+
   return (
     <div
       ref={hostRef}
@@ -399,4 +426,7 @@ export default function MarkdownEditor({
       data-view-mode={viewMode}
     />
   );
-}
+  },
+);
+
+export default MarkdownEditor;

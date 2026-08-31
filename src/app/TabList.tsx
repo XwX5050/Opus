@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { DocumentSnapshot } from "../document/types";
 
 export interface TabListProps {
@@ -6,6 +6,12 @@ export interface TabListProps {
   activeId: string | null;
   onActivate(id: string): void;
   onClose(id: string): void;
+  /**
+   * Called with the tab id and the right-click event after the tab button
+   * handled it (preventDefault + stopPropagation), so the host can open its
+   * own context menu without the shell fallback also firing.
+   */
+  onTabContextMenu?(tabId: string, event: ReactMouseEvent): void;
 }
 
 /**
@@ -13,7 +19,7 @@ export interface TabListProps {
  * as the old horizontal strip (stable `document-tab-*` ids, roving tabindex),
  * with the vertical-tablist arrow keys (Up/Down instead of Left/Right).
  */
-export default function TabList({ tabs, activeId, onActivate, onClose }: TabListProps) {
+export default function TabList({ tabs, activeId, onActivate, onClose, onTabContextMenu }: TabListProps) {
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (tabs.length === 0) return;
     let targetIndex: number | null = null;
@@ -51,6 +57,11 @@ export default function TabList({ tabs, activeId, onActivate, onClose }: TabList
             tabIndex={tab.id === activeId ? 0 : -1}
             onClick={() => onActivate(tab.id)}
             onKeyDown={(event) => onTabKeyDown(event, index)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onTabContextMenu?.(tab.id, event);
+            }}
           >
             {tab.title}
             {tab.status !== "clean" && (

@@ -1,11 +1,17 @@
+import { createRef } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { undoDepth } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
-import MarkdownEditor from "./MarkdownEditor";
+import MarkdownEditor, {
+  type MarkdownEditorHandle,
+} from "./MarkdownEditor";
 
-const renderEditor = (overrides: Partial<React.ComponentProps<typeof MarkdownEditor>> = {}) => {
+const renderEditor = (
+  overrides: Partial<React.ComponentProps<typeof MarkdownEditor>> = {},
+  ref?: React.Ref<MarkdownEditorHandle>,
+) => {
   const props = {
     value: "",
     onChange: vi.fn(),
@@ -18,7 +24,7 @@ const renderEditor = (overrides: Partial<React.ComponentProps<typeof MarkdownEdi
     resolveImageUrl: (path: string) => `asset://localhost${path}`,
     ...overrides,
   };
-  return { props, ...render(<MarkdownEditor {...props} />) };
+  return { props, ...render(<MarkdownEditor {...props} ref={ref} />) };
 };
 
 const content = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
@@ -477,6 +483,40 @@ describe("MarkdownEditor", () => {
     const view = renderEditor();
     view.unmount();
     expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("drives focus, undo and redo through its imperative handle", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const ref = createRef<MarkdownEditorHandle>();
+    const rendered = renderEditor({ onChange }, ref);
+    const handle = ref.current;
+    expect(handle).not.toBeNull();
+
+    moveToEnd();
+    await user.keyboard("hello");
+    expect(editorView().state.doc.toString()).toBe("hello");
+
+    expect(handle!.undo()).toBe(true);
+    expect(editorView().state.doc.toString()).toBe("");
+    expect(onChange).toHaveBeenLastCalledWith("");
+    expect(handle!.undo()).toBe(false);
+
+    expect(handle!.redo()).toBe(true);
+    expect(editorView().state.doc.toString()).toBe("hello");
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    handle!.focus();
+    expect(document.activeElement).toBe(content());
+    outside.remove();
+
+    // Once the editor is unmounted there is no view: undo/redo report false.
+    rendered.unmount();
+    expect(ref.current).toBeNull();
+    expect(handle!.undo()).toBe(false);
+    expect(handle!.redo()).toBe(false);
   });
 
   it("publishes the parsed outline through the editor callback", async () => {

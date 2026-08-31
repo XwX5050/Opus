@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useReducer,
   useRef,
@@ -11,6 +12,8 @@ import type {
   WorkspaceRoot,
 } from "../document/DocumentPort";
 import type { DiskEvent } from "../document/types";
+import ContextMenu from "../app/ContextMenu";
+import InlineNameInput from "../app/InlineNameInput";
 import {
   initialTreeState,
   pendingLoads,
@@ -27,8 +30,15 @@ export interface FileSidebarProps {
 }
 
 type Editing =
-  | { readonly kind: "create" }
+  | { readonly kind: "create"; readonly parent?: string }
   | { readonly kind: "rename"; readonly path: string };
+
+interface ContextMenuState {
+  readonly x: number;
+  readonly y: number;
+  readonly path: string;
+  readonly isDirectory: boolean;
+}
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -63,42 +73,6 @@ const affectedDirectories = (
 const isPlainName = (name: string): boolean =>
   name.length > 0 && !name.includes("/") && name !== "." && name !== "..";
 
-function NameInput({
-  defaultValue = "",
-  onCommit,
-  onCancel,
-}: {
-  defaultValue?: string;
-  onCommit: (value: string) => void;
-  onCancel: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  // Focus and select once on mount only. A ref callback would get a new
-  // identity every render, so a background tree update would re-select the
-  // text and the user's next keystroke would wipe it.
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-  return (
-    <input
-      type="text"
-      aria-label="文件名"
-      defaultValue={defaultValue}
-      ref={inputRef}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          onCommit(event.currentTarget.value);
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          onCancel();
-        }
-      }}
-    />
-  );
-}
-
 /**
  * Lazy folder drawer for the opened workspace. The tree stores only loaded
  * nodes (see treeReducer); expanding a directory requests exactly that
@@ -113,6 +87,7 @@ export default function FileSidebar({
   const [state, dispatch] = useReducer(treeReducer, initialTreeState);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(new Set<string>());
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -143,6 +118,7 @@ export default function FileSidebar({
     dispatch({ type: "workspaceOpened", root });
     setActivePath(null);
     setEditing(null);
+    setMenu(null);
     setError(null);
   }, [root]);
 
@@ -281,14 +257,18 @@ export default function FileSidebar({
       setError("文件名不能为空或包含路径分隔符");
       return;
     }
-    // Create next to the active row, but only inside a directory whose
-    // listing is already loaded — otherwise the new file would be invisible.
+    // Create in the target chosen when the input opened (the context-menu
+    // "在此新建文件" directory); the header button falls back to the active
+    // row, but only inside a directory whose listing is already loaded —
+    // otherwise the new file would be invisible.
     const parent =
-      activeRow?.entry.isDirectory && state.children[activeRow.entry.path]
-        ? activeRow.entry.path
-        : activeRow
-          ? parentPathOf(activeRow.entry.path)
-          : root.path;
+      editing?.kind === "create" && editing.parent !== undefined
+        ? editing.parent
+        : activeRow?.entry.isDirectory && state.children[activeRow.entry.path]
+          ? activeRow.entry.path
+          : activeRow
+            ? parentPathOf(activeRow.entry.path)
+            : root.path;
     const parentRelative = parent === root.path ? "" : relativeOf(parent);
     const relative = parentRelative ? `${parentRelative}/${name}` : name;
     try {
@@ -333,6 +313,27 @@ export default function FileSidebar({
     }
   };
 
+  const menuEntry = menu
+    ? rows.find((row) => row.entry.path === menu.path)?.entry
+    : undefined;
+
+  // Inline create (context-menu "在此新建文件"): the input row sits directly
+  // after the target directory's subtree so it reads as the directory's next
+  // entry. Falls back to the top-level input when the row is filtered out.
+  const createParent = editing?.kind === "create" ? editing.parent : undefined;
+  const createDepth = createParent
+    ? rows.find((row) => row.entry.path === createParent)?.depth
+    : undefined;
+  let createRowIndex = -1;
+  if (createParent !== undefined && createDepth !== undefined) {
+    const folderIndex = rows.findIndex((row) => row.entry.path === createParent);
+    if (folderIndex >= 0) {
+      let end = folderIndex + 1;
+      while (end < rows.length && rows[end].depth > createDepth) end += 1;
+      createRowIndex = end;
+    }
+  }
+
   return (
     <div className="sidebar-panel">
       <div className="sidebar-header">
@@ -375,8 +376,8 @@ export default function FileSidebar({
             </button>
           </div>
         ))}
-      {editing?.kind === "create" && (
-        <NameInput onCommit={(name) => void commitCreate(name)} onCancel={() => setEditing(null)} />
+      {editing?.kind === "create" && (editing.parent === undefined || createRowIndex < 0) && (
+        <InlineNameInput onCommit={(name) => void commitCreate(name)} onCancel={() => setEditing(null)} />
       )}
       <ul
         role="tree"
@@ -385,65 +386,130 @@ export default function FileSidebar({
         data-motion-list="files"
         onKeyDown={onTreeKeyDown}
       >
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const { entry, depth } = row;
           const isActive = row === activeRow;
           const renaming = editing?.kind === "rename" && editing.path === entry.path;
           return (
-            <li
-              key={entry.path}
-              role="treeitem"
-              aria-label={entry.name}
-              aria-level={depth}
-              aria-expanded={entry.isDirectory ? row.isExpanded : undefined}
-              aria-selected={isActive}
-              tabIndex={isActive ? 0 : -1}
-              className="file-tree-row"
-              data-motion-item="file"
-              ref={(element) => {
-                if (element) rowRefs.current.set(entry.path, element);
-                else rowRefs.current.delete(entry.path);
-              }}
-              onClick={() => {
-                if (!renaming) activate(entry);
-              }}
-              style={{ paddingLeft: depth * 12 }}
-            >
-              {entry.isDirectory && (
-                <span aria-hidden="true">{row.isExpanded ? "▾" : "▸"}</span>
+            <Fragment key={entry.path}>
+              {index === createRowIndex && (
+                <li
+                  role="treeitem"
+                  aria-label="新建文件"
+                  data-motion-item="file"
+                  className="file-tree-row"
+                  style={{ paddingLeft: (createDepth ?? 0) * 12 + 12 }}
+                >
+                  <InlineNameInput
+                    onCommit={(name) => void commitCreate(name)}
+                    onCancel={() => setEditing(null)}
+                  />
+                </li>
               )}
-              {renaming ? (
-                <NameInput
-                  defaultValue={entry.name}
-                  onCommit={(name) => void commitRename(entry.path, name)}
-                  onCancel={() => setEditing(null)}
-                />
-              ) : (
-                <span className="file-tree-name">{entry.name}</span>
-              )}
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setError(null);
-                  setEditing({ kind: "rename", path: entry.path });
+              <li
+                role="treeitem"
+                aria-label={entry.name}
+                aria-level={depth}
+                aria-expanded={entry.isDirectory ? row.isExpanded : undefined}
+                aria-selected={isActive}
+                tabIndex={isActive ? 0 : -1}
+                className="file-tree-row"
+                data-motion-item="file"
+                ref={(element) => {
+                  if (element) rowRefs.current.set(entry.path, element);
+                  else rowRefs.current.delete(entry.path);
                 }}
-              >
-                重命名
-              </button>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void trash(entry);
+                onClick={() => {
+                  if (!renaming) activate(entry);
                 }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    path: entry.path,
+                    isDirectory: entry.isDirectory,
+                  });
+                }}
+                style={{ paddingLeft: depth * 12 }}
               >
-                移到废纸篓
-              </button>
-            </li>
+                {entry.isDirectory && (
+                  <span aria-hidden="true">{row.isExpanded ? "▾" : "▸"}</span>
+                )}
+                {renaming ? (
+                  <InlineNameInput
+                    defaultValue={entry.name}
+                    onCommit={(name) => void commitRename(entry.path, name)}
+                    onCancel={() => setEditing(null)}
+                  />
+                ) : (
+                  <span className="file-tree-name">{entry.name}</span>
+                )}
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setError(null);
+                    setEditing({ kind: "rename", path: entry.path });
+                  }}
+                >
+                  重命名
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void trash(entry);
+                  }}
+                >
+                  移到废纸篓
+                </button>
+              </li>
+            </Fragment>
           );
         })}
       </ul>
+      {menu && (
+        <ContextMenu
+          position={{ x: menu.x, y: menu.y }}
+          onClose={() => setMenu(null)}
+          items={[
+            ...(menu.isDirectory
+              ? [
+                  {
+                    id: "new-file",
+                    label: "在此新建文件",
+                    onSelect: () => {
+                      setError(null);
+                      setActivePath(menu.path);
+                      if (!state.expanded.has(menu.path)) {
+                        dispatch({ type: "directoryToggled", path: menu.path });
+                      }
+                      setEditing({ kind: "create", parent: menu.path });
+                    },
+                  },
+                ]
+              : []),
+            {
+              id: "rename",
+              label: "重命名",
+              onSelect: () => {
+                setError(null);
+                setEditing({ kind: "rename", path: menu.path });
+              },
+            },
+            {
+              id: "trash",
+              label: "移到废纸篓",
+              danger: true,
+              onSelect: () => {
+                if (menuEntry) void trash(menuEntry);
+              },
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }

@@ -207,6 +207,90 @@ describe("FileSidebar", () => {
     expect(rowNames()).toEqual(["archive", "drafts", "Beta.markdown", "renamed.md"]);
   });
 
+  it("opens a context menu on a file row with rename and trash actions", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByRole("treeitem", { name: "alpha.md" }),
+    });
+
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "重命名" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "移到废纸篓" })).toBeInTheDocument();
+    expect(
+      within(menu).queryByRole("menuitem", { name: "在此新建文件" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renames a file through the context menu", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    const alphaRow = await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    await user.pointer({ keys: "[MouseRight]", target: alphaRow });
+    await user.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "重命名" }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "文件名" });
+    expect(input).toHaveValue("alpha.md");
+    await user.clear(input);
+    await user.type(input, "renamed.md{Enter}");
+
+    await screen.findByRole("treeitem", { name: "renamed.md" });
+    expect(screen.queryByRole("treeitem", { name: "alpha.md" })).not.toBeInTheDocument();
+    expect(rowNames()).toEqual(["archive", "drafts", "Beta.markdown", "renamed.md"]);
+  });
+
+  it("trashes a file through the context menu", async () => {
+    const user = userEvent.setup();
+    const { port } = renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    const trashSpy = vi.spyOn(port, "trashEntry");
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByRole("treeitem", { name: "alpha.md" }),
+    });
+    await user.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "移到废纸篓" }),
+    );
+
+    expect(trashSpy).toHaveBeenCalledWith("/notes", "alpha.md");
+    await waitFor(() =>
+      expect(screen.queryByRole("treeitem", { name: "alpha.md" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("creates a file inside a directory through the context menu", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await screen.findByRole("treeitem", { name: "drafts" });
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByRole("treeitem", { name: "drafts" }),
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "在此新建文件" })).toBeInTheDocument();
+
+    await user.click(within(menu).getByRole("menuitem", { name: "在此新建文件" }));
+
+    // The inline input appears inside the directory and creates there.
+    const input = screen.getByRole("textbox", { name: "文件名" });
+    await user.type(input, "notes.md{Enter}");
+
+    const created = await screen.findByRole("treeitem", { name: "notes.md" });
+    expect(created).toHaveAttribute("aria-level", "2");
+    expect(screen.getByRole("treeitem", { name: "drafts" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("closes the workspace through the header action", async () => {
     const user = userEvent.setup();
     const onCloseWorkspace = vi.fn();
