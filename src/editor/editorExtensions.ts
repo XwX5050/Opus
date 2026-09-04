@@ -23,6 +23,7 @@ import {
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { detectPathPlatform } from "../document/platform";
+import { codeBlockAutoClose } from "./codeBlockAutoClose";
 import { frontmatterMarkdownExtension } from "./frontmatterExtension";
 import { highlightMarkdownExtension } from "./highlightExtension";
 import { imeCaretExtension } from "./imeCaret";
@@ -105,6 +106,12 @@ export const editorExtensions = (
   livePreview,
   // WebKitGTK composition caret workaround; empty on other platforms.
   imeCaretExtension(),
+  // Typing assists scoped strictly to fenced code blocks: auto-close a bare
+  // fence line's closing fence and close/delete bracket pairs like a code
+  // editor. Prose and inline code keep their exact current behavior. Its
+  // Backspace binding must precede markdownKeymap/defaultKeymap (both bind
+  // Backspace), which this placement guarantees.
+  codeBlockAutoClose(),
   search({ top: true }),
   keymap.of([
     {
