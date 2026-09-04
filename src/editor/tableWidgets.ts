@@ -445,6 +445,216 @@ const handleCompositionEnd = (root: HTMLElement, event: CompositionEvent) => {
   commitCell(resolved);
 };
 
+const INLINE_STRONG_CLASS = "cm-live-preview-strong";
+const INLINE_HIGHLIGHT_CLASS = "cm-live-preview-highlight";
+const INLINE_CODE_CLASS = "cm-live-preview-inline-code";
+
+type InlineMarkerKind = "code" | "strong" | "highlight";
+
+interface InlineMarker {
+  readonly start: number;
+  readonly kind: InlineMarkerKind;
+  readonly runLength: number;
+}
+
+const isMarkerChar = (char: string | undefined) =>
+  char === "`" || char === "*" || char === "=";
+
+/**
+ * Scans for the next inline marker, treating a backslash-escaped marker char
+ * as literal (so `\*\*` never opens a strong span, matching the editor's
+ * Lezer-based live preview).
+ */
+const findInlineMarker = (
+  text: string,
+  from: number,
+  to: number,
+): InlineMarker | null => {
+  for (let index = from; index < to; index += 1) {
+    const char = text[index];
+    if (char === "\\" && isMarkerChar(text[index + 1])) {
+      index += 1;
+      continue;
+    }
+    if (char === "`") {
+      let runEnd = index + 1;
+      while (runEnd < to && text[runEnd] === "`") runEnd += 1;
+      return { start: index, kind: "code", runLength: runEnd - index };
+    }
+    if ((char === "*" || char === "=") && text[index + 1] === char) {
+      return {
+        start: index,
+        kind: char === "*" ? "strong" : "highlight",
+        runLength: 2,
+      };
+    }
+  }
+  return null;
+};
+
+/**
+ * Finds the closing backtick run of exactly `runLength`; runs of another
+ * length are literal code content.
+ */
+const findCodeClose = (
+  text: string,
+  from: number,
+  to: number,
+  runLength: number,
+): number | null => {
+  for (let index = from; index < to; index += 1) {
+    if (text[index] !== "`") continue;
+    let runEnd = index + 1;
+    while (runEnd < to && text[runEnd] === "`") runEnd += 1;
+    if (runEnd - index === runLength) return index;
+    index = runEnd - 1;
+  }
+  return null;
+};
+
+/**
+ * Finds a non-empty closing run for a strong/highlight opener, skipping
+ * escaped markers and whole code spans (whose contents are literal).
+ */
+const findInlineClose = (
+  text: string,
+  from: number,
+  to: number,
+  kind: "strong" | "highlight",
+): number | null => {
+  const marker = kind === "strong" ? "*" : "=";
+  let index = from;
+  while (index < to) {
+    const char = text[index];
+    if (char === "\\" && isMarkerChar(text[index + 1])) {
+      index += 2;
+      continue;
+    }
+    if (char === "`") {
+      let runEnd = index + 1;
+      while (runEnd < to && text[runEnd] === "`") runEnd += 1;
+      const codeClose = findCodeClose(text, runEnd, to, runEnd - index);
+      index = codeClose === null ? runEnd : codeClose + (runEnd - index);
+      continue;
+    }
+    if (char === marker && text[index + 1] === marker) {
+      return index;
+    }
+    index += 1;
+  }
+  return null;
+};
+
+/**
+ * Turns a Markdown cell's display text into DOM built from text nodes and
+ * styled spans only (never innerHTML, so cell content cannot inject
+ * elements). Code spans win over `**`/`==`; their contents stay literal.
+ * Unclosed markers render literally; escaped markers stay literal too.
+ * Nested formatting is best-effort via recursion.
+ */
+const buildInlineNodes = (text: string): (Text | HTMLElement)[] => {
+  const nodes: (Text | HTMLElement)[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const marker = findInlineMarker(text, cursor, text.length);
+    if (!marker) {
+      nodes.push(document.createTextNode(text.slice(cursor)));
+      break;
+    }
+    if (marker.start > cursor) {
+      nodes.push(document.createTextNode(text.slice(cursor, marker.start)));
+    }
+    if (marker.kind === "code") {
+      const close = findCodeClose(
+        text,
+        marker.start + marker.runLength,
+        text.length,
+        marker.runLength,
+      );
+      if (close === null) {
+        nodes.push(document.createTextNode(
+          text.slice(marker.start, marker.start + marker.runLength),
+        ));
+        cursor = marker.start + marker.runLength;
+        continue;
+      }
+      const code = document.createElement("span");
+      code.className = INLINE_CODE_CLASS;
+      code.append(document.createTextNode(
+        text.slice(marker.start + marker.runLength, close),
+      ));
+      nodes.push(code);
+      cursor = close + marker.runLength;
+      continue;
+    }
+    const contentFrom = marker.start + marker.runLength;
+    const close = findInlineClose(text, contentFrom, text.length, marker.kind);
+    if (close === null || close === contentFrom) {
+      nodes.push(document.createTextNode(
+        text.slice(marker.start, marker.start + marker.runLength),
+      ));
+      cursor = marker.start + marker.runLength;
+      continue;
+    }
+    const span = document.createElement("span");
+    span.className = marker.kind === "strong"
+      ? INLINE_STRONG_CLASS
+      : INLINE_HIGHLIGHT_CLASS;
+    span.append(...buildInlineNodes(text.slice(contentFrom, close)));
+    nodes.push(span);
+    cursor = close + marker.runLength;
+  }
+  return nodes;
+};
+
+const renderCellInlineMarkdown = (element: HTMLElement, text: string) => {
+  element.replaceChildren(...buildInlineNodes(text));
+};
+
+/**
+ * A cell that gains focus is being edited: swap the formatted display back
+ * to the raw Markdown source so typing/committing round-trips exactly as
+ * before inline rendering existed.
+ */
+const switchCellToEditingSource = (element: HTMLElement) => {
+  if (element.getAttribute("contenteditable") !== "true") return;
+  const root = element.closest<HTMLElement>(".md-table-scroll");
+  if (!root) return;
+  const context = widgetContexts.get(root);
+  if (!context || !context.editable || context.view.state.readOnly) return;
+  const resolved = resolveCurrentOwnedCell(root, context, element);
+  if (!resolved || resolved.context.composing.has(element)) return;
+  resolved.element.replaceChildren(
+    document.createTextNode(resolved.model.displayText),
+  );
+};
+
+/**
+ * A cell whose focus left the table is no longer being edited: restore the
+ * formatted inline-Markdown display from the current cell model. Edited
+ * content was already committed by its input events, whose document update
+ * re-rendered the widget in `updateDOM` — this only touches DOM and never
+ * dispatches or fights the commit flow.
+ */
+const restoreCellInlineMarkdown = (
+  element: HTMLElement,
+  event: FocusEvent,
+) => {
+  if (element.getAttribute("contenteditable") !== "true") return;
+  const root = element.closest<HTMLElement>(".md-table-scroll");
+  if (!root) return;
+  const context = widgetContexts.get(root);
+  if (!context || !context.editable || context.view.state.readOnly) return;
+  // Focus moving within the same cell (relatedTarget inside it) is not a
+  // leave; never clobber caret/selection that is still inside the cell.
+  if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget)) {
+    return;
+  }
+  const resolved = resolveCurrentOwnedCell(root, context, element);
+  if (!resolved || resolved.context.composing.has(element)) return;
+  renderCellInlineMarkdown(resolved.element, resolved.model.displayText);
+};
+
 const ownedCellAt = (
   root: HTMLElement,
   context: TableWidgetContext,
@@ -753,7 +963,13 @@ export class MarkdownTableWidget extends WidgetType {
       element.dataset.cellIndex = String(cellIndex);
       element.dataset.alignment = this.table.columns[columnIndex].alignment;
       setCellEditability(element, tagName, this.editable, readOnly);
-      element.textContent = cell.displayText;
+      renderCellInlineMarkdown(element, cell.displayText);
+      element.addEventListener("focus", () => {
+        switchCellToEditingSource(element);
+      });
+      element.addEventListener("blur", (event) => {
+        restoreCellInlineMarkdown(element, event as FocusEvent);
+      });
       row.append(element);
       ownedCells.push(element);
       cellIndex += 1;
@@ -867,11 +1083,17 @@ export class MarkdownTableWidget extends WidgetType {
       element.dataset.alignment = this.table.columns[columnIndex].alignment;
       setCellEditability(element, tagName, this.editable, readOnly);
 
-      const activeCellMatchesSource = document.activeElement === element &&
+      const isActive = document.activeElement === element;
+      const activeCellMatchesSource = isActive &&
         element.textContent === cell.displayText;
       const isComposing = composing.has(element);
       if (!activeCellMatchesSource && !isComposing) {
-        element.textContent = cell.displayText;
+        if (isActive) {
+          // Never render formatted markup into a cell that is being edited.
+          element.replaceChildren(document.createTextNode(cell.displayText));
+        } else {
+          renderCellInlineMarkdown(element, cell.displayText);
+        }
       }
     });
     return true;
@@ -996,9 +1218,9 @@ export const tableWidgetsExtension = (
       lineHeight: "0",
       overflow: "hidden",
       paddingTop: "0 !important",
-      paddingRight: "var(--space-5) !important",
-      paddingBottom: "var(--space-3) !important",
-      paddingLeft: "var(--space-5) !important",
+      paddingRight: "var(--space-quote-inline) !important",
+      paddingBottom: "var(--space-quote-block) !important",
+      paddingLeft: "var(--space-quote-inline) !important",
       borderRadius: "0 0 var(--radius-medium) var(--radius-medium)",
     },
     ".md-table-no-body thead tr:last-child > *": {

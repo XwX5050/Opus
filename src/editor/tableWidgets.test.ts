@@ -438,7 +438,9 @@ describe("tableWidgetsExtension", () => {
     );
     expect(getComputedStyle(finalLine!).lineHeight).toBe("0");
     expect(getComputedStyle(finalLine!).height).toBe("auto");
-    expect(getComputedStyle(finalLine!).paddingBottom).toBe("var(--space-3)");
+    expect(getComputedStyle(finalLine!).paddingBottom).toBe(
+      "var(--space-quote-block)",
+    );
     const quoteShellRule = [...document.styleSheets]
       .flatMap((sheet) => [...sheet.cssRules])
       .find((rule): rule is CSSStyleRule =>
@@ -447,7 +449,7 @@ describe("tableWidgetsExtension", () => {
           ".cm-table-continuation.cm-live-preview-quote-line-last",
         ),
     );
-    expect(quoteShellRule?.style.paddingBottom).toBe("var(--space-3)");
+    expect(quoteShellRule?.style.paddingBottom).toBe("var(--space-quote-block)");
   });
 
   it("renders a list-contained table without overlapping line decorations", () => {
@@ -1375,6 +1377,279 @@ describe("tableWidgetsExtension", () => {
     expect(table).toHaveClass("md-table-no-body");
     expect(table?.querySelectorAll("tbody tr")).toHaveLength(0);
     expect(getComputedStyle(header!).borderBottomWidth).toBe("0px");
+  });
+});
+
+describe("inline Markdown rendering in table cells", () => {
+  const formatDoc = (left: string, right = "keep") =>
+    ["| A | B |", "| --- | --- |", `| ${left} | ${right} |`].join("\n");
+
+  it("renders **strong** cells with the strong style and no visible asterisks", () => {
+    const view = createView(formatDoc("**x**"));
+    const cell = tableCell(view, 2);
+
+    const strong = cell.querySelector(".cm-live-preview-strong");
+    expect(strong).not.toBeNull();
+    expect(strong?.textContent).toBe("x");
+    expect(cell.textContent).toBe("x");
+    expect(cell.textContent).not.toContain("*");
+  });
+
+  it("renders ==highlight== cells with the highlight style", () => {
+    const view = createView(formatDoc("==x=="));
+    const cell = tableCell(view, 2);
+
+    const highlight = cell.querySelector(".cm-live-preview-highlight");
+    expect(highlight).not.toBeNull();
+    expect(highlight?.textContent).toBe("x");
+    expect(cell.textContent).toBe("x");
+    expect(cell.textContent).not.toContain("=");
+  });
+
+  it("renders `code` cells with the inline-code style and literal contents", () => {
+    const view = createView(formatDoc("`x`"));
+    const cell = tableCell(view, 2);
+
+    const code = cell.querySelector(".cm-live-preview-inline-code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("x");
+    expect(cell.textContent).toBe("x");
+    expect(cell.textContent).not.toContain("`");
+  });
+
+  it("treats code contents as literal, winning over other markers", () => {
+    const view = createView(formatDoc("`**y**`"));
+    const cell = tableCell(view, 2);
+
+    const code = cell.querySelector(".cm-live-preview-inline-code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("**y**");
+    expect(cell.querySelector(".cm-live-preview-strong")).toBeNull();
+  });
+
+  it("matches multi-backtick code spans so inner backticks stay literal", () => {
+    const view = createView(formatDoc("``a`b``"));
+    const cell = tableCell(view, 2);
+
+    const code = cell.querySelector(".cm-live-preview-inline-code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("a`b");
+  });
+
+  it("keeps unclosed markers literal", () => {
+    const view = createView(formatDoc("**x", "y=="));
+    const cells = [...view.dom.querySelectorAll("td")];
+
+    expect(cells[0].textContent).toBe("**x");
+    expect(cells[0].querySelector("span")).toBeNull();
+    expect(cells[1].textContent).toBe("y==");
+    expect(cells[1].querySelector("span")).toBeNull();
+  });
+
+  it("keeps escaped markers literal like the editor's live preview", () => {
+    const escaped = String.raw`\*\*x\*\*`;
+    const view = createView(formatDoc(escaped));
+    const cell = tableCell(view, 2);
+
+    expect(cell.textContent).toBe(escaped);
+    expect(cell.querySelector(".cm-live-preview-strong")).toBeNull();
+  });
+
+  it("leaves plain cells as a single text node", () => {
+    const view = createView(formatDoc("plain"));
+    const cell = tableCell(view, 2);
+
+    expect(cell.textContent).toBe("plain");
+    expect(cell.childNodes).toHaveLength(1);
+    expect(cell.firstChild).toBeInstanceOf(Text);
+    expect(cell.querySelector("span")).toBeNull();
+  });
+
+  it("renders mixed formatting in one cell", () => {
+    const view = createView(formatDoc("a **b** ==c=="));
+    const cell = tableCell(view, 2);
+
+    expect(cell.textContent).toBe("a b c");
+    expect(cell.querySelector(".cm-live-preview-strong")?.textContent).toBe("b");
+    expect(cell.querySelector(".cm-live-preview-highlight")?.textContent)
+      .toBe("c");
+  });
+
+  it("renders strong inside highlight as a nested span", () => {
+    const view = createView(formatDoc("==**a**=="));
+    const cell = tableCell(view, 2);
+
+    const highlight = cell.querySelector(".cm-live-preview-highlight");
+    expect(highlight).not.toBeNull();
+    expect(highlight?.querySelector(".cm-live-preview-strong")?.textContent)
+      .toBe("a");
+  });
+
+  it("renders formatted cells in a read-only widget", () => {
+    const view = createView(formatDoc("**x**"), false);
+    const cell = tableCell(view, 2);
+
+    expect(cell.querySelector(".cm-live-preview-strong")?.textContent)
+      .toBe("x");
+  });
+
+  it("renders inline markers again after the table is refreshed", () => {
+    const doc = formatDoc("old");
+    const view = createView(doc);
+    const oldFrom = view.state.doc.toString().indexOf("old");
+
+    view.dispatch({
+      changes: {
+        from: oldFrom,
+        to: oldFrom + "old".length,
+        insert: "**z**",
+      },
+    });
+
+    const cell = tableCell(view, 2);
+    expect(cell.textContent).toBe("z");
+    expect(cell.querySelector(".cm-live-preview-strong")?.textContent).toBe("z");
+  });
+
+  it("shows raw source text when a rendered cell enters edit mode", () => {
+    const view = createView(formatDoc("**x**"));
+    const cell = tableCell(view, 2);
+    cell.focus();
+
+    expect(document.activeElement).toBe(cell);
+    expect(cell.textContent).toBe("**x**");
+    expect(cell.querySelector(".cm-live-preview-strong")).toBeNull();
+  });
+
+  it("keeps a focused cell raw across updates while its source is unchanged", () => {
+    const doc = formatDoc("**x**");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+
+    const keepFrom = view.state.doc.toString().indexOf("keep");
+    view.dispatch({
+      changes: {
+        from: keepFrom,
+        to: keepFrom + "keep".length,
+        insert: "other",
+      },
+    });
+
+    expect(tableCell(view, 2)).toBe(cell);
+    expect(cell.textContent).toBe("**x**");
+    expect(cell.querySelector(".cm-live-preview-strong")).toBeNull();
+  });
+
+  it("commits raw source edited in a formatted cell without touching markers", () => {
+    const view = createView(formatDoc("**x**"));
+    const cell = tableCell(view, 2);
+    cell.focus();
+    cell.textContent = "**y**";
+    dispatchInput(cell);
+
+    expect(view.state.doc.toString()).toBe(
+      ["| A | B |", "| --- | --- |", "| **y** | keep |"].join("\n"),
+    );
+  });
+
+  it("restores formatted rendering when a focused cell blurs outside the table", () => {
+    const view = createView(formatDoc("**x**"));
+    const cell = tableCell(view, 2);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+
+    cell.focus();
+    expect(document.activeElement).toBe(cell);
+    expect(cell.textContent).toBe("**x**");
+    expect(cell.querySelector(".cm-live-preview-strong")).toBeNull();
+
+    outside.focus();
+
+    expect(document.activeElement).toBe(outside);
+    expect(cell.querySelector(".cm-live-preview-strong")?.textContent).toBe("x");
+    expect(cell.textContent).toBe("x");
+    expect(cell.textContent).not.toContain("*");
+  });
+
+  it("restores the blurred cell while the newly focused cell stays raw", () => {
+    const view = createView(formatDoc("**x**", "==y=="));
+    const first = tableCell(view, 2);
+    const second = tableCell(view, 3);
+
+    first.focus();
+    expect(first.textContent).toBe("**x**");
+
+    second.focus();
+
+    expect(document.activeElement).toBe(second);
+    expect(first.querySelector(".cm-live-preview-strong")?.textContent).toBe("x");
+    expect(first.textContent).not.toContain("*");
+    expect(second.textContent).toBe("==y==");
+    expect(second.querySelector(".cm-live-preview-highlight")).toBeNull();
+  });
+
+  it("restores formatting on blur without committing or touching the document", () => {
+    const doc = formatDoc("**x**");
+    let docChanges = 0;
+    const view = createView(doc, true, EditorView.updateListener.of((update) => {
+      if (update.docChanged) docChanges += 1;
+    }));
+    const cell = tableCell(view, 2);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    cell.focus();
+    const historyBefore = undoDepth(view.state);
+
+    outside.focus();
+
+    expect(docChanges).toBe(0);
+    expect(undoDepth(view.state)).toBe(historyBefore);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(cell.querySelector(".cm-live-preview-strong")?.textContent).toBe("x");
+  });
+
+  it("shows committed edits formatted after blur", () => {
+    const view = createView(formatDoc("**x**"));
+    const cell = tableCell(view, 2);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    cell.focus();
+    cell.textContent = "**y**";
+    dispatchInput(cell);
+    expect(view.state.doc.toString()).toBe(
+      ["| A | B |", "| --- | --- |", "| **y** | keep |"].join("\n"),
+    );
+
+    outside.focus();
+
+    const refreshed = tableCell(view, 2);
+    expect(refreshed.querySelector(".cm-live-preview-strong")?.textContent)
+      .toBe("y");
+    expect(refreshed.textContent).not.toContain("*");
+    expect(refreshed.textContent).toBe("y");
+    expect(view.state.doc.toString()).toBe(
+      ["| A | B |", "| --- | --- |", "| **y** | keep |"].join("\n"),
+    );
+  });
+
+  it("does not crash when the blurred cell's widget was torn down in between", () => {
+    const doc = formatDoc("**x**");
+    const replacement = ["| Q |", "| --- |", "| z |"].join("\n");
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+
+    view.dispatch({
+      changes: { from: 0, to: doc.length, insert: replacement },
+    });
+
+    expect(cell.isConnected).toBe(false);
+    expect(() => {
+      cell.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    }).not.toThrow();
+    expect(view.state.doc.toString()).toBe(replacement);
+    expect(view.dom.querySelector("td")?.textContent).toBe("z");
   });
 });
 
