@@ -21,7 +21,8 @@ export type PlannedDecorationKind =
   | "replace"
   | "horizontal-rule"
   | "list-marker"
-  | "task-checkbox";
+  | "task-checkbox"
+  | "code-lang-badge";
 
 export interface PlannedDecoration {
   from: number;
@@ -328,6 +329,30 @@ export const planLivePreview = (
         className: "cm-live-preview-horizontal-rule",
       });
     }
+    if (structure.node.name === "FencedCode" && !revealed(structure)) {
+      // While the fence is hidden, the language label floats quietly at the
+      // block's top-right; it disappears again once the cursor reveals the
+      // source for editing.
+      const info = structure.node.getChild("CodeInfo");
+      if (info) {
+        const language = state.sliceDoc(info.from, info.to).trim();
+        if (language) {
+          const firstLine = state.doc.lineAt(structure.node.from);
+          planned.push({
+            from: firstLine.from,
+            to: firstLine.to,
+            kind: "line",
+            className: "cm-live-preview-code-lang-anchor",
+          });
+          planned.push({
+            from: firstLine.to,
+            to: firstLine.to,
+            kind: "code-lang-badge",
+            displayText: language,
+          });
+        }
+      }
+    }
   }
   const markersByOwner = new Map<Structure, MarkerNode[]>();
   for (const { owner, node } of markerCandidates) {
@@ -421,7 +446,8 @@ export const planLivePreview = (
 
   const unique = new Map<string, PlannedDecoration>();
   for (const item of planned) {
-    if (item.from >= 0 && item.to > item.from && item.to <= state.doc.length) {
+    // The language badge is a zero-width widget at the fence line's end.
+    if (item.from >= 0 && item.to >= item.from && item.to <= state.doc.length) {
       unique.set(
         `${item.kind}:${item.from}:${item.to}:${item.className ?? ""}:${item.displayText ?? ""}:${item.checked ?? ""}`,
         item,
@@ -477,6 +503,31 @@ class ListMarkerWidget extends WidgetType {
       this.text === "•" ? "项目符号" : `列表序号 ${this.text}`,
     );
     return marker;
+  }
+
+  destroy(_dom: HTMLElement) {}
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+class CodeLangBadgeWidget extends WidgetType {
+  constructor(private readonly text: string) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof CodeLangBadgeWidget && other.text === this.text;
+  }
+
+  toDOM() {
+    const badge = document.createElement("span");
+    badge.className = "cm-live-preview-code-lang-badge";
+    // The label comes from the CodeInfo node verbatim — never markup, so a
+    // language string cannot inject HTML into the preview.
+    badge.textContent = this.text;
+    return badge;
   }
 
   destroy(_dom: HTMLElement) {}
@@ -663,6 +714,10 @@ const decorationSetsFor = (
       decoration = Decoration.replace({
         widget: new ListMarkerWidget(item.displayText ?? "•"),
       }).range(item.from, item.to);
+    } else if (item.kind === "code-lang-badge") {
+      decoration = Decoration.widget({
+        widget: new CodeLangBadgeWidget(item.displayText ?? ""),
+      }).range(item.from);
     } else if (item.kind === "task-checkbox") {
       decoration = Decoration.replace({
         widget: new TaskCheckboxWidget(item.from, item.to, item.checked ?? false),
@@ -829,6 +884,22 @@ const livePreviewTheme = EditorView.baseTheme({
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
     fontSize: "0.85em",
     color: "var(--text-muted)",
+  },
+  // The language badge floats at the top-right of a rendered code block.
+  // The anchor line turns the block's first line into the positioning
+  // context so the absolutely placed span hugs the block corner, not the
+  // viewport.
+  ".cm-live-preview-code-lang-anchor": { position: "relative" },
+  ".cm-live-preview-code-lang-badge": {
+    position: "absolute",
+    top: "0",
+    right: "0",
+    fontSize: "0.7em",
+    lineHeight: "1",
+    color: "var(--text-muted)",
+    padding: "0.1em 0.45em",
+    pointerEvents: "none",
+    whiteSpace: "nowrap",
   },
   ".cm-live-preview-inline-code": {
     backgroundColor: "var(--surface)",

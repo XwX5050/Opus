@@ -479,6 +479,44 @@ describe("planLivePreview", () => {
       },
     ]);
   });
+
+  it("plans a zero-width language badge anchored to the opening fence line", () => {
+    const doc = "```python\nprint(1)\n```\n\nafter";
+    const state = createState(doc, [{ anchor: doc.length }]);
+
+    expect(planLivePreview(state)).toEqual(
+      expect.arrayContaining([
+        {
+          from: 0,
+          to: 9,
+          kind: "line",
+          className: "cm-live-preview-code-lang-anchor",
+        },
+        { from: 9, to: 9, kind: "code-lang-badge", displayText: "python" },
+      ]),
+    );
+  });
+
+  it("plans no language badge for fenced code without an info string", () => {
+    const state = createState("```\nprint(1)\n```\n\nafter", [{ anchor: 17 }]);
+
+    expect(
+      planLivePreview(state).filter(({ kind }) => kind === "code-lang-badge"),
+    ).toEqual([]);
+  });
+
+  it("keeps the language badge planned in reading mode under the cursor", () => {
+    const doc = "```python\nprint(1)\n```\n\nafter";
+    const state = createState(doc, [{ anchor: doc.indexOf("print") + 1 }]);
+
+    const badges = planLivePreview(state, undefined, undefined, {
+      revealSelection: false,
+    }).filter(({ kind }) => kind === "code-lang-badge");
+
+    expect(badges).toEqual([
+      { from: 9, to: 9, kind: "code-lang-badge", displayText: "python" },
+    ]);
+  });
 });
 
 describe("livePreviewExtension", () => {
@@ -750,6 +788,79 @@ describe("livePreviewExtension", () => {
       "项目符号",
       "列表序号 2.",
     ]);
+    view.destroy();
+  });
+
+  it("renders a language badge on a fenced code block with an info string", () => {
+    const view = createView("```python\nprint(1)\n```\n\nafter");
+    const badges = view.dom.querySelectorAll(".cm-live-preview-code-lang-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.textContent).toBe("python");
+    view.destroy();
+  });
+
+  it("anchors the language badge to the block's opening fence line", () => {
+    const view = createView("```python\nprint(1)\n```\n\nafter");
+    const firstLine = view.contentDOM.querySelector(".cm-line");
+    expect(
+      firstLine?.querySelector(".cm-live-preview-code-lang-badge"),
+    ).not.toBeNull();
+    view.destroy();
+  });
+
+  it("renders no language badge when the fence has no info string", () => {
+    const view = createView("```\nprint(1)\n```\n\nafter");
+    expect(view.dom.querySelector(".cm-live-preview-code-lang-badge")).toBeNull();
+    view.destroy();
+  });
+
+  it("hides the language badge while the block is revealed for editing", () => {
+    const doc = "```python\nprint(1)\n```\n\nafter";
+    const view = createView(doc);
+    expect(
+      view.dom.querySelectorAll(".cm-live-preview-code-lang-badge"),
+    ).toHaveLength(1);
+    view.dispatch({ selection: { anchor: doc.indexOf("print") + 1 } });
+    expect(view.dom.querySelector(".cm-live-preview-code-lang-badge")).toBeNull();
+    view.dispatch({ selection: { anchor: doc.length } });
+    expect(
+      view.dom.querySelectorAll(".cm-live-preview-code-lang-badge"),
+    ).toHaveLength(1);
+    view.destroy();
+  });
+
+  it("keeps the language badge in reading mode under the cursor", () => {
+    const doc = "```python\nprint(1)\n```\n\nafter";
+    const view = createView(doc, true);
+    view.dispatch({ selection: { anchor: doc.indexOf("print") + 1 } });
+    const badges = view.dom.querySelectorAll(".cm-live-preview-code-lang-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.textContent).toBe("python");
+    view.destroy();
+  });
+
+  it("renders one language badge per fenced block", () => {
+    const view = createView(
+      "```python\nprint(1)\n```\n\n```ts\nconst n: number = 1\n```\n\nafter",
+    );
+    const badges = [
+      ...view.dom.querySelectorAll(".cm-live-preview-code-lang-badge"),
+    ].map((badge) => badge.textContent);
+    expect(badges).toEqual(["python", "ts"]);
+    view.destroy();
+  });
+
+  it("trims trailing whitespace from the language badge text", () => {
+    const view = createView("```python   \nprint(1)\n```\n\nafter");
+    expect(
+      view.dom.querySelector(".cm-live-preview-code-lang-badge")?.textContent,
+    ).toBe("python");
+    view.destroy();
+  });
+
+  it("renders no language badge on non-fenced constructs", () => {
+    const view = createView("# Head\n\n**strong** [label](url)\n\n---\n\nafter");
+    expect(view.dom.querySelector(".cm-live-preview-code-lang-badge")).toBeNull();
     view.destroy();
   });
 });
