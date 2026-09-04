@@ -26,6 +26,9 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
+  /* Quote callout card padding: generous so the accent bar floats inside. */
+  --space-quote-block: 20px;
+  --space-quote-inline: 24px;
 
   /* Three restrained radius steps. */
   --radius-small: 4px;
@@ -57,13 +60,24 @@
   /* Near-black canvas with a hair of blue; the native window background
      (window_background.rs) must stay exactly this hex. */
   --canvas: #0b0b0e;
-  --surface: #1b1c22;
-  /* Panels (sidebars): a flat, slightly lifted tone over the near-black
-     canvas — depth comes from the solid value, not gradients. */
-  --surface-panel: #14151a;
-  --surface-hover: #23252c;
-  --surface-active: #2b2d34;
+  /* Surfaces sit close to the near-black canvas; depth comes from the solid
+     values, not gradients. Dialogs, menus and the reading column's inline
+     code share --surface, the deepest lifted tone. */
+  --surface: #121318;
+  /* Panels (sidebars): a flat tone one step above the near-black canvas —
+     depth comes from the solid value, not gradients. */
+  --surface-panel: #0f1015;
+  /* Markdown tables: the body hugs the canvas so tables sit naturally in the
+     text flow; the header row steps one subtle tone above it. */
+  --surface-table: #0f1014;
+  --surface-table-header: #131419;
+  --surface-hover: #1a1b22;
+  --surface-active: #22232a;
   --surface-inset: #060608;
+  /* Quote callout card: just perceptibly lifted from the canvas so block
+     quotes read as quiet note cards; the accent bar is a soft neutral gray. */
+  --surface-quote: #131419;
+  --quote-accent: #46474e;
   --text-primary: #e8e8ec;
   --text-secondary: #aaacb5;
   --text-muted: #757680;
@@ -101,9 +115,15 @@
   --surface: #f5f5f7;
   /* Panels (sidebars): flat tone, one step below the white canvas. */
   --surface-panel: #f7f7f9;
+  /* Markdown tables: the body hugs the white canvas; the header row steps
+     one subtle tone below it. */
+  --surface-table: #f6f6f9;
+  --surface-table-header: #f1f1f5;
   --surface-hover: #ececf0;
   --surface-active: #e2e2e8;
   --surface-inset: #ececf0;
+  --surface-quote: #f1f1f5;
+  --quote-accent: #9a9ca4;
   --text-primary: #26262c;
   --text-secondary: #55575f;
   --text-muted: #8a8c94;

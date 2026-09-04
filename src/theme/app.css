@@ -1210,25 +1210,50 @@ body.outline-resizing * {
 }
 
 .markdown-editor .cm-line.cm-live-preview-quote-line {
+  position: relative;
   width: 100%;
-  background: var(--surface);
-  border-left: 2px solid var(--text-muted);
-  padding-inline: var(--space-5);
+  background: var(--surface-quote);
+  padding-inline: var(--space-quote-inline);
+}
+
+/* The accent bar: a per-line ::before spanning the full line height
+   (top:0/bottom:0) so consecutive lines form one continuous strip;
+   only the quote's outer ends get rounded caps. */
+.markdown-editor .cm-line.cm-live-preview-quote-line::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--space-3);
+  width: var(--space-1);
+  background: var(--quote-accent);
 }
 
 .markdown-editor .cm-line.cm-live-preview-quote-line-single {
   border-radius: var(--radius-medium);
-  padding-block: var(--space-3);
+  padding-block: var(--space-quote-block);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line-single::before {
+  border-radius: var(--space-0-5);
 }
 
 .markdown-editor .cm-line.cm-live-preview-quote-line-first {
   border-radius: var(--radius-medium) var(--radius-medium) 0 0;
-  padding-top: var(--space-3);
+  padding-top: var(--space-quote-block);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line-first::before {
+  border-radius: var(--space-0-5) var(--space-0-5) 0 0;
 }
 
 .markdown-editor .cm-line.cm-live-preview-quote-line-last {
   border-radius: 0 0 var(--radius-medium) var(--radius-medium);
-  padding-bottom: var(--space-3);
+  padding-bottom: var(--space-quote-block);
+}
+
+.markdown-editor .cm-line.cm-live-preview-quote-line-last::before {
+  border-radius: 0 0 var(--space-0-5) var(--space-0-5);
 }
 
 .cm-live-preview-horizontal-rule {
@@ -1774,7 +1799,7 @@ body.outline-resizing * {
   border: 1px solid var(--divider);
   border-spacing: 0;
   border-radius: var(--radius-medium);
-  background: var(--surface);
+  background: var(--surface-table);
   color: var(--text-primary);
 }
 
@@ -1791,7 +1816,7 @@ body.outline-resizing * {
 
 .md-table th {
   font-weight: 600;
-  background: var(--surface-hover);
+  background: var(--surface-table-header);
 }
 
 .md-table [contenteditable="true"]:focus-visible {
@@ -1852,9 +1877,9 @@ body.outline-resizing * {
   height: auto;
   min-height: 0;
   padding-top: 0 !important;
-  padding-right: var(--space-5) !important;
-  padding-bottom: var(--space-3) !important;
-  padding-left: var(--space-5) !important;
+  padding-right: var(--space-quote-inline) !important;
+  padding-bottom: var(--space-quote-block) !important;
+  padding-left: var(--space-quote-inline) !important;
   line-height: 0;
   overflow: hidden;
   border-radius: 0 0 var(--radius-medium) var(--radius-medium);

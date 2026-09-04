@@ -435,16 +435,19 @@ describe("accessibility: stylesheet guarantees", () => {
       /\.cm-live-preview-quote\s*\{[^}]*color:\s*var\(--text-primary\);/s,
     );
     expect(appCss).toMatch(
-      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line\s*\{[^}]*background:\s*var\(--surface\);[^}]*border-left:\s*2px solid var\(--text-muted\);[^}]*padding-inline:\s*var\(--space-5\);/s,
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line\s*\{[^}]*background:\s*var\(--surface-quote\);[^}]*padding-inline:\s*var\(--space-quote-inline\);/s,
     );
     expect(appCss).toMatch(
-      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-single\s*\{[^}]*border-radius:\s*var\(--radius-medium\);[^}]*padding-block:\s*var\(--space-3\);/s,
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line::before\s*\{[^}]*position:\s*absolute;[^}]*width:\s*var\(--space-1\);[^}]*background:\s*var\(--quote-accent\);/s,
     );
     expect(appCss).toMatch(
-      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-first\s*\{[^}]*border-radius:[^;}]*0 0;[^}]*padding-top:\s*var\(--space-3\);/s,
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-single\s*\{[^}]*border-radius:\s*var\(--radius-medium\);[^}]*padding-block:\s*var\(--space-quote-block\);/s,
     );
     expect(appCss).toMatch(
-      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-last\s*\{[^}]*border-radius:\s*0 0[^;}]*;[^}]*padding-bottom:\s*var\(--space-3\);/s,
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-first\s*\{[^}]*border-radius:[^;}]*0 0;[^}]*padding-top:\s*var\(--space-quote-block\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-last\s*\{[^}]*border-radius:\s*0 0[^;}]*;[^}]*padding-bottom:\s*var\(--space-quote-block\);/s,
     );
   });
 
