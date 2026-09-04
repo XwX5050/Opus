@@ -1828,6 +1828,54 @@ describe("useAppController per-tab view modes", () => {
   });
 });
 
+describe("useAppController per-tab presentation state", () => {
+  const twoFilePort = () =>
+    new ScopeAwareControllerPort([scopedFile("/a.md"), scopedFile("/b.md")]);
+
+  it("defaults to closed and remembers each tab's presentation independently", async () => {
+    const hook = renderHook(() => useAppController(twoFilePort()));
+    await act(() => hook.result.current.openFiles());
+    const [a, b] = hook.result.current.state.tabs.map((tab) => tab.id);
+
+    expect(hook.result.current.presentationOpenOf(a)).toBe(false);
+    expect(hook.result.current.presentationOpenOf(b)).toBe(false);
+    expect(hook.result.current.presentationOpenOf(null)).toBe(false);
+
+    act(() => hook.result.current.openPresentation(a));
+    expect(hook.result.current.presentationOpenOf(a)).toBe(true);
+    expect(hook.result.current.presentationOpenOf(b)).toBe(false);
+    expect(hook.result.current.presentationOpenOf(undefined)).toBe(false);
+  });
+
+  it("prunes a closed tab's presentation state", async () => {
+    const hook = renderHook(() => useAppController(twoFilePort()));
+    await act(() => hook.result.current.openFiles());
+    const [a] = hook.result.current.state.tabs.map((tab) => tab.id);
+    act(() => hook.result.current.openPresentation(a));
+    expect(hook.result.current.presentationTabs.has(a)).toBe(true);
+
+    // The tab is clean, so close() removes it without a confirmation.
+    act(() => hook.result.current.close(a));
+    expect(hook.result.current.state.tabs.some((tab) => tab.id === a)).toBe(false);
+    expect(hook.result.current.presentationTabs.has(a)).toBe(false);
+    expect(hook.result.current.presentationOpenOf(a)).toBe(false);
+  });
+
+  it("closePresentation closes an open presentation and is idempotent", async () => {
+    const hook = renderHook(() => useAppController(twoFilePort()));
+    await act(() => hook.result.current.openFiles());
+    const [a] = hook.result.current.state.tabs.map((tab) => tab.id);
+
+    act(() => hook.result.current.openPresentation(a));
+    expect(hook.result.current.presentationOpenOf(a)).toBe(true);
+    act(() => hook.result.current.closePresentation(a));
+    expect(hook.result.current.presentationOpenOf(a)).toBe(false);
+    // Closing an already-closed presentation is a no-op.
+    act(() => hook.result.current.closePresentation(a));
+    expect(hook.result.current.presentationOpenOf(a)).toBe(false);
+  });
+});
+
 describe("useAppController translations", () => {
   const translateFile = (path: string, text = "hello world"): OpenedFile => ({
     path,

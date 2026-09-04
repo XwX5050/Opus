@@ -165,6 +165,11 @@ export function useAppController(
   // always returns to "editing".
   const [viewModes, setViewModes] =
     useState<ReadonlyMap<string, EditorViewMode>>(new Map());
+  // Per-tab presentation open state, mirroring viewModes: an entry exists
+  // only while its tab is open, and a closed-and-reopened document starts
+  // with no presentation. Entries are pruned as soon as their tab closes.
+  const [presentationTabs, setPresentationTabs] =
+    useState<ReadonlySet<string>>(new Set());
   const [translationSettings, setTranslationSettingsState] =
     useState<TranslationSettings>(DEFAULT_TRANSLATION_SETTINGS);
   // Per-tab translation view memory: an entry exists only once the user has
@@ -374,6 +379,27 @@ export function useAppController(
     setViewModes((current) => withViewMode(current, id, target));
   }, []);
 
+  const presentationOpenOf = useCallback(
+    (id: string | null | undefined): boolean =>
+      Boolean(id && presentationTabs.has(id)),
+    [presentationTabs],
+  );
+
+  const openPresentation = useCallback((id: string) => {
+    setPresentationTabs((current) =>
+      current.has(id) ? current : new Set(current).add(id),
+    );
+  }, []);
+
+  const closePresentation = useCallback((id: string) => {
+    setPresentationTabs((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
   const translationOf = useCallback(
     (id: string | null | undefined): TabTranslation | undefined =>
       id ? translations.get(id) : undefined,
@@ -504,7 +530,7 @@ export function useAppController(
     startTranslation(id);
   }, [dropTranslation, startTranslation]);
 
-  // Prune view-mode memory for tabs that no longer exist.
+  // Prune view-mode and presentation memory for tabs that no longer exist.
   const viewModeTabIdsKey = state.tabs.map((tab) => tab.id).join("\n");
   useEffect(() => {
     const open = new Set(state.tabs.map((tab) => tab.id));
@@ -512,6 +538,14 @@ export function useAppController(
       if ([...current.keys()].every((id) => open.has(id))) return current;
       const next = new Map(current);
       for (const id of [...next.keys()]) {
+        if (!open.has(id)) next.delete(id);
+      }
+      return next;
+    });
+    setPresentationTabs((current) => {
+      if ([...current].every((id) => open.has(id))) return current;
+      const next = new Set(current);
+      for (const id of [...next]) {
         if (!open.has(id)) next.delete(id);
       }
       return next;
@@ -1398,6 +1432,10 @@ export function useAppController(
     viewModeOf,
     setViewMode,
     toggleReading,
+    presentationTabs,
+    presentationOpenOf,
+    openPresentation,
+    closePresentation,
     recoveryDrafts,
     newDocument,
     openFiles,

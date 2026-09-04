@@ -2136,6 +2136,7 @@ describe("AppShell context menus and document title", () => {
       "粘贴",
       "全选",
       "切换到阅读模式",
+      "演示模式",
     ]);
     expect(menuItem("撤销")).toBeEnabled();
     expect(menuItem("复制")).toBeEnabled();

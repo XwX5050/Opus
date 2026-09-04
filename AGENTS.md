@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.12` (kept in sync across `package.json`,
+- Version: `0.1.13` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first), Windows 10/11 (WebView2),
   and Linux (WebKitGTK)
@@ -113,6 +113,20 @@ Rust/Tauri backend.
   the tab menu's rename entry route to Save As instead.
   `InlineNameInput.tsx` is the shared inline rename input also
   used by the file tree.
+- `src/present/`: presentation (演示模式) slide playback. The overlay at
+  `PresentationOverlay.tsx` renders the active document's ORIGINAL text
+  (never the translation) one slide at a time through the same reading-mode
+  CodeMirror preview extensions as the editor, with images resolved via
+  `tauriImagePreviewUrl`. `presentationPlan.ts` plans slides: explicit `---`
+  separators win when present (`splitManualSlides`), otherwise natural blocks
+  are greedily packed by measured rendered height (`splitNaturalBlocks` +
+  `packBlocksByHeight`). Open state is per tab on the controller
+  (`presentationTabs` Set with `presentationOpenOf`/`openPresentation`/
+  `closePresentation`, mirroring viewModes and pruned on tab close); entry
+  points are a header toggle button (next to the view-mode toggle) and the
+  editor-area context menu. `AppShell.tsx` drives OS fullscreen while
+  presenting (`core:window:allow-set-fullscreen` in Tauri builds, the
+  Fullscreen API in browsers) and restores it on close or unmount.
 - `src/document/`: the `DocumentPort` contract (`DocumentPort.ts`), pure
   document reducer (`documentReducer.ts`), shared types (`types.ts`), and two
   implementations:

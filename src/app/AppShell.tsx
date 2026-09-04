@@ -64,6 +64,7 @@ import {
   bindViewModeHover,
   setPanelDividerState,
 } from "../motion/motionRuntime";
+import PresentationOverlay from "../present/PresentationOverlay";
 
 export type ImageDropSubscriber = (
   onImages: (drop: ImageDrop) => void,
@@ -180,6 +181,27 @@ export const withAssetScopeForSavedImage = (
     return path;
   };
 };
+
+// Presentation/projection-screen glyph for the 演示模式 toggle, matching the
+// Lucide-style icon set in icons.tsx (24 viewBox, 2px strokes, round caps).
+const PresentationIcon = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={20}
+    height={20}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M2 3h20" />
+    <path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3" />
+    <path d="m7 21 5-5 5 5" />
+  </svg>
+);
 
 export default function AppShell({
   port,
@@ -466,6 +488,31 @@ export default function AppShell({
     (tab) => tab.id === controller.state.activeId,
   );
   const viewMode = controller.viewModeOf(active?.id);
+  const presenting = controller.presentationOpenOf(active?.id);
+  // OS fullscreen while presenting, restored when the overlay closes or the
+  // shell unmounts. Leaving fullscreen manually never closes the overlay —
+  // only the presenting flag drives this. Errors are swallowed: fullscreen
+  // is an enhancement, never a requirement. getCurrentWindow() throws
+  // synchronously when Tauri internals are only partially mocked (jsdom),
+  // hence the try/catch around the sync call.
+  useEffect(() => {
+    if (!presenting) return;
+    const tauri = "__TAURI_INTERNALS__" in window;
+    try {
+      if (tauri) void getCurrentWindow().setFullscreen(true).catch(() => {});
+      else void document.documentElement.requestFullscreen?.().catch(() => {});
+    } catch {
+      // Best effort only.
+    }
+    return () => {
+      try {
+        if (tauri) void getCurrentWindow().setFullscreen(false).catch(() => {});
+        else void document.exitFullscreen?.().catch(() => {});
+      } catch {
+        // Best effort only.
+      }
+    };
+  }, [presenting]);
   const activeTranslation = controller.translationOf(active?.id);
   // The partial translation shown while batches are still in flight; absent
   // until the first batch completes, after which the editor follows it.
@@ -1104,6 +1151,11 @@ export default function AppShell({
         shortcut: `${mod}E`,
         onSelect: () => controller.toggleReading(active.id),
       },
+      {
+        id: "presentation",
+        label: "演示模式",
+        onSelect: () => controller.openPresentation(active.id),
+      },
     ];
     setContextMenu({ x: event.clientX, y: event.clientY, items });
   };
@@ -1607,6 +1659,16 @@ export default function AppShell({
                   onClick={() => controller.toggleReading(active.id)}
                 >
                   {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button presentation-toggle"
+                  aria-pressed={presenting}
+                  aria-label="演示模式"
+                  title="演示模式"
+                  onClick={() => controller.openPresentation(active.id)}
+                >
+                  <PresentationIcon />
                 </button>
               </>
             )}
@@ -2156,6 +2218,15 @@ export default function AppShell({
           position={{ x: contextMenu.x, y: contextMenu.y }}
           items={contextMenu.items}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {presenting && active && (
+        <PresentationOverlay
+          markdown={active.text}
+          documentPath={active.path}
+          resolveImageUrl={tauriImagePreviewUrl}
+          onExit={() => controller.closePresentation(active.id)}
         />
       )}
     </main>

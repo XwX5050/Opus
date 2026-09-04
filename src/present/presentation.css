@@ -1,0 +1,251 @@
+/**
+ * Presentation overlay (演示模式): fullscreen slide chrome and typography.
+ * The overlay uses the app's design tokens; the slide content reuses the
+ * CodeMirror reading-mode preview classes, which scale with the larger
+ * presentation font size because the preview theme is em-relative.
+ */
+
+.presentation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* above context menu (120), autocomplete (100), dialogs */
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  color: var(--text-primary);
+  font-family: var(--editor-body-font);
+  opacity: 0;
+  animation: presentation-fade-in var(--anim-fast) ease forwards;
+  /* Presentation content column: centered, capped like the reading column. */
+  --presentation-column: min(1100px, 88vw);
+}
+
+@keyframes presentation-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.presentation-overlay--exiting {
+  animation: none;
+  opacity: 0;
+  transition: opacity var(--anim-fast) ease;
+}
+
+.presentation-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-5) 0;
+}
+
+/* The slide scroller: the content column, vertically centered when the slide
+   is shorter than the viewport (margin: auto on the child collapses to 0 when
+   it overflows, leaving the slide top-aligned and scrollable). */
+.presentation-scroller {
+  position: relative;
+  width: var(--presentation-column);
+  height: 100%;
+  display: flex;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+.presentation-scroller::-webkit-scrollbar {
+  width: 10px;
+}
+
+.presentation-scroller::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 5px;
+}
+
+.presentation-scroller::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+.presentation-slide-host {
+  margin: auto 0;
+  width: 100%;
+  min-height: 0;
+}
+
+/* Presentation typography: noticeably larger than the editor. The editor
+   grows with its content (no internal scrolling); the outer scroller is the
+   only scroll container, a safety net for oversized manual slides. */
+.presentation-slide-host .cm-editor {
+  height: auto;
+  background: transparent;
+  font-size: clamp(20px, 2.2vw, 30px);
+  font-family: var(--editor-body-font);
+}
+
+.presentation-slide-host .cm-editor.cm-focused {
+  outline: none;
+}
+
+.presentation-slide-host .cm-scroller {
+  overflow: visible;
+  font-family: var(--editor-body-font);
+  line-height: var(--editor-line-height);
+  overscroll-behavior: contain;
+}
+
+.presentation-slide-host .cm-content {
+  max-width: none;
+  padding-bottom: var(--space-4);
+  caret-color: transparent;
+}
+
+.presentation-slide-host .cm-line {
+  padding-inline: var(--space-0-5);
+}
+
+.presentation-slide-host .cm-cursor {
+  display: none;
+}
+
+.presentation-slide-host .cm-selectionBackground,
+.presentation-slide-host ::selection {
+  background: var(--selection);
+}
+
+/* The app's reading-view quote styling is scoped to `.markdown-editor`;
+   replicate it here so quotes keep their card-and-accent-bar look on slides. */
+.presentation-slide-host .cm-line.cm-live-preview-quote-line {
+  position: relative;
+  width: 100%;
+  background: var(--surface-quote);
+  padding-inline: var(--space-quote-inline);
+}
+
+/* Per-line accent bar: top:0/bottom:0 joins consecutive lines into one
+   continuous strip; only the quote's outer ends get rounded caps. */
+.presentation-slide-host .cm-line.cm-live-preview-quote-line::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--space-3);
+  width: var(--space-1);
+  background: var(--quote-accent);
+}
+
+.presentation-slide-host .cm-line.cm-live-preview-quote-line-single {
+  border-radius: var(--radius-medium);
+  padding-block: var(--space-quote-block);
+}
+
+.presentation-slide-host .cm-line.cm-live-preview-quote-line-single::before {
+  border-radius: var(--space-0-5);
+}
+
+.presentation-slide-host .cm-line.cm-live-preview-quote-line-first {
+  border-radius: var(--radius-medium) var(--radius-medium) 0 0;
+  padding-top: var(--space-quote-block);
+}
+
+.presentation-slide-host .cm-line.cm-live-preview-quote-line-first::before {
+  border-radius: var(--space-0-5) var(--space-0-5) 0 0;
+}
+
+.presentation-slide-host .cm-line.cm-live-preview-quote-line-last {
+  border-radius: 0 0 var(--radius-medium) var(--radius-medium);
+  padding-bottom: var(--space-quote-block);
+}
+
+.presentation-slide-host .cm-line.cm-live-preview-quote-line-last::before {
+  border-radius: 0 0 var(--space-0-5) var(--space-0-5);
+}
+
+/* Hidden measurement host: same classes and width as the visible slide host,
+   laid out but never painted or hit-tested. */
+.presentation-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: var(--presentation-column);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.presentation-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size);
+}
+
+/* Chrome: counter bottom-right, exit button top-right; idle-fades to low
+   opacity through a plain opacity transition. */
+.presentation-chrome {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 360ms ease;
+}
+
+.presentation-chrome--faded {
+  opacity: 0.3;
+}
+
+.presentation-counter {
+  position: absolute;
+  bottom: var(--space-3);
+  right: var(--space-4);
+  font-size: var(--font-ui-size);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.presentation-exit {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-medium);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.presentation-exit:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .presentation-overlay {
+    animation: none;
+    opacity: 1;
+  }
+
+  .presentation-overlay--exiting {
+    transition: none;
+  }
+
+  .presentation-chrome,
+  .presentation-chrome--faded {
+    transition: none;
+    opacity: 1;
+  }
+}
