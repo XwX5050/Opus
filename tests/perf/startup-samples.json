@@ -1,31 +1,31 @@
 {
-  "bundle": "src-tauri/target/release/bundle/macos/Markdown Edit.app",
+  "bundle": "src-tauri/target/release/bundle/macos/Opus.app",
   "provenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
   "hot": [
     {
-      "spawnToEditableMs": 851,
-      "wallMs": 860,
-      "startedAt": "2026-07-25T12:23:45.910Z"
+      "spawnToEditableMs": 495,
+      "wallMs": 510,
+      "startedAt": "2026-09-05T02:31:59.821Z"
     },
     {
-      "spawnToEditableMs": 346,
-      "wallMs": 353,
-      "startedAt": "2026-07-25T12:23:46.874Z"
+      "spawnToEditableMs": 522,
+      "wallMs": 526,
+      "startedAt": "2026-09-05T02:32:00.522Z"
     },
     {
-      "spawnToEditableMs": 319,
-      "wallMs": 325,
-      "startedAt": "2026-07-25T12:23:47.324Z"
+      "spawnToEditableMs": 510,
+      "wallMs": 513,
+      "startedAt": "2026-09-05T02:32:01.227Z"
     },
     {
-      "spawnToEditableMs": 307,
-      "wallMs": 322,
-      "startedAt": "2026-07-25T12:23:47.746Z"
+      "spawnToEditableMs": 529,
+      "wallMs": 531,
+      "startedAt": "2026-09-05T02:32:01.915Z"
     },
     {
-      "spawnToEditableMs": 316,
-      "wallMs": 319,
-      "startedAt": "2026-07-25T12:23:48.162Z"
+      "spawnToEditableMs": 517,
+      "wallMs": 530,
+      "startedAt": "2026-09-05T02:32:02.627Z"
     }
   ],
   "cold": [],

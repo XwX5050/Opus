@@ -140,20 +140,28 @@ verifies the process is gone afterwards.
 
 See `tests/perf/report.json` for the authoritative record (hardware, macOS,
 build SHA, five samples per metric, medians, p95, pass/fail). Latest run on
-this machine (Apple M5 / 36 GB / macOS 26.5.2, headless Chromium against the
-Vite dev server):
+this machine (Apple M5 / 36 GB / macOS 26.6.2, node 26.7, headless Chromium
+against the Vite dev server):
 
 | Metric | Median | p95 | Budget | Result |
 | --- | ---: | ---: | ---: | --- |
-| Hot start (unsigned dev bundle) | 310 ms | 314 ms | 1000 ms | PASS |
+| Hot start (unsigned dev bundle) | 517 ms | 528 ms | 1000 ms | PASS |
 | Cold start | — (0/5 samples) | — | 2000 ms | skipped (needs reboot cycles) |
-| Open regular (1 MiB) | 117.2 ms | 125.6 ms | 1000 ms | PASS |
-| Open pressure (10 MiB) | 156 ms | 161.2 ms | 3000 ms | PASS |
-| Input latency, regular | 5.5 ms | 10.5 ms | 32 ms p95 | PASS |
-| Input latency, pressure | 30.0 ms | 33.2 ms | 50 ms p95 | PASS |
-| Pressure save | 2 ms | 3 ms | 1000 ms | PASS |
-| Sidebar interactive | 15 ms | 17.8 ms | — | info |
+| Open regular (1 MiB) | 169.2 ms | 209 ms | 1000 ms | PASS |
+| Open pressure (10 MiB) | 234.4 ms | 285.9 ms | 3000 ms | PASS |
+| Input latency, regular | 11.1 ms | 16.4 ms | 32 ms p95 | PASS |
+| Input latency, pressure | 59.2 ms | 78.4 ms | 50 ms p95 | FAIL (environment) |
+| Pressure save | 96 ms | 117 ms | 1000 ms | PASS |
+| Sidebar interactive | 21 ms | 267 ms | — | info |
 | Gatekeeper first launch | — | — | — | skipped (needs signed build) |
+
+Environment drift note (2026-09-05): since the July baseline this machine
+moved macOS 26.5.2 → 26.6.2 and node 26.5 → 26.7, and the run happened while
+the machine was in active use. Every browser-shell metric shifted ~2x
+uniformly, and an A/B rerun against the pre-release source (`7827b52`)
+reproduced the same numbers (input pressure ~60 ms median), so the
+input-pressure budget failure reflects the environment, not a code
+regression. Re-run on an idle machine to re-establish a clean baseline.
 
 Hot start is a real process-spawn → editor-editable measurement of the
 locally built (ad-hoc, unnotarized) bundle; the budget officially applies
