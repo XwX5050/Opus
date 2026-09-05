@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   translateDocument,
+  TRANSLATION_BATCH_MAX_CHARS,
+  TRANSLATION_BATCH_MAX_UNITS,
   type TranslationPartial,
+  type TranslationPriority,
+  type TranslationTextRange,
 } from "./translate";
 import type { TranslationSettings } from "./types";
 
@@ -11,6 +15,7 @@ const settings: TranslationSettings = {
   model: "gpt-test",
   targetLanguage: "中文",
   concurrency: 10,
+  presetApiKeys: {},
 };
 
 interface FakeTranslatePort {
@@ -27,6 +32,16 @@ interface PendingCall {
 
 /** A paragraph of `length` chars (plus its trailing newline). */
 const paragraph = (length: number): string => "x".repeat(length) + "\n";
+
+/** A distinguishable paragraph: `"p000"` repeated to 96 chars plus newline. */
+const paraText = (n: number): string =>
+  ("p" + String(n).padStart(3, "0")).repeat(24) + "\n";
+
+const batchTexts = (k: number): string[] =>
+  Array.from(
+    { length: TRANSLATION_BATCH_MAX_UNITS },
+    (_, j) => paraText(k * TRANSLATION_BATCH_MAX_UNITS + j),
+  );
 
 /**
  * Drains the pending microtask queue after deferred port calls resolve. The
@@ -99,39 +114,78 @@ describe("translateDocument", () => {
     expect(port.translateSegments).not.toHaveBeenCalled();
   });
 
-  it("translates a short document in one call per segment, passing settings through", async () => {
+  it("translates a short document in one batched call, passing settings through", async () => {
     const doc = "hello\n\nworld\n";
     const port = echoPort();
     await expect(translateDocument(port, settings, doc)).resolves.toBe(
       "HELLO\n\nWORLD\n",
     );
-    expect(port.translateSegments).toHaveBeenCalledTimes(2);
+    // Both segments fit one batch: a single call carries both chunks.
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
     expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, [
       "hello\n",
-    ]);
-    expect(port.translateSegments).toHaveBeenNthCalledWith(2, settings, [
       "world\n",
     ]);
   });
 
-  it("sends every translatable segment as a single call when it fits the chunk limit", async () => {
+  it("packs every fitting segment into a single batch", async () => {
     const paras = Array.from({ length: 5 }, () => paragraph(550));
     const doc = paras.join("\n");
     const port = echoPort();
     await expect(translateDocument(port, settings, doc)).resolves.toBe(
       doc.toUpperCase(),
     );
-    expect(port.translateSegments).toHaveBeenCalledTimes(5);
-    for (let index = 0; index < paras.length; index++) {
-      expect(port.translateSegments).toHaveBeenNthCalledWith(
-        index + 1,
-        settings,
-        [paras[index]],
-      );
-    }
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(
+      1,
+      settings,
+      paras,
+    );
   });
 
-  it("subdivides an over-long segment into chunk requests under the limit", async () => {
+  it("groups contiguous units into batches capped at eight units", async () => {
+    const paras = Array.from({ length: 9 }, () => paragraph(400));
+    const doc = paras.join("\n");
+    const port = echoPort();
+    await expect(translateDocument(port, settings, doc)).resolves.toBe(
+      doc.toUpperCase(),
+    );
+    // Eight 401-char units stay under the character cap; the ninth starts a
+    // new batch of its own.
+    expect(port.translateSegments).toHaveBeenCalledTimes(2);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(
+      1,
+      settings,
+      paras.slice(0, TRANSLATION_BATCH_MAX_UNITS),
+    );
+    expect(port.translateSegments).toHaveBeenNthCalledWith(
+      2,
+      settings,
+      paras.slice(TRANSLATION_BATCH_MAX_UNITS),
+    );
+  });
+
+  it("stops a batch at the character cap before the unit cap", async () => {
+    // Seven 551-char units fit (3857 chars); the eighth would push the batch
+    // to 4408 chars, so it starts a batch of its own.
+    const paras = Array.from({ length: 8 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const port = echoPort();
+    await expect(translateDocument(port, settings, doc)).resolves.toBe(
+      doc.toUpperCase(),
+    );
+    expect(port.translateSegments).toHaveBeenCalledTimes(2);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(
+      1,
+      settings,
+      paras.slice(0, 7),
+    );
+    expect(port.translateSegments).toHaveBeenNthCalledWith(2, settings, [
+      paras[7],
+    ]);
+  });
+
+  it("subdivides an over-long segment and packs the chunks into batches", async () => {
     const big = paragraph(5000); // 5001 chars: one over-limit line
     const small = paragraph(100);
     const doc = big + "\n" + small;
@@ -140,19 +194,18 @@ describe("translateDocument", () => {
       doc.toUpperCase(),
     );
     // "x"*5000 hard-splits into 600*8 + 200 chunks, the last one keeping the
-    // trailing newline; the short paragraph stays one request.
-    expect(port.translateSegments).toHaveBeenCalledTimes(10);
-    for (let index = 0; index < 8; index++) {
-      expect(port.translateSegments).toHaveBeenNthCalledWith(
-        index + 1,
-        settings,
-        ["x".repeat(600)],
-      );
-    }
-    expect(port.translateSegments).toHaveBeenNthCalledWith(9, settings, [
+    // trailing newline. Six 600-char chunks fill the first batch (3600 chars);
+    // the remaining chunks plus the short paragraph form the second.
+    expect(port.translateSegments).toHaveBeenCalledTimes(2);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(
+      1,
+      settings,
+      Array.from({ length: 6 }, () => "x".repeat(600)),
+    );
+    expect(port.translateSegments).toHaveBeenNthCalledWith(2, settings, [
+      "x".repeat(600),
+      "x".repeat(600),
       "x".repeat(200) + "\n",
-    ]);
-    expect(port.translateSegments).toHaveBeenNthCalledWith(10, settings, [
       small,
     ]);
   });
@@ -165,22 +218,21 @@ describe("translateDocument", () => {
     await expect(translateDocument(port, settings, doc)).resolves.toBe(
       doc.toUpperCase(),
     );
-    expect(port.translateSegments).toHaveBeenCalledTimes(7);
-    for (let index = 0; index < 6; index++) {
-      expect(port.translateSegments).toHaveBeenNthCalledWith(
-        index + 1,
-        settings,
-        [line],
-      );
-    }
-    expect(port.translateSegments).toHaveBeenNthCalledWith(7, settings, [
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, [
+      ...Array.from({ length: 6 }, () => line),
       paragraph(100),
     ]);
   });
 
+  it("exposes the batch caps as shared constants", () => {
+    expect(TRANSLATION_BATCH_MAX_UNITS).toBe(8);
+    expect(TRANSLATION_BATCH_MAX_CHARS).toBe(4000);
+  });
+
   it("keeps at most ten translateSegments calls in flight by default", async () => {
-    // Each 701-char paragraph subdivides into two chunk requests.
-    const paras = Array.from({ length: 12 }, () => paragraph(700));
+    // 100 short paragraphs -> 100 units -> 13 batches of up to eight.
+    const paras = Array.from({ length: 100 }, () => paragraph(100));
     const doc = paras.join("\n");
     let inFlight = 0;
     let peak = 0;
@@ -207,8 +259,6 @@ describe("translateDocument", () => {
     expect(pending).toHaveLength(10);
 
     // Drain the pool in batches; a new call only starts as a slot frees up.
-    // Flushing several microtask turns keeps the freed workers' next calls
-    // ahead of the loop's pending check.
     while (pending.length > 0) {
       const batch = pending.splice(0);
       for (const entry of batch) {
@@ -218,11 +268,12 @@ describe("translateDocument", () => {
     }
     await expect(running).resolves.toBe(doc.toUpperCase());
     expect(peak).toBe(10);
-    expect(port.translateSegments).toHaveBeenCalledTimes(24);
+    expect(port.translateSegments).toHaveBeenCalledTimes(13);
   });
 
   it("honors an explicit concurrency cap below the default", async () => {
-    const paras = Array.from({ length: 6 }, () => paragraph(700));
+    // 30 short paragraphs -> 30 units -> 4 batches.
+    const paras = Array.from({ length: 30 }, () => paragraph(100));
     const doc = paras.join("\n");
     let inFlight = 0;
     let peak = 0;
@@ -259,50 +310,50 @@ describe("translateDocument", () => {
     }
     await expect(running).resolves.toBe(doc.toUpperCase());
     expect(peak).toBe(2);
-    expect(port.translateSegments).toHaveBeenCalledTimes(12);
+    expect(port.translateSegments).toHaveBeenCalledTimes(4);
   });
 
-  it("reassembles results in document order when chunks finish out of order", async () => {
-    // Each 701-char paragraph subdivides into two chunk requests (600 + 101).
-    const paras = Array.from({ length: 4 }, () => paragraph(700));
+  it("reassembles results in document order when batches finish out of order", async () => {
+    // Each 701-char paragraph subdivides into two chunks (600 + 101), so six
+    // paragraphs make 12 units: a batch of eight and a batch of four.
+    const paras = Array.from({ length: 6 }, () => paragraph(700));
     const doc = paras.join("\n");
     const partials: string[] = [];
     const { port, pending } = deferredPort();
     const running = translateDocument(port, settings, doc, {
       onPartial: (partial) => partials.push(partial.text),
     });
-    expect(pending).toHaveLength(8);
+    expect(pending).toHaveLength(2);
 
-    // The later paragraphs land first: their chunks translate while the
-    // earlier segments still show the original text.
-    for (const index of [4, 5, 6, 7]) {
-      pending[index].resolve([pending[index].segments[0].toUpperCase()]);
-      await flushMicrotasks();
-    }
+    // The last batch (the final two paragraphs) lands first: its chunks
+    // translate while the earlier segments still show the original text.
+    pending[1].resolve(pending[1].segments.map((segment) => segment.toUpperCase()));
+    await flushMicrotasks();
     expect(partials).toHaveLength(4);
     expect(partials[3]).toBe(
       paras[0] +
         "\n" +
         paras[1] +
         "\n" +
-        paras[2].toUpperCase() +
+        paras[2] +
         "\n" +
-        paras[3].toUpperCase(),
+        paras[3] +
+        "\n" +
+        paras[4].toUpperCase() +
+        "\n" +
+        paras[5].toUpperCase(),
     );
 
-    // The remaining chunks land in order; the partials converge to the full
-    // translation.
-    for (const index of [0, 1, 2, 3]) {
-      pending[index].resolve([pending[index].segments[0].toUpperCase()]);
-      await flushMicrotasks();
-    }
+    // The first batch lands last; the final partial is the full translation.
+    pending[0].resolve(pending[0].segments.map((segment) => segment.toUpperCase()));
+    await flushMicrotasks();
     await expect(running).resolves.toBe(doc.toUpperCase());
-    expect(partials).toHaveLength(8);
-    expect(partials[7]).toBe(doc.toUpperCase());
+    expect(partials).toHaveLength(12);
+    expect(partials[11]).toBe(doc.toUpperCase());
   });
 
-  it("reports every completed chunk through onPartial with progress counts", async () => {
-    // Each 701-char paragraph subdivides into 600 + 101 chunks.
+  it("reports every completed unit through onPartial with progress counts", async () => {
+    // Each 701-char paragraph subdivides into 600 + 101 chunks: 12 units.
     const paras = Array.from({ length: 6 }, () => paragraph(700));
     const doc = paras.join("\n");
     const partials: TranslationPartial[] = [];
@@ -326,7 +377,7 @@ describe("translateDocument", () => {
     expect(partials[11].text).toBe(doc.toUpperCase());
   });
 
-  it("surfaces each chunk as soon as it lands, leaving unfinished chunks as the original text", async () => {
+  it("surfaces each unit as soon as it lands, leaving unfinished units as the original text", async () => {
     const big = paragraph(2500); // 2501 chars -> 600*4 + 101 char chunks
     const small = paragraph(100);
     const doc = big + "\n" + small;
@@ -335,14 +386,15 @@ describe("translateDocument", () => {
     const running = translateDocument(port, settings, doc, {
       onPartial: (partial) => partials.push(partial),
     });
-    // The big paragraph subdivides into five chunk requests plus the small one.
-    expect(pending).toHaveLength(6);
+    // The six chunks fit a single batch.
+    expect(pending).toHaveLength(1);
+    expect(pending[0].segments).toHaveLength(6);
 
-    // The first chunk of the big paragraph lands: the partial already shows
-    // it translated while the rest of the paragraph stays original.
-    pending[0].resolve([pending[0].segments[0].toUpperCase()]);
+    pending[0].resolve(pending[0].segments.map((segment) => segment.toUpperCase()));
     await flushMicrotasks();
-    expect(partials).toHaveLength(1);
+    // A finished batch emits one partial per unit: the first shows the first
+    // chunk translated while the rest of the paragraph stays original.
+    expect(partials).toHaveLength(6);
     expect(partials[0]).toMatchObject({
       completedBatches: 1,
       totalBatches: 6,
@@ -350,14 +402,7 @@ describe("translateDocument", () => {
     expect(partials[0].text).toBe(
       "x".repeat(600).toUpperCase() + "x".repeat(1900) + "\n\n" + small,
     );
-
-    // The remaining chunks land one at a time; each emits its own partial.
-    for (const index of [1, 2, 3, 4, 5]) {
-      pending[index].resolve([pending[index].segments[0].toUpperCase()]);
-      await flushMicrotasks();
-    }
     await expect(running).resolves.toBe(doc.toUpperCase());
-    expect(partials).toHaveLength(6);
     expect(partials[5]).toMatchObject({ completedBatches: 6, totalBatches: 6 });
     expect(partials[5].text).toBe(doc.toUpperCase());
   });
@@ -430,7 +475,7 @@ describe("translateDocument", () => {
     expect(port.translateSegments).not.toHaveBeenCalled();
   });
 
-  it("rejects with an AbortError and starts no new chunks once aborted", async () => {
+  it("rejects with an AbortError and starts no new batches once aborted", async () => {
     const paras = Array.from({ length: 5 }, () => paragraph(700));
     const doc = paras.join("\n");
     const controller = new AbortController();
@@ -438,15 +483,14 @@ describe("translateDocument", () => {
     const running = translateDocument(port, settings, doc, {
       signal: controller.signal,
     });
-    // Each paragraph subdivides into two chunks (600 + 101); the pool of ten
-    // fills immediately, so the abort only stops chunks that have not
-    // started yet (there are none beyond the ten).
-    expect(started).toHaveLength(10);
+    // Each paragraph subdivides into two chunks (600 + 101), packed into two
+    // batches of five; the pool starts both right away.
+    expect(started).toHaveLength(2);
 
     controller.abort();
     for (const entry of pending) entry.resolve([]);
     await expect(running).rejects.toMatchObject({ name: "AbortError" });
-    expect(started).toHaveLength(10);
+    expect(started).toHaveLength(2);
   });
 
   it("propagates port errors after retries are exhausted", async () => {
@@ -485,6 +529,65 @@ describe("translateDocument", () => {
     await vi.advanceTimersByTimeAsync(300);
     await expect(running).resolves.toBe("HELLO\n");
     expect(calls).toBe(2);
+  });
+
+  it("retries a failed batch as a whole, resending the same unit array", async () => {
+    // Nine 551-char paragraphs -> two batches: seven units, then two.
+    const paras = Array.from({ length: 9 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const batchOne = paras.slice(0, 7);
+    const batchTwo = paras.slice(7);
+    let calls = 0;
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        async (_settings: TranslationSettings, segments: string[]) => {
+          calls += 1;
+          if (calls === 1) throw new Error("connection reset");
+          return segments.map((segment) => segment.toUpperCase());
+        },
+      ),
+    };
+    vi.useFakeTimers();
+    const running = translateDocument(port, settings, doc);
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(running).resolves.toBe(doc.toUpperCase());
+    expect(calls).toBe(3);
+    // The first batch is resent in full; every other batch succeeds first try.
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, batchOne);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(2, settings, batchTwo);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(3, settings, batchOne);
+  });
+
+  it("rejects the run when a batch fails permanently and stops siblings", async () => {
+    const failure = new Error("provider unavailable");
+    // The ninth paragraph sits in its own batch and fails forever.
+    const paras = Array.from({ length: 8 }, () => paragraph(550));
+    const boom = "boom" + "x".repeat(546) + "\n";
+    const doc = paras.join("\n") + "\n" + boom;
+    const partials: TranslationPartial[] = [];
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        async (_settings: TranslationSettings, segments: string[]) => {
+          if (segments.some((segment) => segment.includes("boom"))) {
+            throw failure;
+          }
+          return segments.map((segment) => segment.toUpperCase());
+        },
+      ),
+    };
+    vi.useFakeTimers();
+    const running = translateDocument(port, settings, doc, {
+      onPartial: (partial) => partials.push(partial),
+    });
+    const assertion = expect(running).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(900);
+    await assertion;
+    // The healthy batch ran its one call; the failing batch burned its three
+    // attempts. Siblings stopped reporting after the failure.
+    expect(port.translateSegments).toHaveBeenCalledTimes(4);
+    expect(partials).toHaveLength(7);
+    expect(partials[6]).toMatchObject({ completedBatches: 7, totalBatches: 9 });
   });
 
   it("backs off 300ms then 900ms between retry attempts", async () => {
@@ -536,6 +639,271 @@ describe("translateDocument", () => {
     pending[0].resolve([]);
     await expect(running).rejects.toMatchObject({ name: "AbortError" });
     expect(started).toHaveLength(1);
+  });
+
+  it("sends the batch overlapping the visible range first and re-prioritizes mid-flight", async () => {
+    // 80 paragraphs in ten distinguishable eight-unit batches. Before any
+    // translation lands, unit i occupies displayed offsets
+    // [i * stride, i * stride + 97).
+    const doc = Array.from({ length: 80 }, (_, index) => paraText(index)).join(
+      "\n",
+    );
+    const stride = paraText(0).length + 1; // paragraph + blank separator
+    // The visible range sits inside the last paragraph (unit 79, batch 9).
+    let range: TranslationTextRange | null = {
+      from: 79 * stride,
+      to: 79 * stride + 10,
+    };
+    const visibleRange = vi.fn((): TranslationTextRange | null => range);
+    const priority: TranslationPriority = { visibleRange };
+    const { port, started, pending } = deferredPort();
+    const running = translateDocument(port, settings, doc, {
+      concurrency: 4,
+      priority,
+    });
+    // The four workers pick the batches nearest the visible units, closest
+    // first.
+    expect(started).toEqual([
+      batchTexts(9),
+      batchTexts(8),
+      batchTexts(7),
+      batchTexts(6),
+    ]);
+    expect(visibleRange).toHaveBeenCalledTimes(4);
+
+    // Scroll to the top mid-flight: the freed worker picks the batch covering
+    // unit 0, with the range re-read on this fresh pick.
+    range = { from: 0, to: 5 };
+    pending[0].resolve(pending[0].segments.map((segment) => segment.toUpperCase()));
+    await flushMicrotasks();
+    expect(started).toHaveLength(5);
+    expect(started[4]).toEqual(batchTexts(0));
+    expect(visibleRange).toHaveBeenCalledTimes(5);
+
+    // No preference anymore: remaining picks fall back to document order.
+    range = null;
+    pending[4].resolve(pending[4].segments.map((segment) => segment.toUpperCase()));
+    await flushMicrotasks();
+    expect(started[5]).toEqual(batchTexts(1));
+    for (let index = 5; index <= 9; index++) {
+      pending[index].resolve(
+        pending[index].segments.map((segment) => segment.toUpperCase()),
+      );
+      await flushMicrotasks();
+    }
+    expect(started).toEqual([
+      batchTexts(9),
+      batchTexts(8),
+      batchTexts(7),
+      batchTexts(6),
+      batchTexts(0),
+      batchTexts(1),
+      batchTexts(2),
+      batchTexts(3),
+      batchTexts(4),
+      batchTexts(5),
+    ]);
+    for (const index of [3, 2, 1]) {
+      pending[index].resolve(
+        pending[index].segments.map((segment) => segment.toUpperCase()),
+      );
+      await flushMicrotasks();
+    }
+    await expect(running).resolves.toBe(doc.toUpperCase());
+    expect(port.translateSegments).toHaveBeenCalledTimes(10);
+  });
+
+  it("falls back to document order when the visible range is null", async () => {
+    const paras = Array.from({ length: 9 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const priority: TranslationPriority = { visibleRange: () => null };
+    const { port, started, pending } = deferredPort();
+    const running = translateDocument(port, settings, doc, { priority });
+    expect(started).toEqual([paras.slice(0, 7), paras.slice(7)]);
+    for (const entry of pending) {
+      entry.resolve(entry.segments.map((segment) => segment.toUpperCase()));
+    }
+    await flushMicrotasks();
+    await expect(running).resolves.toBe(doc.toUpperCase());
+  });
+
+  it("maps ranges in displayed offsets as completed translations change text length", async () => {
+    // 24 paragraphs in three eight-unit batches; one worker keeps picks
+    // strictly sequential.
+    const doc = Array.from({ length: 24 }, (_, index) => paraText(index)).join(
+      "\n",
+    );
+    const stride = paraText(0).length + 1;
+    const long = "z".repeat(1000);
+    // `displayed` mirrors what the user sees: the latest partial, or the
+    // original document before the first one lands.
+    let displayed = doc;
+    let marker = paraText(0);
+    const priority: TranslationPriority = {
+      visibleRange: () => {
+        const from = displayed.indexOf(marker);
+        return { from, to: from + marker.length };
+      },
+    };
+    const { port, started, pending } = deferredPort();
+    const running = translateDocument(port, settings, doc, {
+      concurrency: 1,
+      priority,
+      onPartial: (partial) => {
+        displayed = partial.text;
+      },
+    });
+    // Paragraph 0 is on screen: batch 0 goes first.
+    expect(started).toEqual([batchTexts(0)]);
+
+    // Batch 0's translation is ten times longer than the original, so every
+    // later paragraph's displayed offset shifts far to the right.
+    pending[0].resolve(pending[0].segments.map(() => long));
+    marker = paraText(8);
+    await flushMicrotasks();
+    // Paragraph 8 now sits at 8 * (1000 + "\n" + separator) instead of
+    // 8 * stride; a mapping in original offsets would clamp past the old
+    // document end and land on the last batch instead of the visible one.
+    expect(displayed.indexOf(paraText(8))).toBe(8 * (long.length + 2));
+    expect(displayed.indexOf(paraText(8))).toBeGreaterThan(8 * stride);
+    expect(started).toHaveLength(2);
+    expect(started[1]).toEqual(batchTexts(1));
+
+    pending[1].resolve(pending[1].segments.map((segment) => segment.toUpperCase()));
+    await flushMicrotasks();
+    expect(started[2]).toEqual(batchTexts(2));
+    pending[2].resolve(pending[2].segments.map((segment) => segment.toUpperCase()));
+    await flushMicrotasks();
+    await expect(running).resolves.toBe(
+      [
+        ...Array.from({ length: 8 }, () => long + "\n"),
+        ...Array.from({ length: 16 }, (_, index) =>
+          paraText(8 + index).toUpperCase(),
+        ),
+      ].join("\n"),
+    );
+  });
+
+  it("treats inverted, negative, and non-finite ranges as no preference", async () => {
+    // Nine paragraphs in two batches: seven units, then two.
+    const paras = Array.from({ length: 9 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const badRanges: TranslationTextRange[] = [
+      { from: 4800, to: 10 }, // inverted
+      { from: -5, to: 100 }, // negative
+      { from: Number.NaN, to: 10 }, // non-finite
+    ];
+    for (const bad of badRanges) {
+      const { port, started, pending } = deferredPort();
+      const running = translateDocument(port, settings, doc, {
+        priority: { visibleRange: () => bad },
+      });
+      expect(started).toEqual([paras.slice(0, 7), paras.slice(7)]);
+      for (const entry of pending) {
+        entry.resolve(entry.segments.map((segment) => segment.toUpperCase()));
+      }
+      await flushMicrotasks();
+      await expect(running).resolves.toBe(doc.toUpperCase());
+    }
+
+    // Positive control: a valid range inside the second batch does reorder
+    // the picks, so the invalid shapes above were not simply never read.
+    {
+      const stride = paragraph(550).length + 1;
+      const { port, started, pending } = deferredPort();
+      const running = translateDocument(port, settings, doc, {
+        priority: {
+          visibleRange: () => ({ from: 7 * stride, to: 7 * stride + 10 }),
+        },
+      });
+      expect(started).toEqual([paras.slice(7), paras.slice(0, 7)]);
+      for (const entry of pending) {
+        entry.resolve(entry.segments.map((segment) => segment.toUpperCase()));
+      }
+      await flushMicrotasks();
+      await expect(running).resolves.toBe(doc.toUpperCase());
+    }
+  });
+
+  it("snaps ranges outside any unit to the nearest unit in displayed order", async () => {
+    // Nine paragraphs (batches of seven and two units) followed by a tall
+    // fenced code block.
+    const paras = Array.from({ length: 9 }, () => paragraph(550));
+    const fence = "```\n" + "c".repeat(3000) + "\n```\n";
+    const doc = paras.join("\n") + "\n" + fence;
+    // Neither range touches a unit: one sits inside the trailing code fence,
+    // the other past the document end (clamped to the displayed length). Both
+    // snap back to the last unit, so the second batch goes first.
+    const ranges: TranslationTextRange[] = [
+      { from: doc.length - fence.length + 10, to: doc.length - 5 },
+      { from: doc.length + 1000, to: doc.length + 2000 },
+    ];
+    for (const range of ranges) {
+      const { port, started, pending } = deferredPort();
+      const running = translateDocument(port, settings, doc, {
+        priority: { visibleRange: () => range },
+      });
+      expect(started).toEqual([paras.slice(7), paras.slice(0, 7)]);
+      for (const entry of pending) {
+        entry.resolve(entry.segments.map((segment) => segment.toUpperCase()));
+      }
+      await flushMicrotasks();
+      // Only the paragraphs translate; the fenced block passes through.
+      await expect(running).resolves.toBe(
+        paras.map((para) => para.toUpperCase()).join("\n") + "\n" + fence,
+      );
+    }
+  });
+
+  it("skips units already written in the target language", async () => {
+    const doc = "你好世界\n\nHello world\n\n中文不错\n";
+    const partials: TranslationPartial[] = [];
+    const port = echoPort();
+    await expect(
+      translateDocument(port, settings, doc, {
+        onPartial: (partial) => partials.push(partial),
+      }),
+    ).resolves.toBe("你好世界\n\nHELLO WORLD\n\n中文不错\n");
+    // Only the English chunk reaches the provider.
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, [
+      "Hello world\n",
+    ]);
+    // The skipped units complete immediately with their original text,
+    // emit partials, and count toward progress.
+    expect(partials).toHaveLength(3);
+    expect(partials[0]).toMatchObject({ completedBatches: 1, totalBatches: 3 });
+    expect(partials[0].text).toBe(doc);
+    expect(partials[1]).toMatchObject({ completedBatches: 2, totalBatches: 3 });
+    expect(partials[2]).toMatchObject({ completedBatches: 3, totalBatches: 3 });
+    expect(partials[2].text).toBe("你好世界\n\nHELLO WORLD\n\n中文不错\n");
+  });
+
+  it("never calls the port when the whole document is in the target language", async () => {
+    const doc = "你好世界\n\n天气很好\n";
+    const partials: TranslationPartial[] = [];
+    const port = echoPort();
+    const result = await translateDocument(port, settings, doc, {
+      onPartial: (partial) => partials.push(partial),
+    });
+    expect(result).toBe(doc);
+    expect(port.translateSegments).not.toHaveBeenCalled();
+    expect(partials).toHaveLength(2);
+    expect(partials[1]).toMatchObject({ completedBatches: 2, totalBatches: 2 });
+  });
+
+  it("does not skip anything for an unrecognized target language", async () => {
+    const doc = "你好世界\n\nHello world\n";
+    const port = echoPort();
+    const klingon = { ...settings, targetLanguage: "Klingon" };
+    await expect(translateDocument(port, klingon, doc)).resolves.toBe(
+      doc.toUpperCase(),
+    );
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, klingon, [
+      "你好世界\n",
+      "Hello world\n",
+    ]);
   });
 
   it("protects inline code and math spans through translation and restores them", async () => {
@@ -636,7 +1004,8 @@ describe("translateDocument", () => {
     const port = transformPort((segment) => "译：" + segment);
     const result = await translateDocument(port, settings, doc);
     // The code span survives verbatim and no placeholder leaks into the
-    // output; each of the four chunks carries one 2-character 译： prefix.
+    // output; each of the four chunks in the single batch carries one
+    // 2-character 译： prefix.
     expect(result).toContain("`token`");
     expect(result).not.toContain("⟪");
     expect(result).not.toContain("⟫");
