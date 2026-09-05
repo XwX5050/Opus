@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.13` (kept in sync across `package.json`,
+- Version: `0.1.14` (kept in sync across `package.json`,
   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first), Windows 10/11 (WebView2),
   and Linux (WebKitGTK)
@@ -172,8 +172,14 @@ Rust/Tauri backend.
   inline row buttons.
 - `src/translate/`: document translation pipeline. `types.ts` holds
   `TranslationSettings` (endpoint, API key, model, target language, concurrency
-  — the number of chunk requests translated concurrently, configurable in
-  settings within 1-32, default 10) and the per-tab `TranslationViewState`;
+  — the number of batch requests translated concurrently, configurable in
+  settings within 1-32, default 10 — and `presetApiKeys`, an API key
+  remembered per preset id so switching presets never re-asks for a key;
+  `stashApiKey` writes the active key into a slot) and the per-tab
+  `TranslationViewState`;
+  `presets.ts` defines the provider presets for the settings dialog
+  (智谱 GLM-4.7-Flash free tier, 腾讯混元 Hy-MT2-Lite, DeepSeek V4 Flash, each
+  with a verified endpoint/model/concurrency) plus `matchPreset`;
   `segments.ts` splits Markdown into
   translatable paragraph blocks and protected blocks (frontmatter, fenced
   code, display math, HTML comments) and subdivides over-long translatable
@@ -182,14 +188,39 @@ Rust/Tauri backend.
   split a placeholder token); `placeholders.ts` swaps inline code/math spans
   (`` `code` ``, `$math$`) for ⟪n⟫ tokens before subdivision so they survive
   translation verbatim and are validated and restored from each reply;
-  `translate.ts` issues one
-  `DocumentPort.translateSegments` call per chunk through a bounded
-  concurrency pool, retries transiently failed chunk requests with a short
+  `languageGuess.ts` conservatively detects chunks already written in the
+  target language (script-ratio heuristic per language family) so they are
+  never sent to the provider; `translate.ts` packs pending chunks into
+  contiguous batches (`TRANSLATION_BATCH_MAX_UNITS` = 8 /
+  `TRANSLATION_BATCH_MAX_CHARS` = 4000), sends one
+  `DocumentPort.translateSegments` call per batch through a bounded
+  concurrency pool, retries transiently failed batch requests with a short
   backoff (never on abort), and surfaces each finished chunk via `onPartial`
-  with the unfinished chunks still showing the original text. The
+  with the unfinished chunks still showing the original text. Scheduling is
+  viewport-first: `TranslateDocumentOptions.priority` (`visibleRange()`)
+  reports the visible CHARACTER range of the currently displayed text, and
+  every pick maps it to units through their offsets in the latest assembled
+  partial (never pixel fractions — protected blocks like code fences would
+  skew that mapping), so the visible screen translates first, nearby content
+  prefetches, and the rest drains in the background, re-prioritizing live on
+  scroll. `useAppController.startTranslation` passes a `priority` reading a
+  provider registered via `setTranslationViewportProvider`; `AppShell`
+  registers a getter that computes the range on demand from the active
+  editor's CodeMirror view (`MarkdownEditor`'s optional `onEditorView` prop,
+  `view.posAtCoords` against the scroller rect, null-safe for jsdom). The
   backend `src-tauri/src/translate.rs` translates through an
-  OpenAI-compatible chat completions endpoint via reqwest (rustls) and caches
-  results per segment on disk.
+  OpenAI-compatible chat completions endpoint via reqwest (rustls): the
+  uncached segments of one call are joined into a single chat request behind
+  ⟪n⟫ delimiter lines, the reply is split and strictly validated (any
+  mismatch falls back to one request per segment), results are cached per
+  segment on disk, requests pin `temperature: 0`, a 429 with a small
+  integer `Retry-After` is retried once asynchronously, and providers whose
+  models reason by default get a `reasoning_override`: 智谱 (bigmodel.cn /
+  z.ai) and DeepSeek requests carry `"thinking": {"type": "disabled"}`,
+  OpenAI reasoning models (gpt-5 family, o-series) get
+  `"reasoning_effort": "low"` — reasoning tokens are billed as output and
+  glm-4.7-flash can even return empty content when reasoning exhausts the
+  completion budget.
 - `src/theme/`: CSS tokens, app styles, theme hook, and editor/theme
   preferences. The reading column scales proportionally with the window
   (`min(clamp(--editor-content-width, 68%, 1.6x it), 100% - 48px)` on
@@ -380,11 +411,12 @@ CI:
   outputs, or personal documents.
 - **Atomic saves**: document writes use a sibling temporary file, `fsync`, and
   an atomic rename to avoid data loss.
-- **Translation cache and API key**: translated segments are cached under the
+- **Translation cache and API keys**: translated segments are cached under the
   app data directory (`translation-cache/`, one sha256-named JSON file per
   segment, written with the same atomic discipline as recovery drafts); the
-  provider API key is stored in plaintext in the local `session.json`
-  (accepted for v1 — never commit or upload it).
+  provider API keys (the active key plus per-preset `presetApiKeys`) are
+  stored in plaintext in the local `session.json`
+  (accepted for v1 — never commit or upload them).
 - **Asset scopes**: runtime Tauri scopes are additive-only; the Rust
   `AssetScopeRegistry` is the authoritative record of which consumer holds
   which directory. Workspace mutations enforce root-boundary checks against
