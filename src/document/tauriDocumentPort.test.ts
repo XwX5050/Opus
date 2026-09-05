@@ -722,6 +722,7 @@ describe("tauri document port session, window geometry, and close requests", () 
         model: "gpt-4o-mini",
         targetLanguage: "中文",
         concurrency: 10,
+        presetApiKeys: {},
       };
       const configured = { ...session, translationSettings: settings };
       await port.saveSession(configured);
@@ -892,6 +893,7 @@ describe("tauri document port session, window geometry, and close requests", () 
           model: "gpt-4o-mini",
           targetLanguage: "中文",
           concurrency: 10,
+          presetApiKeys: {},
         },
       };
       await port.saveSession(session);
@@ -918,6 +920,7 @@ describe("tauri document port session, window geometry, and close requests", () 
           model: DEFAULT_TRANSLATION_SETTINGS.model,
           targetLanguage: DEFAULT_TRANSLATION_SETTINGS.targetLanguage,
           concurrency: DEFAULT_TRANSLATION_SETTINGS.concurrency,
+          presetApiKeys: DEFAULT_TRANSLATION_SETTINGS.presetApiKeys,
         },
       });
     } finally {
@@ -1021,6 +1024,7 @@ describe("tauri document port translation", () => {
     model: "gpt-4o-mini",
     targetLanguage: "中文",
     concurrency: 10,
+    presetApiKeys: {},
   };
 
   it("invokes translate_segments with camel case settings and returns translations in order", async () => {

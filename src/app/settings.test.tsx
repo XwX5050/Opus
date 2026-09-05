@@ -20,6 +20,7 @@ import {
   DEFAULT_TRANSLATION_SETTINGS,
   type TranslationSettings,
 } from "../translate/types";
+import { TRANSLATION_PRESETS } from "../translate/presets";
 import AppShell from "./AppShell";
 import SettingsDialog from "./SettingsDialog";
 
@@ -844,6 +845,8 @@ describe("settings: translation", () => {
       ...DEFAULT_TRANSLATION_SETTINGS,
       endpoint: "https://example.com/v1",
       apiKey: "sk-live-000",
+      // No preset matches, so the key is remembered under the custom slot.
+      presetApiKeys: { custom: "sk-live-000" },
     });
 
     // The model is a native select: fetch the list, then pick a model. The
@@ -861,6 +864,7 @@ describe("settings: translation", () => {
       endpoint: "https://example.com/v1",
       apiKey: "sk-live-000",
       model: "gpt-4o",
+      presetApiKeys: { custom: "sk-live-000" },
     });
   });
 
@@ -904,6 +908,7 @@ describe("settings: translation", () => {
       model: "custom-model",
       targetLanguage: "Français",
       concurrency: 7,
+      presetApiKeys: {},
     };
     const { dialog, onTranslationSettingsChange } =
       renderLiveTranslationDialog(persisted);
@@ -1201,5 +1206,168 @@ describe("settings: translation", () => {
     expect(
       await within(dialog).findByText("连接失败：401 Unauthorized"),
     ).toBeInTheDocument();
+  });
+
+  it("shows the preset selector as 自定义 for settings that match no preset", () => {
+    const { dialog } = renderTranslationDialog();
+    const select = within(dialog).getByLabelText("服务商预设");
+    expect(select).toHaveValue("custom");
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([...TRANSLATION_PRESETS.map((preset) => preset.label), "自定义"]);
+    // No note without a matched preset.
+    expect(
+      within(dialog).queryByText(TRANSLATION_PRESETS[0].note),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selecting a preset stashes the current key and fills endpoint, model and concurrency", async () => {
+    const user = userEvent.setup();
+    const persisted: TranslationSettings = {
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      apiKey: "sk-persisted",
+      targetLanguage: "Français",
+    };
+    const { dialog, onTranslationSettingsChange } =
+      renderLiveTranslationDialog(persisted);
+
+    const preset = TRANSLATION_PRESETS[0];
+    await user.selectOptions(
+      within(dialog).getByLabelText("服务商预设"),
+      preset.id,
+    );
+
+    // The key in use is remembered under the custom slot; the preset has no
+    // key of its own yet, so the field clears.
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...persisted,
+      endpoint: preset.endpoint,
+      model: preset.model,
+      concurrency: preset.concurrency,
+      apiKey: "",
+      presetApiKeys: { custom: "sk-persisted" },
+    });
+    expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
+      preset.endpoint,
+    );
+    expect(within(dialog).getByLabelText("模型")).toHaveValue(preset.model);
+    expect(within(dialog).getByLabelText("并发数")).toHaveValue(
+      preset.concurrency,
+    );
+    // The key was stashed, not carried over; the target language survives.
+    expect(within(dialog).getByLabelText("API Key")).toHaveValue("");
+    expect(within(dialog).getByLabelText("目标语言")).toHaveValue("Français");
+    // The selector now identifies the preset and shows its note.
+    expect(within(dialog).getByLabelText("服务商预设")).toHaveValue(preset.id);
+    expect(within(dialog).getByText(preset.note)).toBeInTheDocument();
+  });
+
+  it("remembers each preset's API key and restores it when switching back", async () => {
+    const user = userEvent.setup();
+    const { dialog, onTranslationSettingsChange } = renderLiveTranslationDialog();
+
+    const presetSelect = within(dialog).getByLabelText("服务商预设");
+    const apiKey = within(dialog).getByLabelText("API Key");
+    const glm = TRANSLATION_PRESETS.find((preset) => preset.id === "glm")!;
+    const deepseek = TRANSLATION_PRESETS.find(
+      (preset) => preset.id === "deepseek",
+    )!;
+
+    // Key A is typed while no preset matches, so it lands in the custom slot.
+    fireEvent.change(apiKey, { target: { value: "sk-a" } });
+    fireEvent.blur(apiKey);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      apiKey: "sk-a",
+      presetApiKeys: { custom: "sk-a" },
+    });
+
+    // Switching to GLM stashes A under "custom"; GLM has no key of its own
+    // yet, so the field clears while the fields fill from the preset.
+    await user.selectOptions(presetSelect, glm.id);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: glm.endpoint,
+      model: glm.model,
+      concurrency: glm.concurrency,
+      apiKey: "",
+      presetApiKeys: { custom: "sk-a" },
+    });
+    expect(apiKey).toHaveValue("");
+
+    // Key B typed while GLM matches is remembered under GLM's slot.
+    fireEvent.change(apiKey, { target: { value: "sk-b" } });
+    fireEvent.blur(apiKey);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: glm.endpoint,
+      model: glm.model,
+      concurrency: glm.concurrency,
+      apiKey: "sk-b",
+      presetApiKeys: { custom: "sk-a", glm: "sk-b" },
+    });
+
+    // Switching to DeepSeek stashes B under "glm"; DeepSeek has no key yet.
+    await user.selectOptions(presetSelect, deepseek.id);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: deepseek.endpoint,
+      model: deepseek.model,
+      concurrency: deepseek.concurrency,
+      apiKey: "",
+      presetApiKeys: { custom: "sk-a", glm: "sk-b" },
+    });
+    expect(apiKey).toHaveValue("");
+
+    // Back to GLM: the empty DeepSeek key is stashed and B is restored.
+    await user.selectOptions(presetSelect, glm.id);
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: glm.endpoint,
+      model: glm.model,
+      concurrency: glm.concurrency,
+      apiKey: "sk-b",
+      presetApiKeys: { custom: "sk-a", glm: "sk-b", deepseek: "" },
+    });
+    expect(apiKey).toHaveValue("sk-b");
+
+    // Back to 自定义: the GLM key stays stashed and A is restored. Endpoint
+    // and model keep the preset's values — editing them detaches from GLM.
+    await user.selectOptions(presetSelect, "custom");
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
+      ...DEFAULT_TRANSLATION_SETTINGS,
+      endpoint: glm.endpoint,
+      model: glm.model,
+      concurrency: glm.concurrency,
+      apiKey: "sk-a",
+      presetApiKeys: { custom: "sk-a", glm: "sk-b", deepseek: "" },
+    });
+    expect(apiKey).toHaveValue("sk-a");
+  });
+
+  it("shows 自定义 again once a preset's endpoint is edited", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderLiveTranslationDialog();
+
+    const preset = TRANSLATION_PRESETS[0];
+    await user.selectOptions(
+      within(dialog).getByLabelText("服务商预设"),
+      preset.id,
+    );
+    const endpoint = within(dialog).getByLabelText("API 端点");
+    expect(endpoint).toHaveValue(preset.endpoint);
+
+    // Editing the endpoint detaches the settings from the preset: the
+    // selector flips back to 自定义 and the note disappears.
+    fireEvent.change(endpoint, {
+      target: { value: "https://custom.example.com/v1" },
+    });
+    fireEvent.keyDown(endpoint, { key: "Enter" });
+    expect(within(dialog).getByLabelText("服务商预设")).toHaveValue("custom");
+    expect(
+      within(dialog).queryByText(preset.note),
+    ).not.toBeInTheDocument();
   });
 });

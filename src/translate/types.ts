@@ -14,6 +14,8 @@ export interface TranslationSettings {
   readonly targetLanguage: string;
   /** Maximum concurrent chunk requests for one document translation. */
   readonly concurrency: number;
+  /** API keys remembered per preset id; "custom" is the key while no preset matches. */
+  readonly presetApiKeys: Record<string, string>;
 }
 
 export const DEFAULT_TRANSLATION_SETTINGS: TranslationSettings = {
@@ -22,6 +24,7 @@ export const DEFAULT_TRANSLATION_SETTINGS: TranslationSettings = {
   model: "gpt-4o-mini",
   targetLanguage: "中文",
   concurrency: 10,
+  presetApiKeys: {},
 };
 
 const MAX_FIELD_LENGTH = 1024;
@@ -48,6 +51,24 @@ const normalizeConcurrency = (value: unknown): number => {
   );
 };
 
+/** Cap on remembered preset keys: three presets plus "custom" exist, so
+ * anything beyond a handful is corrupt data. */
+const MAX_PRESET_API_KEYS = 8;
+
+const normalizePresetApiKeys = (value: unknown): Record<string, string> => {
+  if (typeof value !== "object" || value === null) return {};
+  const keys: Record<string, string> = {};
+  for (const [key, apiKey] of Object.entries(value)) {
+    if (Object.keys(keys).length >= MAX_PRESET_API_KEYS) break;
+    if (key.length === 0 || key.length > MAX_FIELD_LENGTH) continue;
+    if (typeof apiKey !== "string" || apiKey.length > MAX_FIELD_LENGTH) {
+      continue;
+    }
+    keys[key] = apiKey;
+  }
+  return keys;
+};
+
 /** Repair data read from the persisted session; invalid fields get defaults. */
 export const normalizeTranslationSettings = (
   value: unknown,
@@ -65,8 +86,24 @@ export const normalizeTranslationSettings = (
       DEFAULT_TRANSLATION_SETTINGS.targetLanguage,
     ),
     concurrency: normalizeConcurrency(record.concurrency),
+    presetApiKeys: normalizePresetApiKeys(record.presetApiKeys),
   };
 };
+
+/**
+ * Returns a copy of `settings` with `apiKey` as the active key, remembered
+ * under `slot` — a preset id, or "custom" for the key used while no preset
+ * matches. Other slots' keys are preserved.
+ */
+export const stashApiKey = (
+  settings: TranslationSettings,
+  slot: string,
+  apiKey: string,
+): TranslationSettings => ({
+  ...settings,
+  apiKey,
+  presetApiKeys: { ...settings.presetApiKeys, [slot]: apiKey },
+});
 
 export type TranslationViewState =
   | {

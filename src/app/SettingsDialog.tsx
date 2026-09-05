@@ -18,8 +18,10 @@ import {
 import { type DocumentPort } from "../document/DocumentPort";
 import {
   DEFAULT_TRANSLATION_SETTINGS,
+  stashApiKey,
   type TranslationSettings,
 } from "../translate/types";
+import { matchPreset, TRANSLATION_PRESETS } from "../translate/presets";
 import { MOTION } from "../motion/motionConfig";
 import { prefersReducedMotion } from "../motion/motionRuntime";
 import type { UpdateCheckState } from "./updates";
@@ -70,6 +72,10 @@ const TRANSLATION_LANGUAGES: ReadonlyArray<string> = [
   "Español",
   "Русский",
 ];
+
+/** Select value meaning "no preset": shown whenever the stored endpoint and
+ * model identify no provider preset (or the user edited a preset's fields). */
+const CUSTOM_PRESET_VALUE = "custom";
 
 /** Inline hints next to the 检查更新 button, per manual-check state. */
 const UPDATE_HINTS: Readonly<
@@ -575,6 +581,15 @@ export default function SettingsDialog({
 
   const limits = EDITOR_PREFERENCE_LIMITS;
 
+  // Preset the current endpoint+model correspond to; undefined means custom.
+  const matchedPreset = matchPreset(translationSettings);
+
+  // The key slot the active apiKey belongs to: the matched preset's id, or
+  // "custom" while the endpoint+model identify no preset. Switching slots
+  // stashes the key in use under the slot being left and restores the target
+  // slot's own key, so every provider remembers its own API key.
+  const currentKeySlot = matchedPreset?.id ?? CUSTOM_PRESET_VALUE;
+
   // Model names selectable in the model field: the fetched list plus, first,
   // the stored model when it is missing from it. The select is controlled by
   // translationSettings.model, so the stored value must always be one of the
@@ -725,6 +740,70 @@ export default function SettingsDialog({
         </h3>
         <div className="settings-group">
           <div className="settings-row" data-settings-row>
+            <label htmlFor="settings-translation-preset">服务商预设</label>
+            <select
+              id="settings-translation-preset"
+              value={matchedPreset?.id ?? CUSTOM_PRESET_VALUE}
+              onChange={(event) => {
+                const id = event.target.value;
+                if (id === CUSTOM_PRESET_VALUE) {
+                  // Leaving a preset for 自定义: remember the key in use
+                  // under the preset slot being left, then restore the key
+                  // last stashed for the custom slot. Endpoint and model stay
+                  // as they are — editing them detaches from the preset.
+                  const stashed = stashApiKey(
+                    translationSettings,
+                    currentKeySlot,
+                    translationSettings.apiKey,
+                  );
+                  updateTranslation({
+                    apiKey: stashed.presetApiKeys[CUSTOM_PRESET_VALUE] ?? "",
+                    presetApiKeys: stashed.presetApiKeys,
+                  });
+                  return;
+                }
+                const preset = TRANSLATION_PRESETS.find(
+                  (candidate) => candidate.id === id,
+                );
+                if (preset === undefined) return;
+                // Leaving the current slot: stash its key before the preset
+                // fills endpoint, model and concurrency and loads the key it
+                // remembered last time (empty the first time).
+                const stashed = stashApiKey(
+                  translationSettings,
+                  currentKeySlot,
+                  translationSettings.apiKey,
+                );
+                updateTranslation({
+                  endpoint: preset.endpoint,
+                  model: preset.model,
+                  concurrency: preset.concurrency,
+                  apiKey: stashed.presetApiKeys[preset.id] ?? "",
+                  presetApiKeys: stashed.presetApiKeys,
+                });
+              }}
+            >
+              {TRANSLATION_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+              <option value={CUSTOM_PRESET_VALUE}>自定义</option>
+            </select>
+          </div>
+
+          {matchedPreset !== undefined && (
+            <div className="settings-row" data-settings-row>
+              <span className="settings-row-label" />
+              <div className="settings-update-controls">
+                <span className="settings-update-hint">
+                  {matchedPreset.note}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="settings-row" data-settings-row>
             <label htmlFor="settings-translation-endpoint">API 端点</label>
             <TextField
               id="settings-translation-endpoint"
@@ -740,7 +819,11 @@ export default function SettingsDialog({
               type="password"
               placeholder="sk-..."
               value={translationSettings.apiKey}
-              onCommit={(value) => updateTranslation({ apiKey: value })}
+              onCommit={(value) =>
+                updateTranslation(
+                  stashApiKey(translationSettings, currentKeySlot, value),
+                )
+              }
             />
           </div>
 
