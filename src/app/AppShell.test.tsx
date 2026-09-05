@@ -11,14 +11,46 @@ import {
 } from "../document/memoryDocumentPort";
 import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import type { TranslationSettings } from "../translate/types";
+import type { TranslationTextRange } from "../translate/translate";
 import { checkUpdate, type UpdateCheckResult } from "./updates";
 import AppShell, { withAssetScopeForSavedImage } from "./AppShell";
+import * as useAppControllerModule from "./useAppController";
 
 vi.mock("./updates", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./updates")>();
   return {
     ...actual,
     checkUpdate: vi.fn().mockResolvedValue({ status: "unsupported" }),
+  };
+});
+
+// Records every setTranslationViewportProvider call the shell makes while the
+// REAL controller keeps running underneath (all existing behavior — state,
+// ports, translation runs — is untouched). The recording function is created
+// once so its identity is stable across renders, exactly like the hook's
+// useCallback.
+type ViewportProvider = (() => TranslationTextRange | null) | null;
+vi.mock("./useAppController", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./useAppController")>();
+  const viewportProviderCalls: ViewportProvider[] = [];
+  let currentController: ReturnType<typeof actual.useAppController> | null = null;
+  const recordViewportProvider = (provider: ViewportProvider) => {
+    viewportProviderCalls.push(provider);
+    currentController?.setTranslationViewportProvider(provider);
+  };
+  return {
+    ...actual,
+    useAppController: (
+      port: Parameters<typeof actual.useAppController>[0],
+      subscribeToEvents: Parameters<typeof actual.useAppController>[1],
+    ) => {
+      currentController = actual.useAppController(port, subscribeToEvents);
+      return {
+        ...currentController,
+        setTranslationViewportProvider: recordViewportProvider,
+      };
+    },
+    __viewportProviderCalls: viewportProviderCalls,
   };
 });
 
@@ -112,6 +144,12 @@ const replaceEditorText = (text: string) => {
   if (!view) throw new Error("EditorView not found");
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
 };
+
+/** The viewport providers the shell has fed the controller through the mock. */
+const viewportProviderCalls = () =>
+  (useAppControllerModule as unknown as {
+    __viewportProviderCalls: ViewportProvider[];
+  }).__viewportProviderCalls;
 
 describe("AppShell", () => {
   it("offers accessible new and open actions in the empty state", () => {
@@ -1868,6 +1906,7 @@ describe("AppShell document translation", () => {
             model: "gpt-4o-mini",
             targetLanguage: "中文",
             concurrency: 10,
+            presetApiKeys: {},
           },
         },
       },
@@ -1920,10 +1959,11 @@ describe("AppShell document translation", () => {
     expect(calls).toBe(1);
   });
 
-  it("shows the partial translation and per-chunk progress while translating", async () => {
+  it("shows the partial translation and per-unit progress while translating", async () => {
     const user = userEvent.setup();
-    // Each 701-char paragraph subdivides into two chunk requests (600 + 101).
-    const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
+    // Each 701-char paragraph subdivides into two chunk requests (600 + 101);
+    // 16 chunks pack into two batched requests of 8 units each.
+    const paras = Array.from({ length: 8 }, () => "x".repeat(700) + "\n");
     const doc = paras.join("\n");
     const port = keyedPort([translateFile("/notes/trans.md", doc)]);
     const pending: {
@@ -1942,29 +1982,29 @@ describe("AppShell document translation", () => {
     await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
-    // Eight chunks start as eight requests; with nothing completed yet the
-    // banner shows no counts and the editor stays on the original text.
-    expect(pending).toHaveLength(8);
+    // The 16 chunks start as two batched requests; with nothing completed yet
+    // the banner shows no counts and the editor stays on the original text.
+    expect(pending).toHaveLength(2);
+    expect(pending[0].segments).toHaveLength(8);
+    expect(pending[1].segments).toHaveLength(8);
     expect(screen.getByRole("status")).toHaveTextContent("正在翻译…");
     expect(screen.getByRole("status")).not.toHaveTextContent("(");
 
-    // The first chunk lands: the editor switches to the partial and freezes
-    // read-only, the banner reports per-chunk progress.
+    // The first batch lands: the editor switches to the partial (8 of 16
+    // units) and freezes read-only, the banner reports per-unit progress.
     await act(async () => {
       pending[0].resolve(pending[0].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (1/8)"),
+      expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (8/16)"),
     );
     expect(editor()).toHaveTextContent("ｘ");
     expect(editor().textContent).toContain("x");
     expect(editor()).toHaveAttribute("contenteditable", "false");
 
-    // The remaining chunks complete: the full translation lands ready.
+    // The second batch completes: the full translation lands ready.
     await act(async () => {
-      for (const call of pending.slice(1)) {
-        call.resolve(call.segments.map(pseudoTranslate));
-      }
+      pending[1].resolve(pending[1].segments.map(pseudoTranslate));
     });
     const showOriginal = await screen.findByRole("button", { name: "显示原文" });
     expect(showOriginal).toHaveAttribute("aria-pressed", "true");
@@ -2043,6 +2083,99 @@ describe("AppShell document translation", () => {
       "请先在设置中配置翻译 API",
     );
     expect(port.translationCallCount).toBe(0);
+  });
+
+  it("registers a viewport-range provider over the live editor and unregisters it on cleanup", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort([file("/notes/a.md", "hello world")]);
+    const { unmount } = render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+    const calls = viewportProviderCalls();
+    const start = calls.length;
+    // The provider is registered while the editor view exists.
+    await waitFor(() => expect(calls.at(-1)).not.toBeNull());
+    const provider = calls.at(-1)!;
+
+    // jsdom reports a zero-sized scroller: the getter must return null, not throw.
+    expect(provider()).toBeNull();
+
+    // With a real-sized scroller the getter maps the viewport edges to
+    // character offsets through posAtCoords, on demand.
+    const scroller = view.scrollDOM;
+    const rect: DOMRect = {
+      left: 100,
+      top: 100,
+      right: 700,
+      bottom: 500,
+      width: 600,
+      height: 400,
+      x: 100,
+      y: 100,
+      toJSON: () => ({}),
+    };
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect);
+    const coordsSpy = vi.spyOn(view, "posAtCoords");
+    coordsSpy.mockImplementation((coords) =>
+      coords.y === rect.top + 1 ? 10 : coords.y === rect.bottom - 1 ? 90 : null,
+    );
+    expect(provider()).toEqual({ from: 10, to: 90 });
+
+    // Inverted positions are swapped into a normalized range.
+    coordsSpy.mockImplementation((coords) =>
+      coords.y === rect.top + 1 ? 90 : coords.y === rect.bottom - 1 ? 10 : null,
+    );
+    expect(provider()).toEqual({ from: 10, to: 90 });
+
+    // Null coordinates fall back to the document bounds.
+    coordsSpy.mockReturnValue(null);
+    expect(provider()).toEqual({ from: 0, to: 11 });
+
+    // Unmount unregisters the provider.
+    unmount();
+    expect(calls.at(-1)).toBeNull();
+  });
+
+  it("keeps the viewport provider registered through a translation run", async () => {
+    const user = userEvent.setup();
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    const pending: {
+      segments: string[];
+      resolve: (value: string[]) => void;
+    }[] = [];
+    port.translateSegments = (
+      _settings: TranslationSettings,
+      segments: string[],
+    ) =>
+      new Promise<string[]>((resolve) => {
+        pending.push({ segments, resolve });
+      });
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+    const calls = viewportProviderCalls();
+    await waitFor(() => expect(calls.at(-1)).not.toBeNull());
+    const provider = calls.at(-1)!;
+    const start = calls.length;
+
+    // The run neither unregisters nor replaces the provider: the same getter
+    // serves every batch pick, reading the live editor on demand. (The
+    // getter itself is only consulted while batches are picked.)
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+    await act(async () => {
+      pending[0].resolve(pending[0].segments.map(pseudoTranslate));
+    });
+    await screen.findByRole("button", { name: "显示原文" });
+    // No new registrations through the whole run; the provider is unchanged.
+    expect(calls.slice(start)).toEqual([]);
+    expect(calls.at(-1)).toBe(provider);
+    // The registered getter still answers (jsdom reports zero geometry).
+    expect(provider()).toBeNull();
   });
 });
 

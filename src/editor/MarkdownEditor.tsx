@@ -135,6 +135,12 @@ export interface MarkdownEditorProps {
    * never changes the document text.
    */
   performanceMode?: PerformanceMode;
+  /**
+   * Called with the live EditorView right after it is created and with null
+   * when it is destroyed. Additive: hosts that do not need the view can omit
+   * it. The view mounts once per document; switching tabs remounts it.
+   */
+  onEditorView?(view: EditorView | null): void;
 }
 
 const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
@@ -156,6 +162,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
       tableFocusRequest = null,
       onTableFocusConsumed,
       performanceMode = "full",
+      onEditorView,
     } = props;
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -191,6 +198,10 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
   // copying the document — a doc.toString() per keystroke is fine for notes
   // but costs tens of milliseconds on pressure-sized documents.
   const lastSyncedValueRef = useRef(value);
+  // The live view is reported from the mount effect, which runs once; the ref
+  // keeps the callback current across renders without re-creating the view.
+  const onEditorViewRef = useRef(onEditorView);
+  onEditorViewRef.current = onEditorView;
 
   const previewExtensionsFor = (mode: EditorViewMode, perf: PerformanceMode) => {
     const readOnly =
@@ -267,6 +278,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
       }),
     });
     viewRef.current = view;
+    onEditorViewRef.current?.(view);
     requestAnimationFrame(() => {
       if (import.meta.env.DEV) {
         // Perf harness hook (scripts/measure-editor.mjs): the first frame
@@ -279,6 +291,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     });
     return () => {
       viewRef.current = null;
+      onEditorViewRef.current?.(null);
       view.destroy();
     };
     // One EditorView owns this mounted document. Prop changes are synchronized below.

@@ -104,10 +104,10 @@ test("translates a document, forces reading mode, and toggles back without new A
   // The success banner clears once the translation completes.
   await expect(page.locator(".translation-banner")).toHaveCount(0);
 
-  // The per-segment protocol issues exactly one new call per translatable
-  // segment: two paragraphs here (frontmatter and the fenced code block are
-  // protected).
-  expect(await translationCallCount(page)).toBe(2);
+  // The batched protocol packs every pending chunk into as few calls as
+  // possible: both paragraphs fit one batch here (frontmatter and the fenced
+  // code block are protected), so exactly one new call is issued.
+  expect(await translationCallCount(page)).toBe(1);
 
   // Back to the original: restored verbatim, no full-width letters anywhere.
   const toggle = page.getByRole("button", { name: "显示原文", exact: true });
@@ -125,6 +125,6 @@ test("translates a document, forces reading mode, and toggles back without new A
   // same segments hit the cache, so no new calls are issued.
   await page.getByRole("button", { name: "显示译文", exact: true }).click();
   await expect(content).toContainText("Ｈｅｌｌｏ Ｏｐｕｓ, 第一段文字。");
-  expect(await translationCallCount(page)).toBe(2);
+  expect(await translationCallCount(page)).toBe(1);
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
 });

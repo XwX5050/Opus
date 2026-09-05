@@ -9,7 +9,22 @@ import {
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import type { TranslationSettings } from "../translate/types";
 import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
+import { translateDocument } from "../translate/translate";
 import { useAppController } from "./useAppController";
+
+// Pass-through wrapper: the real pipeline runs underneath (existing tests keep
+// their exact behavior — port calls, retries, partials), while startTranslation
+// calls can be inspected for the options it passes (viewport priority).
+vi.mock("../translate/translate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../translate/translate")>();
+  return {
+    ...actual,
+    translateDocument: vi.fn(
+      (...args: Parameters<typeof actual.translateDocument>) =>
+        actual.translateDocument(...args),
+    ),
+  };
+});
 
 const file: OpenedFile = {
   path: "/notes/exact.md",
@@ -1939,9 +1954,10 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
-  it("surfaces partial translations and per-chunk progress while translating", async () => {
-    // Each 701-char paragraph subdivides into two chunk requests (600 + 101).
-    const paras = Array.from({ length: 4 }, () => "x".repeat(700) + "\n");
+  it("surfaces partial translations and per-unit progress while translating", async () => {
+    // Each 701-char paragraph subdivides into two chunk requests (600 + 101);
+    // 16 chunks pack into two batched requests of 8 units each.
+    const paras = Array.from({ length: 8 }, () => "x".repeat(700) + "\n");
     const doc = paras.join("\n");
     class SteppedTranslatePort extends InspectableControllerPort {
       readonly pending: {
@@ -1969,42 +1985,35 @@ describe("useAppController translations", () => {
     expect(hook.result.current.translationOf(id)?.state).toEqual({
       phase: "translating",
     });
-    // Eight chunks (four paragraphs x two) start as eight requests.
-    expect(port.pending).toHaveLength(8);
+    // The 16 chunks start as two batched requests, eight units each.
+    expect(port.pending).toHaveLength(2);
+    expect(port.pending[0].segments).toHaveLength(8);
+    expect(port.pending[1].segments).toHaveLength(8);
 
-    // The first chunk of the first paragraph lands: the translating state
-    // carries the partial with only that chunk translated and the rest of
-    // the paragraph still original, plus chunk counts.
+    // The first batch lands: the translating state carries the partial with
+    // the first four paragraphs translated and the rest still original, plus
+    // per-unit progress (8 of 16 units).
     await act(async () => {
       port.pending[0].resolve(port.pending[0].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state).toMatchObject({
         phase: "translating",
-        completedBatches: 1,
-        totalBatches: 8,
+        completedBatches: 8,
+        totalBatches: 16,
       }),
     );
     const partial = hook.result.current.translationOf(id)!.state;
     if (partial.phase !== "translating") throw new Error("unreachable");
     expect(partial.translatedText).toBe(
-      "ｘ".repeat(600) +
-        "x".repeat(100) +
+      paras.slice(0, 4).map(pseudoTranslate).join("\n") +
         "\n" +
-        "\n" +
-        paras[1] +
-        "\n" +
-        paras[2] +
-        "\n" +
-        paras[3],
+        paras.slice(4).join("\n"),
     );
 
-    // The remaining chunks land: the second chunk completes the first
-    // paragraph, then the rest follow until the full translation arrives.
+    // The second batch completes: the full translation lands ready.
     await act(async () => {
-      for (const call of port.pending.slice(1)) {
-        call.resolve(call.segments.map(pseudoTranslate));
-      }
+      port.pending[1].resolve(port.pending[1].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
@@ -2198,6 +2207,7 @@ describe("useAppController translations", () => {
           model: "gpt-4o",
           targetLanguage: "日本語",
           concurrency: 10,
+          presetApiKeys: {},
         },
       },
     });
@@ -2207,6 +2217,7 @@ describe("useAppController translations", () => {
       expect(hook.result.current.translationSettings).toEqual({
         endpoint: "https://example.com/v1",
         apiKey: "secret-key",
+        presetApiKeys: {},
         model: "gpt-4o",
         targetLanguage: "日本語",
         concurrency: 10,
@@ -2220,12 +2231,14 @@ describe("useAppController translations", () => {
         model: "llama",
         targetLanguage: "English",
         concurrency: 10,
+        presetApiKeys: {},
       });
     });
     await waitFor(() =>
       expect(port.session?.translationSettings).toEqual({
         endpoint: "https://other.example.com/v1",
         apiKey: "other-key",
+        presetApiKeys: {},
         model: "llama",
         targetLanguage: "English",
         concurrency: 10,
@@ -2250,6 +2263,7 @@ describe("useAppController translations", () => {
       expect(hook.result.current.translationSettings).toEqual({
         endpoint: "https://api.openai.com/v1",
         apiKey: "",
+        presetApiKeys: {},
         model: "gpt-4o-mini",
         targetLanguage: "中文",
         concurrency: 10,
@@ -2271,6 +2285,88 @@ describe("useAppController translations", () => {
     expect(hook.result.current.error).toContain("翻译 API");
     expect(hook.result.current.translationOf(id)).toBeUndefined();
     expect(port.translationCallCount).toBe(0);
+    hook.unmount();
+  });
+
+  it("passes a live viewport-range provider that reflects setTranslationViewportProvider updates", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "hello world")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+
+    act(() =>
+      hook.result.current.setTranslationViewportProvider(() => ({ from: 5, to: 42 })),
+    );
+    act(() => hook.result.current.toggleTranslation(id));
+
+    const priority = vi.mocked(translateDocument).mock.calls.at(-1)![3]!.priority;
+    if (!priority) throw new Error("translateDocument must receive a priority");
+    // The provider registered before the run started is what the scheduler sees.
+    expect(priority.visibleRange()).toEqual({ from: 5, to: 42 });
+
+    // The getter reads the ref live, so a viewport change mid-run re-prioritizes.
+    act(() =>
+      hook.result.current.setTranslationViewportProvider(() => ({ from: 10, to: 60 })),
+    );
+    expect(priority.visibleRange()).toEqual({ from: 10, to: 60 });
+
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    // The completed run clears the provider for the next one.
+    expect(priority.visibleRange()).toBeNull();
+    hook.unmount();
+  });
+
+  it("clears the translation viewport provider when a run ends (dropped, errored, completed)", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "hello world")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+    const priorityOfLatest = () => {
+      const priority = vi.mocked(translateDocument).mock.calls.at(-1)![3]!.priority;
+      if (!priority) throw new Error("translateDocument must receive a priority");
+      return priority;
+    };
+
+    // Dropped (cancelled mid-flight) clears the provider.
+    act(() =>
+      hook.result.current.setTranslationViewportProvider(() => ({ from: 1, to: 7 })),
+    );
+    act(() => hook.result.current.toggleTranslation(id));
+    const droppedRun = priorityOfLatest();
+    expect(droppedRun.visibleRange()).toEqual({ from: 1, to: 7 });
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(droppedRun.visibleRange()).toBeNull();
+
+    // Errored clears the provider.
+    vi.mocked(translateDocument).mockRejectedValueOnce(new Error("boom"));
+    act(() =>
+      hook.result.current.setTranslationViewportProvider(() => ({ from: 2, to: 9 })),
+    );
+    act(() => hook.result.current.toggleTranslation(id));
+    const erroredRun = priorityOfLatest();
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("error"),
+    );
+    expect(erroredRun.visibleRange()).toBeNull();
+
+    // Completed (retry from the error state) clears the provider too.
+    act(() =>
+      hook.result.current.setTranslationViewportProvider(() => ({ from: 3, to: 10 })),
+    );
+    act(() => hook.result.current.toggleTranslation(id));
+    const completedRun = priorityOfLatest();
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(completedRun.visibleRange()).toBeNull();
     hook.unmount();
   });
 });

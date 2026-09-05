@@ -40,7 +40,11 @@ import {
 } from "../theme/preferences";
 import type { OpenPathSubscriptions } from "../document/tauriDocumentPort";
 import type { EditorViewMode } from "../editor/viewMode";
-import { translateDocument, type TranslationPartial } from "../translate/translate";
+import {
+  translateDocument,
+  type TranslationPartial,
+  type TranslationTextRange,
+} from "../translate/translate";
 import {
   DEFAULT_TRANSLATION_SETTINGS,
   normalizeTranslationSettings,
@@ -219,6 +223,13 @@ export function useAppController(
   // (cancelled, superseded by a newer run, or dropped on text change) must
   // not write its result.
   const translationControllers = useRef(new Map<string, AbortController>());
+  // Viewport-range provider of the active tab's editor (character offsets
+  // into the displayed text), fed by AppShell for viewport-priority
+  // translation scheduling; null means no preference (document order). A
+  // plain ref on purpose: view/scroll changes must never re-render the shell.
+  const translationViewportProviderRef = useRef<
+    (() => TranslationTextRange | null) | null
+  >(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -412,12 +423,20 @@ export function useAppController(
   const dropTranslation = useCallback((id: string) => {
     translationControllers.current.get(id)?.abort();
     translationControllers.current.delete(id);
+    // A dropped run can no longer reprioritize; its provider is cleared too.
+    translationViewportProviderRef.current = null;
     setTranslations((current) => {
       if (!current.has(id)) return current;
       const next = new Map(current);
       next.delete(id);
       return next;
     });
+  }, []);
+
+  const setTranslationViewportProvider = useCallback((
+    provider: (() => TranslationTextRange | null) | null,
+  ) => {
+    translationViewportProviderRef.current = provider;
   }, []);
 
   const startTranslation = useCallback((id: string) => {
@@ -466,6 +485,13 @@ export function useAppController(
       signal: controller.signal,
       concurrency: settings.concurrency,
       onPartial: applyPartial,
+      // Viewport priority: the getter is read fresh for every batch the
+      // scheduler picks, so in-flight viewport changes re-prioritize
+      // immediately. A null provider (or one returning null) means document
+      // order.
+      priority: {
+        visibleRange: () => translationViewportProviderRef.current?.() ?? null,
+      },
     })
       .then((translatedText) => {
         if (!isCurrent(generation)) return;
@@ -479,9 +505,12 @@ export function useAppController(
         );
         if (!latest || latest.text !== text) {
           translationControllers.current.delete(id);
+          translationViewportProviderRef.current = null;
           return;
         }
         translationControllers.current.delete(id);
+        // The run is over; the provider is only read while it schedules.
+        translationViewportProviderRef.current = null;
         setTranslations((current) => {
           const next = new Map(current);
           next.set(id, {
@@ -495,6 +524,7 @@ export function useAppController(
         if (!isCurrent(generation)) return;
         if (translationControllers.current.get(id) !== controller) return;
         translationControllers.current.delete(id);
+        translationViewportProviderRef.current = null;
         setTranslations((current) => {
           const next = new Map(current);
           next.set(id, {
@@ -1427,6 +1457,7 @@ export function useAppController(
     setTranslationSettings,
     translations,
     translationOf,
+    setTranslationViewportProvider,
     toggleTranslation,
     viewModes,
     viewModeOf,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as Rea
 import { useGSAP } from "@gsap/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Text } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import type { ClipboardImageInput, DocumentPort } from "../document/DocumentPort";
 import { detectPathPlatform } from "../document/platform";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
@@ -53,6 +54,7 @@ import {
   type UpdateOffer,
 } from "./updates";
 import { type EventSubscriber, useAppController } from "./useAppController";
+import type { TranslationTextRange } from "../translate/translate";
 import type { TableCellEditRequest } from "../editor/tableWidgets";
 import {
   animateDialogIntro,
@@ -132,6 +134,31 @@ const splitRecentPath = (path: string): { name: string; parent: string } => {
   const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   if (index <= 0) return { name: trimmed, parent: "" };
   return { name: trimmed.slice(index + 1), parent: trimmed.slice(0, index) };
+};
+
+/**
+ * Computes the character range of an editor's visible viewport (offsets into
+ * the text currently displayed) for viewport-priority translation scheduling.
+ * Called on demand at every scheduler pick, so it always reflects the current
+ * document and scroll position. A zero-sized scroller (jsdom, hidden editors)
+ * or any coordinate failure yields null → the scheduler falls back to
+ * document order.
+ */
+const visibleTextRangeOf = (
+  view: EditorView,
+): TranslationTextRange | null => {
+  try {
+    const scroller = view.scrollDOM;
+    const rect = scroller.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const from = view.posAtCoords({ x: rect.left + 4, y: rect.top + 1 });
+    const to = view.posAtCoords({ x: rect.left + 4, y: rect.bottom - 1 });
+    const start = from ?? 0;
+    const end = to ?? view.state.doc.length;
+    return start <= end ? { from: start, to: end } : { from: end, to: start };
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -482,6 +509,10 @@ export default function AppShell({
   const updateButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLElement>(null);
+  const editorAreaRef = useRef<HTMLDivElement>(null);
+  // The live EditorView of the active tab, fed by MarkdownEditor's
+  // onEditorView prop; the translation viewport provider reads it on demand.
+  const activeEditorViewRef = useRef<EditorView | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const pendingTabFocusRef = useRef<"close" | "reopen" | null>(null);
   const active = controller.state.tabs.find(
@@ -531,6 +562,18 @@ export default function AppShell({
   if (activeTranslation?.state.phase === "translating") translationLabel = "取消翻译";
   else if (translationReady) translationLabel = "显示原文";
   else if (activeTranslation?.state.phase === "ready") translationLabel = "显示译文";
+  // The translation scheduler picks batches nearest the visible character
+  // range of the active editor. The range is provided on demand — the getter
+  // is read fresh at every batch pick, so no scroll listener is needed — and
+  // the EditorView instance is stable across translation toggles (keyed by
+  // tab). Registered while the view exists (reading it outside a run is
+  // harmless) and unregistered when the view is destroyed or the tab changes.
+  useEffect(() => {
+    const view = activeEditorViewRef.current;
+    if (!view) return;
+    controller.setTranslationViewportProvider(() => visibleTextRangeOf(view));
+    return () => controller.setTranslationViewportProvider(null);
+  }, [controller.setTranslationViewportProvider, active?.id]);
   const [outlinesByTab, setOutlinesByTab] = useState<
     ReadonlyMap<string, ReadonlyArray<OutlineHeading>>
   >(new Map());
@@ -1819,6 +1862,7 @@ export default function AppShell({
           aria-labelledby={
             active && activeTabVisible ? `document-tab-${active.id}` : undefined
           }
+          ref={editorAreaRef}
           className="editor-area"
           onContextMenu={openEditorAreaContextMenu}
         >
@@ -1965,6 +2009,9 @@ export default function AppShell({
               consumeTableFocus(active.id, request)
             }
             performanceMode={lightMode ? "light" : "full"}
+            onEditorView={(view) => {
+              activeEditorViewRef.current = view;
+            }}
           />
         ) : (
           <div role="region" aria-label="空白状态" className="empty-state">
