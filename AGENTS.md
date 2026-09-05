@@ -52,6 +52,7 @@ Rust/Tauri backend.
 │   ├── document/           # Document state and storage ports
 │   ├── editor/             # CodeMirror editor and extensions
 │   ├── motion/             # GSAP animation runtime and editor motion
+│   ├── present/            # Presentation (slideshow) mode
 │   ├── workspace/          # Folder sidebar
 │   ├── theme/              # Design tokens, CSS, preferences
 │   ├── translate/          # Document translation pipeline and settings
@@ -140,11 +141,15 @@ Rust/Tauri backend.
   rendering (`mathExtension.ts`, `mathWidgets.ts`), image widgets, image
   paste/drop, outline publishing (`outline.ts`, `outlineExtension.ts`,
   `OutlinePanel.tsx`), search (wired in `editorExtensions.ts` via
-  `@codemirror/search`), frontmatter, highlight markers, and performance
-  (light) mode (`performanceMode.ts`). `viewMode.ts` defines the per-tab
-  modes: `editing` (live preview, selection reveals source) and `reading`
-  (read-only, fully rendered). On Linux (WebKitGTK), IME compositions are
-  protected by a patch-package patch (`patches/@codemirror+view+*.patch`,
+  `@codemirror/search`), frontmatter, highlight markers, performance (light)
+  mode (`performanceMode.ts`), and fenced-code-block typing assists
+  (`codeBlockAutoClose.ts` — auto-closing fences plus bracket/quote pairing,
+  stepping over, wrapping, and pair deletion, strictly gated on the syntax
+  tree so prose and inline code are untouched). `viewMode.ts` defines the
+  per-tab modes: `editing` (live preview, selection reveals source) and
+  `reading` (read-only, fully rendered). On Linux (WebKitGTK), IME
+  compositions are protected by a patch-package patch
+  (`patches/@codemirror+view+*.patch`,
   applied via the `postinstall` script) that stops CodeMirror from rewriting
   the DOM selection mid-composition — without it, fcitx5's preedit caret gets
   pinned after the first letter. The platform also never renders a caret
@@ -322,8 +327,8 @@ Automated gates:
   (in `vite.config.ts`) excludes `tests/e2e/**` and `.worktrees/**`.
 - Rust integration tests live in `src-tauri/tests/` and cover document I/O,
   commands, workspace operations, asset scopes, recovery, open events,
-  clipboard images, and the translation pipeline (cache and
-  OpenAI-compatible client).
+  clipboard images, document renaming, and the translation pipeline (cache
+  and OpenAI-compatible client).
 - E2E tests in `tests/e2e/` (`notepad`, `editorWidth`, `translation` specs)
   run against a real Vite dev server on port 1421
   with `VITE_E2E=1` (`reuseExistingServer` is off so the environment is
@@ -346,8 +351,12 @@ CI:
 - `.github/workflows/ci.yml` runs on `macos-latest` with two jobs: `check`
   (`npm ci`, `npm test`, `npm run build`, Rust fmt/clippy/tests) and `e2e`
   (`npm run test:e2e` on Chromium, uploading `test-results/` traces on
-  failure), plus `check-windows` on `windows-latest` (frontend tests/build
-  and Rust fmt/clippy/tests against the Windows toolchain).
+  failure), plus `check-linux` on `ubuntu-latest` (frontend build and Rust
+  fmt/clippy/tests against the Linux toolchain with the WebKitGTK dev
+  packages installed — needed because the macOS job never compiles the
+  `cfg(target_os = "linux")` branches) and `check-windows` on
+  `windows-latest` (frontend tests/build and Rust fmt/clippy/tests against
+  the Windows toolchain).
 
 ## Security considerations
 
@@ -407,11 +416,14 @@ Release procedures are documented in `docs/releasing.md`. High-level steps:
 2. Sign, notarize, staple, and verify the `.app` and `.dmg`.
 3. Publish the stapled DMG to GitHub Releases.
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs
-`npm run check`, builds the `app,dmg` bundles via `tauri-action`, and creates
-the GitHub Release. Because `createUpdaterArtifacts` is enabled, the release
-also carries the updater artifacts (`latest.json`, `Opus.app.tar.gz`,
-`.sig`); the app checks
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which has one
+job per platform, all uploading into the same GitHub Release (same
+`tagName`): the macOS job runs `npm run check` and builds the `app,dmg`
+bundles via `tauri-action` (it also generates the release notes), the Linux
+job builds the `appimage` bundle with `NO_STRIP=1`, and the Windows job
+builds the `nsis` installer. Because `createUpdaterArtifacts` is enabled, the
+merged release also carries the updater artifacts (`latest.json`,
+`Opus.app.tar.gz`, `.sig`); the app checks
 `https://github.com/XwX5050/Opus/releases/latest/download/latest.json`
 silently on startup and from a manual check in the settings dialog
 (`src/app/updates.ts`). The workflow reads the minisign private key from the
