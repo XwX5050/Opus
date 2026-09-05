@@ -47,6 +47,9 @@ notify = "8.2.0"
 # explicitly (as tauri-plugin-updater does).
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Async sleep for the translation client's 429 Retry-After wait; tokio is
+# already locked in the tree via tauri, this only adds the `time` feature.
+tokio = { version = "1", features = ["time"] }
 
 # macOS-only bindings for the WKWebView under-page background (see
 # window_background.rs) and installed-font enumeration (see fonts.rs).

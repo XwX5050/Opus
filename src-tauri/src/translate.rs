@@ -1,14 +1,24 @@
 //! Document translation through an OpenAI-compatible chat completions API.
 //!
-//! The frontend splits a document into translatable segments and sends one
-//! segment per request; each translation is a single chat completion whose
-//! user message is the raw segment text, and the model's plain-text answer is
-//! the translation — no JSON envelope to parse and no result count to
-//! validate. Results are cached on disk per segment so re-translating an
-//! unchanged document never calls the provider again. Cache writes reuse the
-//! sibling-temp + rename + directory-fsync discipline from `recovery`, and
-//! corrupt or missing entries are always treated as misses so a bad write can
-//! never fail a translation.
+//! The frontend splits a document into translatable segments and sends them
+//! in batches; each batch is a single chat completion whose user message
+//! joins the segments with ⟪n⟫ delimiter lines. The model's plain-text reply
+//! is split back on those lines and must reproduce the exact ⟪1⟫…⟪N⟫
+//! sequence with non-empty bodies — there is no JSON envelope to parse and no
+//! result count to validate. A reply that fails that validation falls back to
+//! one plain request per segment, which is also the protocol for a single
+//! unbatched segment. Results are cached on disk per segment so re-translating
+//! an unchanged document never calls the provider again; a 429 reply with an
+//! integer Retry-After of at most 10 seconds is retried once after waiting.
+//! Cache writes reuse the sibling-temp + rename + directory-fsync discipline
+//! from `recovery`, and corrupt or missing entries are always treated as
+//! misses so a bad write can never fail a translation. Providers whose models
+//! reason by default get a per-provider override (`reasoning_override`):
+//! 智谱 (bigmodel.cn / z.ai) and DeepSeek requests carry
+//! `"thinking": {"type": "disabled"}` — their hybrid models can otherwise
+//! burn the whole completion budget on billed reasoning tokens (智谱 may even
+//! return an empty translation) — and OpenAI reasoning models (gpt-5 family,
+//! o-series) get `"reasoning_effort": "low"`, the minimum they accept.
 //!
 //! The same endpoint also powers the settings dialog's model picker and
 //! connection check: `list_translation_models` fetches `GET {endpoint}/models`
@@ -280,23 +290,79 @@ impl TranslationCache {
 /// message; Markdown structure and inline syntax survive the round trip.
 fn system_prompt(target_language: &str) -> String {
     format!(
-        "You are a professional translator. Translate the user's text into \
-         {target_language}. Write natural, fluent prose the way a native \
-         speaker would; avoid stiff word-for-word literal translation and \
-         preserve the tone of the original. Keep all Markdown syntax, inline \
-         code, inline and block math ($...$ and $$...$$), URLs, and HTML \
-         tags exactly as they appear, and do not translate code or formula \
-         content. Preserve the original line-break structure when the input \
-         spans multiple lines. Output only the translation: no explanations, \
-         no surrounding quotes, no prefixes or suffixes."
+        "Translate the following text into {target_language}. Preserve all \
+         Markdown syntax, inline code, math ($...$ and $$...$$), URLs, and \
+         HTML tags exactly as they appear, and do not translate code or \
+         formula content. Output only the translation."
     )
 }
 
-/// The chat completions body: model plus a system prompt and the segment to
-/// translate as the user message.
-fn build_chat_body(model: &str, target_language: &str, segment: &str) -> serde_json::Value {
-    serde_json::json!({
+/// Batching variant of the prompt: the base contract plus the one sentence
+/// the batched reply is validated against.
+fn batch_system_prompt(target_language: &str) -> String {
+    format!(
+        "{} Every segment is preceded by a delimiter line (⟪n⟫); keep every \
+         ⟪n⟫ line verbatim on its own line and translate only the text \
+         between markers.",
+        system_prompt(target_language)
+    )
+}
+
+/// Provider-specific request fields that keep translation fast and cheap by
+/// turning reasoning off — or, where no off switch exists, down. Reasoning
+/// models otherwise burn invisible "thinking" tokens (billed as output)
+/// before writing the translation: 智谱 glm-4.7-flash can even return empty
+/// content when reasoning exhausts the completion budget, and DeepSeek V4
+/// reasons at high effort by default. Each field follows the provider's own
+/// documented convention and is only sent to the hosts that document it —
+/// other providers reject unknown fields with HTTP 400.
+fn reasoning_override(endpoint: &str, model: &str) -> Vec<(&'static str, serde_json::Value)> {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return vec![];
+    };
+    let Some(host) = url.host_str() else {
+        return vec![];
+    };
+    let host = host.to_ascii_lowercase();
+    // 智谱 GLM (open.bigmodel.cn, *.bigmodel.cn, *.z.ai) and DeepSeek share
+    // the same `thinking` toggle object.
+    if host == "open.bigmodel.cn"
+        || host.ends_with(".bigmodel.cn")
+        || host.ends_with(".z.ai")
+        || host == "api.deepseek.com"
+        || host.ends_with(".deepseek.com")
+    {
+        return vec![("thinking", serde_json::json!({ "type": "disabled" }))];
+    }
+    // OpenAI reasoning models (gpt-5 family, o-series) have no off switch;
+    // "low" is the minimal effort they all accept. Non-reasoning models
+    // (e.g. gpt-4o-mini) reject the field, so gate on the model name.
+    if host == "api.openai.com" {
+        let model = model.to_ascii_lowercase();
+        let reasoning_model = model.starts_with("gpt-5")
+            || model.starts_with("o1")
+            || model.starts_with("o3")
+            || model.starts_with("o4");
+        if reasoning_model {
+            return vec![("reasoning_effort", serde_json::json!("low"))];
+        }
+    }
+    vec![]
+}
+
+/// The chat completions body for a single segment: model, temperature 0, and
+/// the segment to translate as the user message. Providers with default-on
+/// reasoning additionally get their off/low override (see
+/// `reasoning_override`).
+fn build_chat_body(
+    endpoint: &str,
+    model: &str,
+    target_language: &str,
+    segment: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
         "model": model,
+        "temperature": 0,
         "messages": [
             {
                 "role": "system",
@@ -307,35 +373,113 @@ fn build_chat_body(model: &str, target_language: &str, segment: &str) -> serde_j
                 "content": segment,
             },
         ],
-    })
+    });
+    for (key, value) in reasoning_override(endpoint, model) {
+        body[key] = value;
+    }
+    body
 }
 
-/// Translates one segment in a single chat completions request and returns
-/// the model's plain-text answer with stray surrounding whitespace trimmed.
-/// The response is not parsed further: whatever the model writes for this one
-/// segment is the translation, so a reply that splits the input into several
-/// sentences or paragraphs still counts as a single result.
-async fn translate_segment(
+/// The chat completions body for a batch: the segments joined into one user
+/// message, each preceded by its own ⟪n⟫ delimiter line (n is the 1-based
+/// position within the joined message). Reasoning overrides apply exactly
+/// like in `build_chat_body`.
+fn build_batch_chat_body(
+    endpoint: &str,
+    model: &str,
+    target_language: &str,
+    segments: &[String],
+) -> serde_json::Value {
+    let mut content = String::new();
+    for (index, segment) in segments.iter().enumerate() {
+        if index > 0 {
+            content.push_str("\n\n");
+        }
+        content.push_str(&format!("⟪{}⟫\n{segment}", index + 1));
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "system",
+                "content": batch_system_prompt(target_language),
+            },
+            {
+                "role": "user",
+                "content": content,
+            },
+        ],
+    });
+    for (key, value) in reasoning_override(endpoint, model) {
+        body[key] = value;
+    }
+    body
+}
+
+/// Longest 429 `Retry-After` (in seconds) that is honoured with a wait and
+/// one retry; any longer wait is reported like any other provider error.
+const MAX_RETRY_AFTER_SECONDS: u64 = 10;
+
+/// The wait a 429 reply asks for before a retry, when `Retry-After` is an
+/// integer of at most `MAX_RETRY_AFTER_SECONDS` seconds. A date-formatted
+/// header, a longer wait, or any non-429 status means no retry.
+fn retry_after_seconds(response: &reqwest::Response) -> Option<u64> {
+    if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    let value = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?;
+    let seconds: u64 = value.parse().ok()?;
+    (seconds <= MAX_RETRY_AFTER_SECONDS).then_some(seconds)
+}
+
+/// POSTs one chat completions body with the API key. The client is shared
+/// process-wide, so the command's budget lives on the request instead of the
+/// client; a long translation may stream for a while, hence the generous
+/// timeout.
+async fn post_chat(
+    client: &reqwest::Client,
+    url: &str,
+    settings: &TranslationSettings,
+    body: &serde_json::Value,
+) -> Result<reqwest::Response, TranslateError> {
+    client
+        .post(url)
+        .bearer_auth(&settings.api_key)
+        .json(body)
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|source| TranslateError::Request { source })
+}
+
+/// Sends a chat completions request, retrying once after a 429 whose
+/// integer `Retry-After` is at most `MAX_RETRY_AFTER_SECONDS`. The async
+/// sleep yields the runtime thread; it happens at most once per request.
+async fn send_chat_request(
     client: &reqwest::Client,
     settings: &TranslationSettings,
-    segment: &str,
-) -> Result<String, TranslateError> {
+    body: &serde_json::Value,
+) -> Result<reqwest::Response, TranslateError> {
     let url = format!(
         "{}/chat/completions",
         settings.endpoint.trim_end_matches('/')
     );
-    let body = build_chat_body(&settings.model, &settings.target_language, segment);
-    let response = client
-        .post(&url)
-        .bearer_auth(&settings.api_key)
-        .json(&body)
-        // The client is shared process-wide, so the command's budget lives on
-        // the request instead of the client. A long translation may stream for
-        // a while, hence the generous timeout.
-        .timeout(Duration::from_secs(120))
-        .send()
-        .await
-        .map_err(|source| TranslateError::Request { source })?;
+    let response = post_chat(client, &url, settings, body).await?;
+    if let Some(seconds) = retry_after_seconds(&response) {
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+        return post_chat(client, &url, settings, body).await;
+    }
+    Ok(response)
+}
+
+/// Turns a chat completions response into the assistant's message content;
+/// non-success statuses and malformed payloads are `TranslateError`s.
+async fn chat_completion_content(response: reqwest::Response) -> Result<String, TranslateError> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -348,21 +492,129 @@ async fn translate_segment(
             .map_err(|source| TranslateError::BadResponse {
                 detail: format!("response JSON is invalid: {source}"),
             })?;
-    let content = payload
+    payload
         .pointer("/choices/0/message/content")
         .and_then(|value| value.as_str())
+        .map(str::to_owned)
         .ok_or_else(|| TranslateError::BadResponse {
             detail: "missing choices[0].message.content".into(),
-        })?;
-    Ok(content.trim().to_string())
+        })
+}
+
+/// Translates one segment in a single chat completions request and returns
+/// the model's plain-text answer with stray surrounding whitespace trimmed.
+/// The response is not parsed further: whatever the model writes for this one
+/// segment is the translation, so a reply that splits the input into several
+/// sentences or paragraphs still counts as a single result. This is also the
+/// fallback path when a batched reply fails marker validation.
+async fn translate_segment(
+    client: &reqwest::Client,
+    settings: &TranslationSettings,
+    segment: &str,
+) -> Result<String, TranslateError> {
+    let body = build_chat_body(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        segment,
+    );
+    let response = send_chat_request(client, settings, &body).await?;
+    Ok(chat_completion_content(response).await?.trim().to_string())
+}
+
+/// Returns n when a line is exactly a ⟪n⟫ marker (surrounding whitespace
+/// ignored); any other line is not a marker.
+fn marker_number(line: &str) -> Option<usize> {
+    let line = line.trim();
+    let inner = line.strip_prefix("⟪")?.strip_suffix("⟫")?;
+    inner.parse().ok()
+}
+
+/// Splits a batched reply on its ⟪n⟫ marker lines. Requires the exact
+/// sequence ⟪1⟫..⟪N⟫ with nothing before ⟪1⟫ and a non-empty, trimmed body
+/// between consecutive markers; any other shape (missing, duplicated, or
+/// out-of-order markers, a preamble, an empty body) is rejected.
+fn parse_batch_reply(reply: &str, expected: usize) -> Option<Vec<String>> {
+    let mut bodies: Vec<String> = vec![String::new(); expected];
+    let mut preamble = String::new();
+    let mut marker_seen = 0usize;
+    for raw_line in reply.lines() {
+        if let Some(number) = marker_number(raw_line) {
+            if number != marker_seen + 1 || number > expected {
+                return None;
+            }
+            marker_seen = number;
+        } else if marker_seen == 0 {
+            preamble.push_str(raw_line);
+            preamble.push('\n');
+        } else {
+            bodies[marker_seen - 1].push_str(raw_line);
+            bodies[marker_seen - 1].push('\n');
+        }
+    }
+    if !preamble.trim().is_empty() || marker_seen != expected {
+        return None;
+    }
+    let mut results = Vec::with_capacity(expected);
+    for body in bodies {
+        let body = body.trim().to_string();
+        if body.is_empty() {
+            return None;
+        }
+        results.push(body);
+    }
+    Some(results)
+}
+
+/// Translates several uncached segments in one chat completions request whose
+/// user message joins them with ⟪n⟫ delimiter lines, then splits the reply
+/// back. When the reply does not reproduce the exact marker sequence with
+/// non-empty bodies, falls back to one plain request per segment — today's
+/// protocol.
+async fn translate_batch_segments(
+    client: &reqwest::Client,
+    settings: &TranslationSettings,
+    segments: &[String],
+) -> Result<Vec<String>, TranslateError> {
+    let body = build_batch_chat_body(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        segments,
+    );
+    let response = send_chat_request(client, settings, &body).await?;
+    let content = chat_completion_content(response).await?;
+    if let Some(translations) = parse_batch_reply(&content, segments.len()) {
+        return Ok(translations);
+    }
+    let mut translations = Vec::with_capacity(segments.len());
+    for segment in segments {
+        translations.push(translate_segment(client, settings, segment).await?);
+    }
+    Ok(translations)
+}
+
+/// Caches one translation; write failures are logged and never fail the
+/// translation itself.
+fn store_translation(
+    cache: &TranslationCache,
+    settings: &TranslationSettings,
+    segment: &str,
+    value: &str,
+) {
+    let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+    if let Err(error) = cache.store(&key, value) {
+        log::warn!("failed to cache translation for segment {segment:?}: {error}");
+    }
 }
 
 /// Core translation flow, separated from the Tauri command so integration
 /// tests can drive it with a real client against a mock server. Consults the
-/// cache first; every uncached segment gets its own single chat completion
-/// request, and the plain-text answer is cached before being returned in
-/// original order. Cache write failures are logged and never fail a
-/// translation.
+/// cache first; the uncached segments are sent as one batched chat completion
+/// (or as one plain request when only a single segment is missing, or when
+/// the batched reply fails marker validation), and each translation is cached
+/// under its own key before the results are returned in original order. Cache
+/// write failures are logged and never fail a translation.
 pub async fn translate_segments_with_client(
     client: &reqwest::Client,
     settings: &TranslationSettings,
@@ -373,20 +625,33 @@ pub async fn translate_segments_with_client(
     // Best-effort housekeeping before anything is translated: sweeps the
     // cache down to its cap, throttled to at most once an hour per directory.
     cache.prune_if_due();
-    let mut translated = Vec::with_capacity(segments.len());
-    for segment in segments {
+    let mut results: Vec<Option<String>> = vec![None; segments.len()];
+    let mut uncached: Vec<(usize, String)> = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
         let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
         if let Some(hit) = cache.get(&key) {
-            translated.push(hit);
-            continue;
+            results[index] = Some(hit);
+        } else {
+            uncached.push((index, segment.clone()));
         }
-        let value = translate_segment(client, settings, segment).await?;
-        if let Err(error) = cache.store(&key, &value) {
-            log::warn!("failed to cache translation for segment {segment:?}: {error}");
-        }
-        translated.push(value);
     }
-    Ok(translated)
+    if uncached.len() == 1 {
+        let (index, segment) = &uncached[0];
+        let value = translate_segment(client, settings, segment).await?;
+        results[*index] = Some(value.clone());
+        store_translation(cache, settings, segment, &value);
+    } else if uncached.len() > 1 {
+        let texts: Vec<String> = uncached.iter().map(|(_, text)| text.clone()).collect();
+        let values = translate_batch_segments(client, settings, &texts).await?;
+        for ((index, segment), value) in uncached.iter().zip(values) {
+            results[*index] = Some(value.clone());
+            store_translation(cache, settings, segment, &value);
+        }
+    }
+    Ok(results
+        .into_iter()
+        .map(|result| result.expect("every segment is translated or served from cache"))
+        .collect())
 }
 
 /// Lists the model ids advertised by an OpenAI-compatible endpoint (GET
@@ -550,9 +815,11 @@ mod tests {
     }
 
     #[test]
-    fn chat_body_carries_model_prompt_and_segment_as_text() {
-        let body = build_chat_body("m", "中文", "hello **world**");
+    fn chat_body_carries_model_prompt_and_segment_as_text_with_temperature_zero() {
+        let body = build_chat_body("https://api.openai.com/v1", "m", "中文", "hello **world**");
         assert_eq!(body["model"], "m");
+        assert_eq!(body["temperature"], 0);
+        assert!(body.get("thinking").is_none());
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "system");
@@ -562,9 +829,178 @@ mod tests {
         assert!(system.contains("inline code"));
         assert!(system.contains("$...$"));
         assert!(system.contains("HTML"));
-        assert!(system.contains("no surrounding quotes"));
+        assert!(system.contains("Output only the translation"));
         assert_eq!(messages[1]["role"], "user");
         assert_eq!(messages[1]["content"], "hello **world**");
+    }
+
+    #[test]
+    fn batch_chat_body_joins_segments_with_marker_lines_and_temperature_zero() {
+        let body = build_batch_chat_body(
+            "https://api.openai.com/v1",
+            "m",
+            "中文",
+            &["one".into(), "two".into()],
+        );
+        assert_eq!(body["model"], "m");
+        assert_eq!(body["temperature"], 0);
+        assert!(body.get("thinking").is_none());
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        let system = messages[0]["content"].as_str().unwrap();
+        assert!(system.contains("中文"));
+        assert!(system.contains("only the text between markers"));
+        assert_eq!(
+            messages[1]["content"].as_str().unwrap(),
+            "⟪1⟫\none\n\n⟪2⟫\ntwo"
+        );
+    }
+
+    #[test]
+    fn reasoning_override_hosts_and_models() {
+        let overrides = |endpoint: &str, model: &str| reasoning_override(endpoint, model);
+        // 智谱 and DeepSeek hosts get the thinking toggle, any model.
+        for endpoint in [
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://api.bigmodel.cn/v1",
+            "https://open.z.ai/api/paas/v4",
+            "https://anything.z.ai/v1",
+            "https://api.deepseek.com/v1",
+            "https://api.deepseek.com",
+        ] {
+            let fields = overrides(endpoint, "glm-4.7-flash");
+            assert_eq!(fields.len(), 1, "{endpoint} must override thinking");
+            assert_eq!(fields[0].1, serde_json::json!({ "type": "disabled" }));
+        }
+        // OpenAI: only reasoning-model names get the effort floor.
+        assert_eq!(
+            overrides("https://api.openai.com/v1", "gpt-5-mini"),
+            vec![("reasoning_effort", serde_json::json!("low"))]
+        );
+        assert_eq!(
+            overrides("https://api.openai.com/v1", "o3"),
+            vec![("reasoning_effort", serde_json::json!("low"))]
+        );
+        for model in ["gpt-4o-mini", "gpt-4.1", "chatgpt-4o-latest"] {
+            assert!(
+                overrides("https://api.openai.com/v1", model).is_empty(),
+                "{model} must not carry reasoning_effort"
+            );
+        }
+        // The apex domains, other providers, loopback, and unparseable URLs
+        // never get an override; a reasoning model name on a non-OpenAI host
+        // is not OpenAI's concern either.
+        for endpoint in [
+            "https://bigmodel.cn/v1",
+            "https://z.ai/v1",
+            "https://api.openai.com/v1",
+            "https://tokenhub.tencentmaas.com/v1",
+            "http://localhost:11434/v1",
+            "not a url",
+            "",
+        ] {
+            assert!(
+                overrides(endpoint, "m").is_empty(),
+                "{endpoint:?} must not carry an override"
+            );
+        }
+        assert!(overrides("https://api.deepseek.com/v1", "gpt-5-mini")[0].0 == "thinking");
+        assert!(overrides("https://example.com/v1", "gpt-5-mini").is_empty());
+    }
+
+    #[test]
+    fn chat_body_disables_reasoning_per_provider() {
+        for endpoint in [
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://open.z.ai/api/paas/v4",
+            "https://api.deepseek.com/v1",
+        ] {
+            let body = build_chat_body(endpoint, "m", "中文", "hello");
+            assert_eq!(
+                body["thinking"]["type"], "disabled",
+                "{endpoint} must disable thinking"
+            );
+        }
+        let body = build_chat_body("https://api.openai.com/v1", "gpt-5-mini", "中文", "hello");
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("thinking").is_none());
+        // Non-reasoning models and other providers carry no override at all.
+        for (endpoint, model) in [
+            ("https://api.openai.com/v1", "gpt-4o-mini"),
+            ("https://tokenhub.tencentmaas.com/v1", "hy-mt2-lite"),
+            ("http://localhost:11434/v1", "m"),
+        ] {
+            let body = build_chat_body(endpoint, model, "中文", "hello");
+            assert!(
+                body.get("thinking").is_none() && body.get("reasoning_effort").is_none(),
+                "{endpoint}/{model} must not carry a reasoning override"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_chat_body_disables_reasoning_per_provider() {
+        for endpoint in [
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://api.deepseek.com/v1",
+        ] {
+            let body = build_batch_chat_body(endpoint, "m", "中文", &["one".into()]);
+            assert_eq!(
+                body["thinking"]["type"], "disabled",
+                "{endpoint} must disable thinking"
+            );
+        }
+        let body = build_batch_chat_body(
+            "https://api.openai.com/v1",
+            "gpt-5-mini",
+            "中文",
+            &["one".into()],
+        );
+        assert_eq!(body["reasoning_effort"], "low");
+        let body = build_batch_chat_body(
+            "https://tokenhub.tencentmaas.com/v1",
+            "m",
+            "中文",
+            &["one".into()],
+        );
+        assert!(
+            body.get("thinking").is_none() && body.get("reasoning_effort").is_none(),
+            "TokenHub must not carry a reasoning override"
+        );
+    }
+
+    #[test]
+    fn batch_reply_parses_exact_marker_sequences_with_non_empty_bodies() {
+        assert_eq!(
+            parse_batch_reply("⟪1⟫\n一\n\n⟪2⟫\n二、三\n", 2),
+            Some(vec!["一".into(), "二、三".into()])
+        );
+        // multi-line bodies keep their inner line breaks
+        assert_eq!(
+            parse_batch_reply("⟪1⟫\n第一行\n第二行\n⟪2⟫\n二", 2),
+            Some(vec!["第一行\n第二行".into(), "二".into()])
+        );
+        // trailing blank lines and stray whitespace around markers are fine
+        assert_eq!(
+            parse_batch_reply("  \n⟪1⟫  \n你好\n", 1),
+            Some(vec!["你好".into()])
+        );
+    }
+
+    #[test]
+    fn batch_reply_rejects_missing_duplicated_or_foreign_markers() {
+        // no markers at all
+        assert_eq!(parse_batch_reply("一\n二", 2), None);
+        // out-of-order markers
+        assert_eq!(parse_batch_reply("⟪2⟫\n二\n⟪1⟫\n一", 2), None);
+        // a duplicated marker
+        assert_eq!(parse_batch_reply("⟪1⟫\n一\n⟪1⟫\n一", 2), None);
+        // a marker beyond the batch's count
+        assert_eq!(parse_batch_reply("⟪1⟫\n一\n⟪2⟫\n二\n⟪3⟫\n三", 2), None);
+        // text before the first marker
+        assert_eq!(parse_batch_reply("译文：\n⟪1⟫\n一\n⟪2⟫\n二", 2), None);
+        // an empty body
+        assert_eq!(parse_batch_reply("⟪1⟫\n\n⟪2⟫\n二", 2), None);
     }
 
     #[test]

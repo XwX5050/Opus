@@ -163,6 +163,17 @@ fn http_status(status: u16, reason: &str) -> Vec<u8> {
     response
 }
 
+/// A 429 Too Many Requests reply, optionally carrying an integer Retry-After.
+fn http_429(retry_after: Option<u64>) -> Vec<u8> {
+    let header = retry_after
+        .map(|seconds| format!("Retry-After: {seconds}\r\n"))
+        .unwrap_or_default();
+    format!(
+        "HTTP/1.1 429 Too Many Requests\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes()
+}
+
 /// A 307 Temporary Redirect whose Location points elsewhere; a client that
 /// follows redirects would make a second request against that target.
 fn http_redirect(location: &str) -> Vec<u8> {
@@ -271,27 +282,27 @@ async fn full_cache_hit_never_touches_the_network() {
 }
 
 #[tokio::test]
-async fn uncached_segments_are_translated_one_request_each_and_then_cached() {
+async fn uncached_segments_are_batched_into_one_request_and_then_cached() {
     let dir = tempfile::tempdir().unwrap();
     let cache = TranslationCache::new(dir.path().join("translation-cache"));
     let server = MockServer::spawn();
     let settings = settings(&server.endpoint());
     let texts = ["one", "two"];
-    server.queue(chat_text_response("一"));
-    server.queue(chat_text_response("二"));
+    server.queue(chat_text_response("⟪1⟫\n一\n\n⟪2⟫\n二"));
 
     let client = client();
     let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
         .await
         .unwrap();
     assert_eq!(result, ["一", "二"]);
-    // One plain-text chat completion per uncached segment.
-    assert_eq!(server.request_count(), 2);
+    // The whole uncached remainder goes out as one batched chat completion.
+    assert_eq!(server.request_count(), 1);
 
-    // The first request carries the new system prompt and the raw segment
-    // text as the user message — no JSON array envelope.
+    // The request carries the batched system prompt, both segments joined by
+    // ⟪n⟫ delimiter lines, and temperature 0.
     let first: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
     assert_eq!(first["model"], "test-model");
+    assert_eq!(first["temperature"], 0);
     let messages = first["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
     let system = messages[0]["content"].as_str().unwrap();
@@ -300,18 +311,165 @@ async fn uncached_segments_are_translated_one_request_each_and_then_cached() {
     assert!(system.contains("inline code"));
     assert!(system.contains("$...$"));
     assert!(system.contains("HTML"));
-    assert!(system.contains("no surrounding quotes"));
-    assert_eq!(messages[1]["role"], "user");
-    assert_eq!(messages[1]["content"], "one");
-    let second: serde_json::Value = serde_json::from_slice(&server.request_body(1)).unwrap();
-    assert_eq!(second["messages"][1]["content"], "two");
+    assert!(system.contains("only the text between markers"));
+    let user = messages[1]["content"].as_str().unwrap();
+    assert!(user.contains("⟪1⟫\none"));
+    assert!(user.contains("⟪2⟫\ntwo"));
 
-    // a second run is served entirely from the cache
+    // The per-segment cache means a second run touches the network not at
+    // all, even though the first run answered both segments together.
     let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
         .await
         .unwrap();
     assert_eq!(result, ["一", "二"]);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn loopback_requests_never_carry_the_zhipu_thinking_field() {
+    // The mock server listens on loopback, so its endpoint URL can never match
+    // the 智谱 host check; the positive (bigmodel.cn / z.ai) case is covered by
+    // the unit tests, which drive the body builders directly.
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(chat_text_response("⟪1⟫\n一\n\n⟪2⟫\n二"));
+
+    let client = client();
+    let result =
+        translate_segments_with_client(&client, &settings, &segments(&["one", "two"]), &cache)
+            .await
+            .unwrap();
+    assert_eq!(result, ["一", "二"]);
+    assert_eq!(server.request_count(), 1);
+
+    let body: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
+    assert!(
+        body.get("thinking").is_none(),
+        "a loopback endpoint must not receive a thinking field: {body}"
+    );
+}
+
+#[tokio::test]
+async fn single_uncached_segment_sends_a_plain_request_with_no_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(chat_text_response("你好"));
+
+    let client = client();
+    let result = translate_segments_with_client(&client, &settings, &segments(&["hello"]), &cache)
+        .await
+        .unwrap();
+    assert_eq!(result, ["你好"]);
+    assert_eq!(server.request_count(), 1);
+
+    // A lone segment is sent as plain text: no markers anywhere, temperature 0.
+    let body: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
+    assert_eq!(body["temperature"], 0);
+    let messages = body["messages"].as_array().unwrap();
+    let system = messages[0]["content"].as_str().unwrap();
+    let user = messages[1]["content"].as_str().unwrap();
+    assert!(
+        !system.contains('⟪'),
+        "system prompt must not mention markers"
+    );
+    assert!(!user.contains('⟪'), "raw segment must be sent unmarked");
+    assert_eq!(user, "hello");
+    // The base prompt keeps the translation contract without the batching
+    // sentence.
+    assert!(system.contains("Output only the translation"));
+    assert!(!system.contains("between markers"));
+}
+
+#[tokio::test]
+async fn batched_reply_marker_mismatches_fall_back_to_one_request_per_segment() {
+    // (batched reply, per-segment replies); each scenario needs its own
+    // server because a queued response is consumed by exactly one request.
+    let scenarios: &[(&str, &[&str])] = &[
+        // no markers at all
+        ("一\n二", &["一", "二"]),
+        // markers out of order
+        ("⟪2⟫\n二\n⟪1⟫\n一", &["一", "二"]),
+        // one marker too many
+        ("⟪1⟫\n一\n⟪2⟫\n二\n⟪3⟫\n三", &["一", "二"]),
+    ];
+    let client = client();
+    for (batched_reply, per_segment) in scenarios {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TranslationCache::new(dir.path().join("translation-cache"));
+        let server = MockServer::spawn();
+        let settings = settings(&server.endpoint());
+        server.queue(chat_text_response(batched_reply));
+        for reply in *per_segment {
+            server.queue(chat_text_response(reply));
+        }
+
+        let result =
+            translate_segments_with_client(&client, &settings, &segments(&["one", "two"]), &cache)
+                .await
+                .unwrap();
+        assert_eq!(result, ["一", "二"]);
+        // One batched request that failed validation, then one plain request
+        // per segment.
+        assert_eq!(server.request_count(), 1 + per_segment.len());
+        // The fallback requests carry no markers and the raw segment text.
+        for (index, text) in ["one", "two"].iter().enumerate() {
+            let body: serde_json::Value =
+                serde_json::from_slice(&server.request_body(1 + index)).unwrap();
+            let user = body["messages"][1]["content"].as_str().unwrap();
+            assert!(!user.contains('⟪'), "fallback must be unmarked: {user}");
+            assert_eq!(user, *text);
+        }
+    }
+}
+
+#[tokio::test]
+async fn http_429_with_integer_retry_after_is_retried_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    // The first answer asks for a one-second wait; the retry succeeds.
+    server.queue(http_429(Some(1)));
+    server.queue(chat_text_response("你好"));
+
+    let client = client();
+    let result = translate_segments_with_client(&client, &settings, &segments(&["hello"]), &cache)
+        .await
+        .unwrap();
+    assert_eq!(result, ["你好"]);
     assert_eq!(server.request_count(), 2);
+    // The retry re-sends the same body.
+    let first: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
+    let second: serde_json::Value = serde_json::from_slice(&server.request_body(1)).unwrap();
+    assert_eq!(first, second);
+}
+
+#[tokio::test]
+async fn http_429_without_an_eligible_retry_after_is_not_retried() {
+    // (Retry-After, expected request count): a missing header or a wait
+    // longer than the 10-second cap gets no retry.
+    let cases: &[(Option<u64>, usize)] = &[(None, 1), (Some(60), 1)];
+    let client = client();
+    for (retry_after, requests) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TranslationCache::new(dir.path().join("translation-cache"));
+        let server = MockServer::spawn();
+        let settings = settings(&server.endpoint());
+        server.queue(http_429(*retry_after));
+
+        let error = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("429"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(server.request_count(), *requests);
+    }
 }
 
 #[tokio::test]
