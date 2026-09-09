@@ -2780,6 +2780,60 @@ describe("useAppController rename watch retargeting", () => {
     ]);
     hook.unmount();
   });
+
+  it("keeps the retargeted watch record when the stale original registration rejects", async () => {
+    class GatedWatchPort extends MemoryDocumentPort {
+      rejectFirstWatch: ((error: DocumentPortError) => void) | null = null;
+      firstWatchGated = false;
+      override async watchDocument(consumerId: string, path: string): Promise<void> {
+        if (!this.firstWatchGated) {
+          this.firstWatchGated = true;
+          await new Promise<void>((_resolve, reject) => {
+            this.rejectFirstWatch = reject;
+          });
+        }
+        return super.watchDocument(consumerId, path);
+      }
+    }
+    const port = new GatedWatchPort(
+      new Map([["/notes/a.md", renameFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    // The open-time watch registration is still in flight on the backend.
+    await waitFor(() => expect(port.rejectFirstWatch).not.toBeNull());
+
+    // A moved event retargets the watch to the new path while the original
+    // registration is still pending; the retarget's ops queue behind it.
+    act(() =>
+      port.emitDiskEvent({ kind: "moved", from: "/notes/a.md", to: "/notes/renamed.md" }),
+    );
+    expect(hook.result.current.state.tabs[0].path).toBe("/notes/renamed.md");
+
+    // The stale registration now fails: its catch must not clear the fresh
+    // {renamed.md} record, or the tab's later close would skip the unwatch.
+    await act(async () => {
+      port.rejectFirstWatch!(new DocumentPortError("io", "watch failed"));
+    });
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "unwatch", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
+      ]),
+    );
+
+    // Closing the tab still releases the (retargeted) watch.
+    act(() => hook.result.current.close(tab.id));
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "unwatch", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
+        { kind: "unwatch", consumerId: tab.id },
+      ]),
+    );
+    hook.unmount();
+  });
 });
 
 describe("useAppController reopen from disk", () => {

@@ -293,13 +293,21 @@ export function useAppController(
   ) => {
     const current = watchedTargets.current.get(id);
     if (current?.target === target && current.kind === kind) return;
-    watchedTargets.current.set(id, { target, kind });
+    const record = { target, kind };
+    watchedTargets.current.set(id, record);
     enqueueScopeOperation(id, async () => {
       try {
         if (kind === "workspace") await port.watchWorkspace(id, target);
         else await port.watchDocument(id, target);
       } catch {
-        watchedTargets.current.delete(id);
+        // Only a failure of the registration this record represents clears it.
+        // A rename / disk move / save-as retarget that already replaced the
+        // record owns a newer backend registration, and deleting it here would
+        // orphan that bookkeeping: the tab's later close would skip its
+        // unwatch and leak the backend watch for the consumer id.
+        if (watchedTargets.current.get(id) === record) {
+          watchedTargets.current.delete(id);
+        }
       }
     });
   }, [enqueueScopeOperation, port]);
