@@ -104,6 +104,87 @@ describe("splitMarkdownSegments", () => {
     ]);
   });
 
+  it("does not treat a fence line with trailing content as a closing fence", () => {
+    const doc = "~~~text\ncode one\n~~~not-a-closing-fence\ncode two\n~~~\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments).toEqual([{ kind: "protected", text: doc }]);
+    expect(joined(segments)).toBe(doc);
+
+    const backticks = "```\ncode\n``` suffix\nmore code\n```\n\nafter\n";
+    const tickSegments = splitMarkdownSegments(backticks);
+    expect(tickSegments[0]).toEqual({
+      kind: "protected",
+      text: "```\ncode\n``` suffix\nmore code\n```\n",
+    });
+    expect(tickSegments.at(-1)).toEqual({
+      kind: "translatable",
+      text: "after\n",
+    });
+  });
+
+  it("accepts trailing spaces or tabs on a closing fence line", () => {
+    const spaces = "```\ncode\n```  \nafter\n";
+    const spaceSegments = splitMarkdownSegments(spaces);
+    expect(spaceSegments[0]).toEqual({
+      kind: "protected",
+      text: "```\ncode\n```  \n",
+    });
+    expect(spaceSegments.at(-1)).toEqual({
+      kind: "translatable",
+      text: "after\n",
+    });
+
+    const tabs = "~~~\ncode\n~~~\t\n";
+    expect(splitMarkdownSegments(tabs)).toEqual([
+      { kind: "protected", text: tabs },
+    ]);
+    // A trailing-space close at EOF without a final newline closes too.
+    const eof = "```\ncode\n```   ";
+    expect(splitMarkdownSegments(eof)).toEqual([
+      { kind: "protected", text: eof },
+    ]);
+  });
+
+  it("protects fenced code inside a blockquote including its markers", () => {
+    const doc = "> ~~~text\n> code inside a blockquote\n> ~~~\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments).toEqual([{ kind: "protected", text: doc }]);
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("keeps blockquoted fenced code protected, later paragraphs translatable", () => {
+    const doc = "> ```ts\n> const x = 1;\n> ```\n\nafter\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "> ```ts\n> const x = 1;\n> ```\n",
+    });
+    expect(texts(segments, "protected")).toContain("\n");
+    expect(texts(segments, "translatable")).toEqual(["after\n"]);
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("protects fences nested inside nested blockquotes", () => {
+    const doc = "> > ```\n> > code\n> > ```\n";
+    expect(splitMarkdownSegments(doc)).toEqual([
+      { kind: "protected", text: doc },
+    ]);
+  });
+
+  it("keeps a quoted fence-line with trailing content inside the fence", () => {
+    const doc = "> ```\n> code\n> ```extra\n> more\n> ```\n";
+    expect(splitMarkdownSegments(doc)).toEqual([
+      { kind: "protected", text: doc },
+    ]);
+  });
+
+  it("does not close a top-level fence with a blockquoted fence-looking line", () => {
+    const doc = "```\nx\n> ```\ny\n```\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments).toEqual([{ kind: "protected", text: doc }]);
+    expect(joined(segments)).toBe(doc);
+  });
+
   it("protects whole-block display math including the delimiters", () => {
     const doc = "$$\nE = mc^2\n$$\n\ntext\n";
     const segments = splitMarkdownSegments(doc);

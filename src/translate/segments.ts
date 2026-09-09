@@ -6,8 +6,9 @@
  * - "translatable": paragraph blocks (runs of non-blank lines).
  * - "protected": structure that must pass through untranslated — YAML
  *   frontmatter at the document start, fenced code blocks (``` and ~~~,
- *   including fences left open to EOF), whole-block display math ($$...$$,
- *   including unclosed), HTML comment blocks, and blank-line separators.
+ *   plain or blockquote-quoted, including fences left open to EOF),
+ *   whole-block display math ($$...$$, including unclosed), HTML comment
+ *   blocks, and blank-line separators.
  *
  * The concatenation of every segment's text reproduces the input exactly, so
  * `reassembleTranslation` can swap translations back in losslessly.
@@ -22,7 +23,38 @@ export interface Segment {
 
 type ScanState = "normal" | "frontmatter" | "fence" | "math" | "comment";
 
-const FENCE_RE = /^[ \t]*(`{3,}|~{3,})/;
+/**
+ * An opening Markdown code fence: optional indentation, an optional run of
+ * CommonMark blockquote markers (`>` each followed by optional whitespace —
+ * nested `> > ` quoted fences included), then three or more backticks or
+ * tildes; the rest of the line is the info string, as in CommonMark. Only
+ * the line's classification is consumed — the original line stays attached
+ * to the protected segment, so quoting never loses bytes.
+ */
+const FENCE_RE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})/;
+
+/** Whether a fence line opens under a blockquote marker (`> ` prefix). */
+const hasBlockquoteMarker = (line: string): boolean => /^[ \t]*>/.test(line);
+
+/**
+ * Closing line of a fence that was opened without a blockquote prefix: the
+ * fence run must follow only indentation — a `>`-prefixed line is code
+ * inside a top-level fence, never its close — and be followed only by
+ * spaces/tabs plus the line's own trailing line break. Closing fences carry
+ * no info string, so `~~~not-a-closing-fence` never closes a fence.
+ * Character and length matching against the opening run are the caller's
+ * job.
+ */
+const FENCE_CLOSE_RE = /^[ \t]*(`{3,}|~{3,})[ \t]*\r?\n?$/;
+
+/**
+ * Closing line of a fence that was opened inside a blockquote: at least one
+ * `>` marker, like every line of a quoted fence, then the same trailing
+ * rules as `FENCE_CLOSE_RE`.
+ */
+const FENCE_QUOTED_CLOSE_RE =
+  /^[ \t]*(?:>[ \t]*)+(`{3,}|~{3,})[ \t]*\r?\n?$/;
+
 const COMMENT_OPEN_RE = /^[ \t]*<!--/;
 
 /**
@@ -57,6 +89,9 @@ export function splitMarkdownSegments(text: string): Segment[] {
   let state: ScanState = "normal";
   let fenceChar = "";
   let fenceLength = 0;
+  // True while the open fence line carried a blockquote marker, so its
+  // closing line must too (a marker-less line would end the quote instead).
+  let fenceQuoted = false;
 
   const flush = (): void => {
     if (pending.length === 0) return;
@@ -85,7 +120,9 @@ export function splitMarkdownSegments(text: string): Segment[] {
         break;
       case "fence": {
         pending.push(line);
-        const closing = FENCE_RE.exec(line);
+        const closing = (fenceQuoted ? FENCE_QUOTED_CLOSE_RE : FENCE_CLOSE_RE).exec(
+          line,
+        );
         if (
           closing &&
           closing[1][0] === fenceChar &&
@@ -135,6 +172,7 @@ export function splitMarkdownSegments(text: string): Segment[] {
           startProtectedBlock(line);
           fenceChar = fence[1][0];
           fenceLength = fence[1].length;
+          fenceQuoted = hasBlockquoteMarker(line);
           state = "fence";
           break;
         }
