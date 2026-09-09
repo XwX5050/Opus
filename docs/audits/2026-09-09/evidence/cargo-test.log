@@ -1,0 +1,230 @@
+   Compiling app v0.1.15 (/Users/xiongweini/workspace/Markdown_edit/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.08s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/markdown_edit_lib-3bd4dd0b8f8a7b5c)
+
+running 40 tests
+test translate::tests::batch_reply_parses_exact_marker_sequences_with_non_empty_bodies ... ok
+test translate::tests::batch_reply_rejects_missing_duplicated_or_foreign_markers ... ok
+test translate::tests::batch_chat_body_joins_segments_with_marker_lines_and_temperature_zero ... ok
+test translate::tests::batch_chat_body_disables_reasoning_per_provider ... ok
+test open_events::tests::normalizes_urls_deduplicates_and_rejects_invalid_inputs ... ok
+test translate::tests::cache_key_is_stable_and_distinguishes_inputs ... ok
+test translate::tests::chat_body_carries_model_prompt_and_segment_as_text_with_temperature_zero ... ok
+test document_io::tests::document_io_reads_temporary_mtime_before_rename ... ok
+test perf_mark::tests::writes_timestamp_only_when_mark_path_is_set ... ok
+test translate::tests::chat_body_disables_reasoning_per_provider ... ok
+test translate::tests::endpoint_validation_allows_https_and_loopback_http_only ... ok
+test translate::tests::reasoning_override_hosts_and_models ... ok
+test watch::tests::a_rename_whose_target_vanishes_reports_missing_for_the_source ... ok
+test document_io::tests::checked_write_syncs_the_parent_directory_and_reports_the_committed_version ... ok
+test watch::tests::bursts_for_one_path_coalesce_and_do_not_extend_the_deadline ... ok
+test watch::tests::create_then_delete_inside_one_window_reports_missing ... ok
+test watch::tests::delete_then_recreate_inside_one_window_reports_changed ... ok
+test watch::tests::a_failed_platform_watch_releases_the_registry_reference ... ok
+test watch::tests::document_matching_is_exact_and_workspace_matching_is_recursive ... ok
+test watch::tests::a_failed_recursive_upgrade_keeps_refcounts_and_restores_the_watch ... ok
+test watch::tests::document_watch_requires_an_absolute_path ... ok
+test translate::tests::eviction_is_a_no_op_for_missing_directories_and_never_removes_directories ... ok
+test open_events::tests::partitions_dropped_paths_into_image_files_and_everything_else ... ok
+test watch::tests::events_hold_until_the_window_elapses_then_report_disk_state ... ok
+test watch::tests::release_one_removes_a_single_key ... ok
+test watch::tests::releasing_an_unknown_consumer_fails ... ok
+test watch::tests::renames_emit_moved_and_supersede_pending_entries ... ok
+test watch::tests::document_watch_targets_the_parent_directory ... ok
+test watch::tests::unwatching_an_unknown_consumer_fails ... ok
+test document_io::tests::checked_write_syncs_the_directory_after_a_conflict_check_commit ... ok
+test watch::tests::watches_are_reference_counted_per_consumer ... ok
+test window_background::tests::default_canvas_parses ... ok
+test window_background::tests::parses_valid_hex_colors ... ok
+test window_background::tests::rejects_malformed_input ... ok
+test watch::tests::service_starts_and_stops_watches_with_consumer_lifetimes ... ok
+test watch::tests::service_upgrades_a_target_to_recursive_when_a_workspace_arrives ... ok
+test watch::tests::workspace_watch_targets_the_root_recursively ... ok
+test translate::tests::eviction_removes_the_oldest_entries_down_to_the_limit ... ok
+test fonts::tests::lists_installed_font_family_names ... ok
+test watch::tests::real_watcher_delivers_changed_and_missing_for_a_watched_document ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running unittests src/main.rs (src-tauri/target/debug/deps/app-f3acb231b73ca2cf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/asset_scope.rs (src-tauri/target/debug/deps/asset_scope-f7effba7fec07d14)
+
+running 11 tests
+test non_absolute_paths_are_rejected ... ok
+test releasing_an_unknown_consumer_is_an_error ... ok
+test tauri_product_identity_is_opus_without_changing_the_bundle_identifier ... ok
+test tauri_conf_asset_protocol_scope_is_empty ... ok
+test dot_dot_escapes_are_rejected ... ok
+test symlink_escapes_are_rejected ... ok
+test opening_a_document_allows_only_its_parent_directory ... ok
+test shared_parent_scope_is_removed_only_after_last_tab_closes ... ok
+test capabilities_allow_titlebar_window_dragging ... ok
+test a_workspace_grants_recursive_access_only_inside_its_root ... ok
+test capabilities_default_json_has_no_home_or_whole_filesystem_glob ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clipboard_image.rs (src-tauri/target/debug/deps/clipboard_image-3253eca47f3dd853)
+
+running 7 tests
+test clipboard_image_rejects_relative_paths ... ok
+test clipboard_image_rejects_empty_payloads ... ok
+test clipboard_image_rejects_extension_and_mime_mismatches_without_writing ... ok
+test clipboard_image_reports_a_missing_parent ... ok
+test clipboard_image_is_written_to_a_validated_png_path ... ok
+test write_image_bytes_preserves_existing_unix_mode_bits ... ok
+test clipboard_image_accepts_jpg_and_jpeg_extensions_for_jpeg_bytes ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/document_commands.rs (src-tauri/target/debug/deps/document_commands-021ffa1c0ccfaa11)
+
+running 16 tests
+test rejects_relative_and_non_markdown_paths ... ok
+test failed_asset_scope_mirroring_releases_the_registry_reference ... ok
+test open_workspace_replaces_the_previous_anchor ... ok
+test anchored_commands_require_the_canonical_root ... ok
+test new_target_does_not_overwrite_an_existing_file ... ok
+test save_rejects_stale_version_without_replacing_bytes ... ok
+test close_workspace_clears_the_anchor ... ok
+test new_target_saves_successfully ... ok
+test replacing_a_file_with_same_content_changes_version_and_conflicts ... ok
+test open_document_returns_canonical_path_when_opened_through_symlinked_directory ... ok
+test workspace_commands_fail_closed_before_any_workspace_is_open ... ok
+test symlink_open_and_save_checks_and_updates_target_without_replacing_link ... ok
+test version_changes_when_equal_length_bytes_change_even_with_same_mtime_millis ... ok
+test workspace_commands_deny_roots_that_do_not_match_the_anchor ... ok
+test valid_open_and_current_version_save_round_trip ... ok
+test symlink_retarget_to_same_content_changes_version_and_conflicts ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/document_io.rs (src-tauri/target/debug/deps/document_io-ad48f850b70aef99)
+
+running 19 tests
+test document_io_detects_the_dominant_style_in_mixed_newlines ... ok
+test document_io_reads_lf_without_bom ... ok
+test document_io_reads_a_missing_file_as_not_found ... ok
+test document_io_rejects_invalid_utf8_without_modifying_existing_bytes ... ok
+test document_io_defaults_to_lf_when_text_has_no_newline ... ok
+test document_io_reads_utf8_bom_and_crlf_without_normalizing_text ... ok
+test checked_new_save_does_not_clobber_file_created_at_commit_and_cleans_temp ... ok
+test document_io_write_reports_a_missing_parent ... ok
+test document_io_resolves_a_mixed_newline_tie_using_the_first_style ... ok
+test document_io_cleans_up_temporary_sibling_after_rename_to_a_directory_fails ... ok
+test checked_existing_save_rejects_modification_at_commit_and_cleans_temp ... ok
+test document_io_write_to_read_only_target_keeps_bytes_and_cleans_up_temp_siblings ... ok
+test document_io_write_preserves_requested_bom_and_newlines ... ok
+test document_io_write_preserves_existing_unix_mode_bits_and_reports_metadata_time ... ok
+test document_io_writing_crlf_never_doubles_existing_carriage_returns ... ok
+test document_io_writing_lf_normalizes_input_crlf_to_lf ... ok
+test checked_symlink_save_rejects_retarget_at_commit ... ok
+test document_io_writing_crlf_preserves_a_literal_carriage_return_before_a_newline ... ok
+test document_io_writing_a_symlink_updates_its_target_without_replacing_the_link ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/open_events.rs (src-tauri/target/debug/deps/open_events-01e1298446835496)
+
+running 2 tests
+test queues_before_ready_then_flushes_once_with_deduplication ... ok
+test classifies_real_metadata_not_extensions ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/recovery.rs (src-tauri/target/debug/deps/recovery-31bc94093835d364)
+
+running 12 tests
+test invalid_draft_ids_are_rejected_before_any_write ... ok
+test discarding_an_unknown_draft_is_not_found ... ok
+test listing_an_empty_or_missing_store_is_empty ... ok
+test listing_skips_text_decoding_so_odd_text_payloads_still_list ... ok
+test drafts_round_trip_through_write_list_and_read ... ok
+test unsaved_documents_round_trip_with_a_null_original_path ... ok
+test drafts_live_under_the_store_directory_and_never_touch_original_documents ... ok
+test a_fresh_store_on_the_same_directory_lists_drafts_after_restart ... ok
+test corrupt_files_are_skipped_in_listings_but_reported_on_read ... ok
+test writes_are_atomic_and_leave_no_temp_files_behind ... ok
+test orphaned_temp_files_are_removed_by_listing_but_nothing_else_is ... ok
+test updating_a_draft_replaces_it_and_keeps_a_single_listing ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/rename_document.rs (src-tauri/target/debug/deps/rename_document-7fa764d9c915b329)
+
+running 11 tests
+test rename_document_rejects_a_target_colliding_with_a_directory ... ok
+test rename_document_rejects_relative_paths ... ok
+test rename_document_rejects_empty_and_separator_carrying_names ... ok
+test rename_document_rejects_missing_paths ... ok
+test rename_document_rejects_non_markdown_paths ... ok
+test rename_document_rejects_hidden_names ... ok
+test rename_document_rejects_directories ... ok
+test rename_document_keeps_the_original_markdown_extension ... ok
+test rename_document_rejects_a_target_that_already_exists ... ok
+test rename_document_renames_in_place_and_returns_the_new_path ... ok
+test rename_document_to_the_same_name_succeeds_as_a_no_op ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/translate.rs (src-tauri/target/debug/deps/translate-d3ff8203da01b535)
+
+running 22 tests
+test cache_key_derivation_is_stable ... ok
+test list_models_rejects_insecure_endpoints_before_any_request ... ok
+test list_models_redirects_are_reported_and_never_followed ... ok
+test list_models_gets_the_models_path_with_bearer_auth_and_parses_ids_sorted ... ok
+test list_models_rejects_malformed_payloads ... ok
+test invalid_endpoints_are_rejected_before_any_request ... ok
+test list_models_reports_provider_http_errors ... ok
+test http_429_without_an_eligible_retry_after_is_not_retried ... ok
+test missing_choices_content_is_reported_as_a_bad_response ... ok
+test cached_entries_round_trip_and_survive_a_store_restart ... ok
+test provider_http_errors_are_reported_and_not_retried_per_segment ... ok
+test redirects_are_never_followed_and_reported_as_errors ... ok
+test missing_and_corrupt_entries_are_cache_misses ... ok
+test multi_sentence_output_for_a_single_segment_is_accepted_as_is ... ok
+test loopback_requests_never_carry_the_zhipu_thinking_field ... ok
+test full_cache_hit_never_touches_the_network ... ok
+test response_content_is_trimmed_to_strip_stray_whitespace ... ok
+test single_uncached_segment_sends_a_plain_request_with_no_markers ... ok
+test uncached_segments_are_batched_into_one_request_and_then_cached ... ok
+test batched_reply_marker_mismatches_fall_back_to_one_request_per_segment ... ok
+test prune_if_due_evicts_overflow_once_per_interval ... ok
+test http_429_with_integer_retry_after_is_retried_once ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+     Running tests/workspace.rs (src-tauri/target/debug/deps/workspace-61c9c36249f78d4e)
+
+running 16 tests
+test open_workspace_rejects_files_and_missing_paths ... ok
+test list_directory_rejects_escapes_outside_the_root ... ok
+test create_markdown_file_never_writes_through_a_symlink ... ok
+test list_directory_is_lazy_sorted_directories_first_and_filters_entries ... ok
+test open_workspace_returns_canonical_root_and_directory_title ... ok
+test rename_entry_renames_in_place_and_reports_the_new_entry ... ok
+test rename_entry_on_an_in_root_symlink_renames_the_link_not_the_target ... ok
+test rename_entry_rejects_conflicts_non_markdown_names_and_escapes ... ok
+test create_markdown_file_creates_an_empty_file_inside_the_root ... ok
+test rename_entry_to_the_same_name_succeeds_as_a_no_op ... ok
+test create_markdown_file_rejects_conflicts_non_markdown_and_escapes ... ok
+test symlink_loops_are_followed_without_hanging_and_escape_links_are_rejected ... ok
+test trash_entry_rejects_escapes_and_the_root_itself_without_deleting ... ok
+test trash_and_rename_reject_symlinks_escaping_the_root ... ok
+test trash_entry_moves_a_file_to_the_system_trash ... ok
+test trash_entry_on_an_in_root_symlink_trashes_the_link_not_the_target ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+   Doc-tests markdown_edit_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

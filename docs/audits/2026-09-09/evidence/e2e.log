@@ -1,0 +1,43 @@
+
+> markdown-edit@0.1.15 test:e2e
+> playwright test
+
+[WebServer] (node:93450) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 22 tests using 5 workers
+
+(node:93453) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:93452) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:93455) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:93451) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:93454) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   2 tests/e2e/editorWidth.spec.ts:126:1 › keeps a margin on both edges at a narrow viewport and keeps the scrollbar at the window edge (1.4s)
+  ✓   4 tests/e2e/editorWidth.spec.ts:85:1 › centers the reading column at the default viewport with at least the base width (1.4s)
+  ✓   1 tests/e2e/editorWidth.spec.ts:103:1 › scales the column up with the window but caps it on ultra-wide viewports (1.4s)
+  ✓   5 tests/e2e/notepad.spec.ts:124:1 › keeps successive IME updates in one composition range (1.6s)
+  ✓   3 tests/e2e/notepad.spec.ts:172:1 › opens two files, switches tabs, edits, and saves with Cmd+S (2.2s)
+  ✓   9 tests/e2e/notepad.spec.ts:291:1 › types and pastes plain text into a Markdown table and saves exact source (1.2s)
+  ✓   6 tests/e2e/notepad.spec.ts:208:1 › cancelling a dirty close keeps the tab and the edits (1.5s)
+  ✓  10 tests/e2e/notepad.spec.ts:343:1 › deletes table-cell text with browser-supported native shortcuts and saves exact source (931ms)
+  ✓  12 tests/e2e/notepad.spec.ts:455:1 › navigates, appends, undoes, redoes, saves, and reads a Markdown table (1.8s)
+  ✓  11 tests/e2e/notepad.spec.ts:410:1 › clicking a reading-mode Markdown table body cell enters editing and saves exact source (2.3s)
+  ✓   8 tests/e2e/notepad.spec.ts:265:1 › discarding a dirty close closes the tab and drops its recovery draft (3.7s)
+  ✓   7 tests/e2e/notepad.spec.ts:233:1 › saving on a dirty close persists the edits and drops the recovery draft (3.8s)
+  ✓  15 tests/e2e/notepad.spec.ts:688:1 › renders valid LaTeX and flags invalid LaTeX without blocking edits (616ms)
+  ✓  13 tests/e2e/notepad.spec.ts:554:1 › switches between editing and reading modes (2.6s)
+  ✓  16 tests/e2e/notepad.spec.ts:711:1 › finds and replaces text in the current document (886ms)
+  ✓  18 tests/e2e/notepad.spec.ts:782:1 › surfaces an external conflict and keeps local edits (1.2s)
+  ✓  19 tests/e2e/notepad.spec.ts:815:1 › loads the disk version through the conflict dialog, replacing local edits (1.2s)
+  ✓  17 tests/e2e/notepad.spec.ts:735:1 › opens the folder drawer and opens a file from the tree (2.0s)
+  ✓  20 tests/e2e/notepad.spec.ts:851:1 › offers recovery drafts on launch and restores one explicitly (1.6s)
+  ✓  14 tests/e2e/notepad.spec.ts:605:1 › opens, navigates, collapses, and resizes the document outline (3.0s)
+  ✓  21 tests/e2e/notepad.spec.ts:880:1 › discarding a recovery draft removes it from the port and closes the dialog (1.4s)
+  ✓  22 tests/e2e/translation.spec.ts:71:1 › translates a document, forces reading mode, and toggles back without new API calls (2.4s)
+
+  22 passed (10.8s)

@@ -1,0 +1,25 @@
+{
+  "dom": "<table class=\"md-table\" aria-label=\"Markdown 表格\" role=\"grid\"><thead><tr><th data-table-from=\"18\" data-cell-index=\"0\" data-alignment=\"default\" role=\"columnheader\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">Name</th><th data-table-from=\"18\" data-cell-index=\"1\" data-alignment=\"default\" role=\"columnheader\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">Note</th></tr></thead><tbody><tr><td data-table-from=\"18\" data-cell-index=\"2\" data-alignment=\"default\" role=\"gridcell\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">Ada</td><td data-table-from=\"18\" data-cell-index=\"3\" data-alignment=\"default\" role=\"gridcell\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">old</td></tr></tbody></table>",
+  "beforeShortcut": {
+    "selection": "Ada",
+    "active": "<td data-table-from=\"18\" data-cell-index=\"2\" data-alignment=\"default\" role=\"gridcell\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">Ada</td>"
+  },
+  "shortcutClipboard": "Before untouched",
+  "beforeMenu": {
+    "selection": "Ada",
+    "active": "<td data-table-from=\"18\" data-cell-index=\"2\" data-alignment=\"default\" role=\"gridcell\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">Ada</td>"
+  },
+  "menuOpen": {
+    "selection": "",
+    "active": "<button type=\"button\" role=\"menuitem\" class=\"context-menu-item\" aria-disabled=\"false\" tabindex=\"-1\">撤销<span class=\"context-menu-shortcut\">⌘Z</span></button>"
+  },
+  "afterMenu": {
+    "selection": "",
+    "active": "<td data-table-from=\"18\" data-cell-index=\"2\" data-alignment=\"default\" role=\"gridcell\" contenteditable=\"true\" spellcheck=\"true\" tabindex=\"0\">Ada</td>"
+  },
+  "menuClipboard": "Before untouched",
+  "afterMenuPaste": "Ada",
+  "wholeDocumentClipboard": "Before untouched\n\n| Name | Note |\n| --- | --- |\n| Ada | old |\n\nAfter untouched\n",
+  "cutClipboard": "Before untouched",
+  "documentAfterCellCut": "\n| Name | Note |\n| --- | --- |\n| Ada | old |\n\nAfter untouched\n"
+}

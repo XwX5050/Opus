@@ -1,0 +1,21 @@
+
+> markdown-edit@0.1.15 test
+> vitest run
+
+
+ RUN  v4.1.10 /Users/xiongweini/workspace/Markdown_edit
+
+Warning: A vi.hoisted() call in "/Users/xiongweini/workspace/Markdown_edit/src/document/tauriDocumentPort.test.ts" is not at the top level of the module. Although it appears nested, it will be hoisted and executed before any tests run. Move it to the top level to reflect its actual execution order. This will become an error in a future version.
+See: https://vitest.dev/guide/mocking/modules#how-it-works
+Warning: A vi.hoisted() call in "/Users/xiongweini/workspace/Markdown_edit/src/document/tauriDocumentPort.test.ts" is not at the top level of the module. Although it appears nested, it will be hoisted and executed before any tests run. Move it to the top level to reflect its actual execution order. This will become an error in a future version.
+See: https://vitest.dev/guide/mocking/modules#how-it-works
+Warning: A vi.mock("@tauri-apps/plugin-store") call in "/Users/xiongweini/workspace/Markdown_edit/src/document/tauriDocumentPort.test.ts" is not at the top level of the module. Although it appears nested, it will be hoisted and executed before any tests run. Move it to the top level to reflect its actual execution order. This will become an error in a future version.
+See: https://vitest.dev/guide/mocking/modules#how-it-works
+Warning: A vi.mock("@tauri-apps/api/window") call in "/Users/xiongweini/workspace/Markdown_edit/src/document/tauriDocumentPort.test.ts" is not at the top level of the module. Although it appears nested, it will be hoisted and executed before any tests run. Move it to the top level to reflect its actual execution order. This will become an error in a future version.
+See: https://vitest.dev/guide/mocking/modules#how-it-works
+
+ Test Files  53 passed (53)
+      Tests  1212 passed (1212)
+   Start at  14:00:47
+   Duration  21.55s (transform 3.35s, setup 4.16s, import 9.07s, tests 58.87s, environment 32.08s)
+

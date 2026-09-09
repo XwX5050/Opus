@@ -1,0 +1,190 @@
+
+> markdown-edit@0.1.15 build
+> tsc -b && vite build
+
+vite v8.1.5 building client environment for production...
+[2Ktransforming...✓ 233 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                         0.46 kB │ gzip:   0.29 kB
+dist/assets/KaTeX_Size3-Regular-CTq5MqoE.woff           4.42 kB
+dist/assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2          4.92 kB
+dist/assets/KaTeX_Size2-Regular-Dy4dx90m.woff2          5.20 kB
+dist/assets/KaTeX_Size1-Regular-mCD8mA8B.woff2          5.46 kB
+dist/assets/KaTeX_Size4-Regular-BF-4gkZK.woff           5.98 kB
+dist/assets/KaTeX_Size2-Regular-oD1tc_U0.woff           6.18 kB
+dist/assets/KaTeX_Size1-Regular-C195tn64.woff           6.49 kB
+dist/assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2    6.90 kB
+dist/assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2       6.91 kB
+dist/assets/KaTeX_Size3-Regular-DgpXs0kz.ttf            7.58 kB
+dist/assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff     7.65 kB
+dist/assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff        7.71 kB
+dist/assets/KaTeX_Script-Regular-D3wIWfF6.woff2         9.64 kB
+dist/assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2     10.34 kB
+dist/assets/KaTeX_Size4-Regular-DWFBv043.ttf           10.36 kB
+dist/assets/KaTeX_Script-Regular-D5yQViql.woff         10.58 kB
+dist/assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2       11.31 kB
+dist/assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2          11.34 kB
+dist/assets/KaTeX_Size2-Regular-B7gKUWhC.ttf           11.50 kB
+dist/assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2      12.02 kB
+dist/assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2        12.21 kB
+dist/assets/KaTeX_Size1-Regular-Dbsnue_I.ttf           12.22 kB
+dist/assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff      12.31 kB
+dist/assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf     12.34 kB
+dist/assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf        12.36 kB
+dist/assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff        13.20 kB
+dist/assets/KaTeX_Fraktur-Bold-BsDP51OF.woff           13.29 kB
+dist/assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2    13.56 kB
+dist/assets/KaTeX_SansSerif-Italic-DN2j7dab.woff       14.11 kB
+dist/assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff         14.40 kB
+dist/assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff     16.02 kB
+dist/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2       16.40 kB
+dist/assets/KaTeX_Math-Italic-t53AETM-.woff2           16.44 kB
+dist/assets/KaTeX_Script-Regular-C5JkGWo-.ttf          16.64 kB
+dist/assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2       16.78 kB
+dist/assets/KaTeX_Main-Italic-NWA7e6Wa.woff2           16.98 kB
+dist/assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff        18.66 kB
+dist/assets/KaTeX_Math-Italic-DA0__PXp.woff            18.74 kB
+dist/assets/KaTeX_Main-BoldItalic-SpSLRI95.woff        19.41 kB
+dist/assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf       19.43 kB
+dist/assets/KaTeX_Fraktur-Regular-CB_wures.ttf         19.57 kB
+dist/assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf            19.58 kB
+dist/assets/KaTeX_Main-Italic-BMLOBm91.woff            19.67 kB
+dist/assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf        22.36 kB
+dist/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf          24.50 kB
+dist/assets/KaTeX_Main-Bold-Cx986IdX.woff2             25.32 kB
+dist/assets/KaTeX_Main-Regular-B22Nviop.woff2          26.27 kB
+dist/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf      27.55 kB
+dist/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2           28.07 kB
+dist/assets/KaTeX_Main-Bold-Jm3AIy58.woff              29.91 kB
+dist/assets/KaTeX_Main-Regular-Dr94JaBh.woff           30.77 kB
+dist/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf         31.19 kB
+dist/assets/KaTeX_Math-Italic-flOr_0UB.ttf             31.30 kB
+dist/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf         32.96 kB
+dist/assets/KaTeX_AMS-Regular-DMm9YOAa.woff            33.51 kB
+dist/assets/KaTeX_Main-Italic-3WenGoN9.ttf             33.58 kB
+dist/assets/KaTeX_Main-Bold-waoOVXN0.ttf               51.33 kB
+dist/assets/KaTeX_Main-Regular-ypZvNtVU.ttf            53.58 kB
+dist/assets/KaTeX_AMS-Regular-DRggAlZN.ttf             63.63 kB
+dist/assets/index-BZXpm2MN.css                         67.60 kB │ gzip:  15.26 kB
+dist/assets/diff-ChtP43wD.js                            0.30 kB │ gzip:   0.23 kB
+dist/assets/brainfuck-D5EjA2JK.js                       0.59 kB │ gzip:   0.32 kB
+dist/assets/properties-C357ku5U.js                      0.66 kB │ gzip:   0.34 kB
+dist/assets/cmake-CyVbuzPu.js                           0.78 kB │ gzip:   0.46 kB
+dist/assets/asciiarmor-qTkVPQu6.js                      0.79 kB │ gzip:   0.40 kB
+dist/assets/protobuf-D1ij_kNL.js                        0.80 kB │ gzip:   0.51 kB
+dist/assets/http-CLVgA2GD.js                            0.84 kB │ gzip:   0.42 kB
+dist/assets/solr-BBopId9w.js                            0.86 kB │ gzip:   0.45 kB
+dist/assets/troff-C2dAgh7P.js                           0.95 kB │ gzip:   0.43 kB
+dist/assets/spreadsheet-CTIncYxj.js                     1.13 kB │ gzip:   0.53 kB
+dist/assets/toml-LvoKBwCs.js                            1.19 kB │ gzip:   0.53 kB
+dist/assets/mbox-BEMVcqjs.js                            1.38 kB │ gzip:   0.65 kB
+dist/assets/rpm-gpDK5sbt.js                             1.59 kB │ gzip:   0.81 kB
+dist/assets/sieve-BAxa3IjF.js                           1.61 kB │ gzip:   0.77 kB
+dist/assets/factor-D7LVTn2l.js                          1.66 kB │ gzip:   0.60 kB
+dist/assets/eiffel-BEjRio4Q.js                          1.69 kB │ gzip:   0.90 kB
+dist/assets/z80-CL1naaMV.js                             1.75 kB │ gzip:   0.79 kB
+dist/assets/mumps-CW_TBmxz.js                           1.83 kB │ gzip:   0.95 kB
+dist/assets/elm-Cshzl8qu.js                             1.86 kB │ gzip:   0.81 kB
+dist/assets/mathematica-u8YMmbU0.js                     1.89 kB │ gzip:   0.80 kB
+dist/assets/dockerfile-BLkNEvjs.js                      1.90 kB │ gzip:   0.64 kB
+dist/assets/turtle-Cx3rYX2g.js                          1.95 kB │ gzip:   0.89 kB
+dist/assets/dist-B6hqjY9q.js                            1.95 kB │ gzip:   1.25 kB
+dist/assets/ebnf-D4c0_ac3.js                            1.97 kB │ gzip:   0.80 kB
+dist/assets/smalltalk-BLp5-jwC.js                       1.99 kB │ gzip:   0.85 kB
+dist/assets/fcl-ClOhbFR7.js                             2.02 kB │ gzip:   0.95 kB
+dist/assets/ntriples-d28e9m0E.js                        2.07 kB │ gzip:   0.73 kB
+dist/assets/dtd-DTF72YNO.js                             2.09 kB │ gzip:   0.87 kB
+dist/assets/octave-D2Q8cUp1.js                          2.10 kB │ gzip:   1.07 kB
+dist/assets/yacas-CXXgtw0p.js                           2.14 kB │ gzip:   1.08 kB
+dist/assets/pascal-Dp_KdFgX.js                          2.25 kB │ gzip:   1.17 kB
+dist/assets/apl-gfMMiTNf.js                             2.29 kB │ gzip:   1.22 kB
+dist/assets/simple-mode-DRpGK0lJ.js                     2.29 kB │ gzip:   1.09 kB
+dist/assets/commonlisp-CcllspGY.js                      2.32 kB │ gzip:   1.10 kB
+dist/assets/tcl-BGfruO1u.js                             2.35 kB │ gzip:   1.22 kB
+dist/assets/shell-Du5Qg9im.js                           2.44 kB │ gzip:   1.20 kB
+dist/assets/webidl-D5jiJvOU.js                          2.44 kB │ gzip:   1.24 kB
+dist/assets/pig-AF4Hwhju.js                             2.51 kB │ gzip:   1.37 kB
+dist/assets/puppet-B4hC2X4m.js                          2.54 kB │ gzip:   1.20 kB
+dist/assets/forth-Cezjo90N.js                           2.54 kB │ gzip:   1.32 kB
+dist/assets/dist-BVCXL9Yz.js                            2.57 kB │ gzip:   1.48 kB
+dist/assets/velocity-CqftRsjg.js                        2.70 kB │ gzip:   1.11 kB
+dist/assets/tiddlywiki-VlUiK86J.js                      2.76 kB │ gzip:   1.07 kB
+dist/assets/modelica-CqHI_q-D.js                        2.79 kB │ gzip:   1.28 kB
+dist/assets/oz-BwTct_5T.js                              2.88 kB │ gzip:   1.27 kB
+dist/assets/r-DADKenSm.js                               3.00 kB │ gzip:   1.34 kB
+dist/assets/stex-sDrdk2BW.js                            3.12 kB │ gzip:   1.18 kB
+dist/assets/lua-CiA1ziua.js                             3.13 kB │ gzip:   1.40 kB
+dist/assets/cypher-p9eYesGn.js                          3.18 kB │ gzip:   1.49 kB
+dist/assets/tiki-CxVlf5KZ.js                            3.23 kB │ gzip:   1.26 kB
+dist/assets/dist-CYPSDE1K.js                            3.26 kB │ gzip:   1.67 kB
+dist/assets/vhdl-CBDDcIJ_.js                            3.29 kB │ gzip:   1.49 kB
+dist/assets/sparql-Dz-mlCAC.js                          3.33 kB │ gzip:   1.59 kB
+dist/assets/mscgen-qgSLujhx.js                          3.49 kB │ gzip:   0.97 kB
+dist/assets/vb-BthdM_4N.js                              3.65 kB │ gzip:   1.81 kB
+dist/assets/d-BhMjBjQP.js                               3.67 kB │ gzip:   1.67 kB
+dist/assets/q-B9NhS7L_.js                               3.69 kB │ gzip:   1.69 kB
+dist/assets/swift-DKB6_1j6.js                           3.76 kB │ gzip:   1.81 kB
+dist/assets/coffeescript-B2pKbFk8.js                    3.85 kB │ gzip:   1.69 kB
+dist/assets/fortran-Bt6PBEDR.js                         3.86 kB │ gzip:   1.93 kB
+dist/assets/asn1-Dr8qZg38.js                            3.95 kB │ gzip:   1.95 kB
+dist/assets/dylan-C6jEEEk-.js                           4.04 kB │ gzip:   1.63 kB
+dist/assets/ttcn-cfg-CY0aot7Q.js                        4.07 kB │ gzip:   1.72 kB
+dist/assets/asterisk-Bja0s6e1.js                        4.07 kB │ gzip:   1.74 kB
+dist/assets/livescript-BXxG0Yva.js                      4.08 kB │ gzip:   1.62 kB
+dist/assets/groovy-BC3IOsC8.js                          4.10 kB │ gzip:   1.74 kB
+dist/assets/haskell-BRsoo5mP.js                         4.15 kB │ gzip:   1.91 kB
+dist/assets/gas-BHEdbvp9.js                             4.55 kB │ gzip:   1.27 kB
+dist/assets/mllike-B45xgp2S.js                          4.82 kB │ gzip:   1.57 kB
+dist/assets/ttcn-BePYh-hG.js                            4.82 kB │ gzip:   2.13 kB
+dist/assets/dist-DIECDydJ.js                            4.87 kB │ gzip:   2.32 kB
+dist/assets/crystal-M5-qzICs.js                         5.02 kB │ gzip:   2.10 kB
+dist/assets/ecl-BSZaIHnp.js                             5.09 kB │ gzip:   2.30 kB
+dist/assets/ruby-DsYpTuWg.js                            5.10 kB │ gzip:   2.15 kB
+dist/assets/julia-CQfgDRfP.js                           5.26 kB │ gzip:   2.16 kB
+dist/assets/vbscript-D9f6rSsU.js                        5.43 kB │ gzip:   2.56 kB
+dist/assets/mirc-C9zpzAZU.js                            5.91 kB │ gzip:   2.70 kB
+dist/assets/cobol-DHLQUbN7.js                           6.19 kB │ gzip:   2.98 kB
+dist/assets/xquery-Cda5K8Gy.js                          6.22 kB │ gzip:   2.57 kB
+dist/assets/python-2zlmcyof.js                          6.28 kB │ gzip:   2.67 kB
+dist/assets/scheme-tChLYBuY.js                          6.35 kB │ gzip:   2.37 kB
+dist/assets/pug-DyBTKFx8.js                             6.67 kB │ gzip:   1.99 kB
+dist/assets/textile-CyzeGT9J.js                         6.77 kB │ gzip:   2.44 kB
+dist/assets/nsis-AQ_alPln.js                            6.80 kB │ gzip:   2.99 kB
+dist/assets/nginx-BMaDbqW3.js                           7.40 kB │ gzip:   2.73 kB
+dist/assets/powershell-CzG71I4L.js                      7.69 kB │ gzip:   3.29 kB
+dist/assets/erlang-DaB2Rkuy.js                          7.84 kB │ gzip:   2.89 kB
+dist/assets/haxe-DjVOVvNP.js                            7.86 kB │ gzip:   2.94 kB
+dist/assets/verilog-BKSQ5RMB.js                         8.16 kB │ gzip:   3.46 kB
+dist/assets/sas-C2OyD2Y6.js                             9.33 kB │ gzip:   4.11 kB
+dist/assets/clojure-BflJGmDX.js                         9.40 kB │ gzip:   4.02 kB
+dist/assets/perl-CdEHsPfU.js                            9.75 kB │ gzip:   3.51 kB
+dist/assets/idl-BUZw3wgd.js                             9.82 kB │ gzip:   4.40 kB
+dist/assets/gherkin-oBAE_ms0.js                        10.15 kB │ gzip:   5.09 kB
+dist/assets/dist-BGAPERQj.js                           11.52 kB │ gzip:   5.16 kB
+dist/assets/dist-BNENGGj2.js                           14.30 kB │ gzip:   5.76 kB
+dist/assets/dist-CGovA8mV.js                           16.19 kB │ gzip:   7.45 kB
+dist/assets/javascript-8HiN0ThV.js                     17.02 kB │ gzip:   5.74 kB
+dist/assets/dist--6ZKqmE4.js                           20.67 kB │ gzip:   9.32 kB
+dist/assets/dist-CbqLapqn.js                           20.92 kB │ gzip:   9.65 kB
+dist/assets/clike-CVjTFI47.js                          22.05 kB │ gzip:   7.75 kB
+dist/assets/dist-Kj9j4Ja5.js                           22.92 kB │ gzip:  10.41 kB
+dist/assets/stylus-DLLZ8dgm.js                         23.52 kB │ gzip:   8.56 kB
+dist/assets/css-CYpP4FRV.js                            24.70 kB │ gzip:   8.25 kB
+dist/assets/dist-C5e0N4zt.js                           30.69 kB │ gzip:  12.72 kB
+dist/assets/sql-DcCJ9jop.js                            36.85 kB │ gzip:  10.90 kB
+dist/assets/dist-Ds_ilsGP.js                           40.67 kB │ gzip:  16.92 kB
+dist/assets/dist-CtaAC8hZ.js                           44.54 kB │ gzip:  19.32 kB
+dist/assets/dist-Cth-qAMs.js                           46.92 kB │ gzip:  13.41 kB
+dist/assets/dist-Dps0g8lG.js                           70.75 kB │ gzip:  26.08 kB
+dist/assets/dist-CYJNq8Jg.js                           97.70 kB │ gzip:  28.63 kB
+dist/assets/dist-BVnKgu_j.js                          103.86 kB │ gzip:  34.73 kB
+dist/assets/dist-DYmR4cAZ.js                          308.98 kB │ gzip: 100.44 kB
+dist/assets/index-P0n2385e.js                         990.05 kB │ gzip: 323.01 kB
+
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 387ms
