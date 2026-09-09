@@ -144,3 +144,88 @@ describe("ContextMenu", () => {
     trigger.remove();
   });
 });
+describe("ContextMenu DOM-selection preservation", () => {
+  const hostWithSelection = () => {
+    const host = document.createElement("div");
+    host.contentEditable = "true";
+    host.tabIndex = -1;
+    host.textContent = "Ada Lovelace";
+    document.body.appendChild(host);
+    host.focus();
+    const text = host.firstChild;
+    if (!text) throw new Error("missing text node");
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 3);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return { host };
+  };
+
+  it("restores the DOM selection along with focus when it closes without an action", () => {
+    const { host } = hostWithSelection();
+    const { menu, unmount } = renderMenu([actionItem("a", "A")]);
+    expect(within(menu).getByRole("menuitem")).toHaveFocus();
+
+    unmount();
+
+    expect(host).toHaveFocus();
+    expect(document.getSelection()?.toString()).toBe("Ada");
+    host.remove();
+  });
+
+  it("restores focus and the DOM selection before running an item handler", () => {
+    const { host } = hostWithSelection();
+    let selectionAtHandler = "";
+    let focusAtHandler: Element | null = null;
+    const { menu } = renderMenu([
+      actionItem("a", "A", {
+        onSelect: () => {
+          selectionAtHandler = document.getSelection()?.toString() ?? "";
+          focusAtHandler = document.activeElement;
+        },
+      }),
+    ]);
+
+    fireEvent.click(within(menu).getByRole("menuitem"));
+
+    expect(selectionAtHandler).toBe("Ada");
+    expect(focusAtHandler).toBe(host);
+    host.remove();
+  });
+
+  it("does not clobber a selection the activated item produced when it closes", () => {
+    const { host } = hostWithSelection();
+    const { menu, unmount } = renderMenu([
+      actionItem("a", "A", {
+        onSelect: () => {
+          const range = document.createRange();
+          range.selectNodeContents(host);
+          const selection = document.getSelection()!;
+          selection.removeAllRanges();
+          selection.addRange(range);
+        },
+      }),
+    ]);
+
+    fireEvent.click(within(menu).getByRole("menuitem"));
+    unmount();
+
+    expect(document.getSelection()?.toString()).toBe("Ada Lovelace");
+    host.remove();
+  });
+
+  it("ignores a saved range whose nodes were detached while the menu was open", () => {
+    const { host } = hostWithSelection();
+    const { menu, unmount } = renderMenu([actionItem("a", "A")]);
+    // The menu is open and something replaces the host's content: the saved
+    // range's nodes die, and closing must neither throw nor revive them.
+    host.replaceChildren(document.createTextNode("Brand New"));
+
+    unmount();
+
+    expect(document.getSelection()?.toString()).toBe("");
+    host.remove();
+  });
+});

@@ -32,7 +32,9 @@ import {
 import type { PerformanceMode } from "./performanceMode";
 import {
   focusMarkdownTableCell,
+  runTableCellClipboardCommand,
   tableWidgetsExtension,
+  type TableCellClipboardCommand,
   type TableCellEditRequest,
 } from "./tableWidgets";
 import type { EditorViewMode } from "./viewMode";
@@ -106,6 +108,15 @@ export interface MarkdownEditorHandle {
   undo(): boolean;
   /** Redoes one history group. */
   redo(): boolean;
+  /**
+   * Applies a clipboard/selection command to the rendered table cell that
+   * currently owns the DOM selection (context-menu commands). Resolves to
+   * false when no editable cell owns the selection so the caller can fall
+   * back to the CodeMirror-level command.
+   */
+  runTableCellClipboardCommand(
+    command: TableCellClipboardCommand,
+  ): Promise<boolean>;
 }
 
 export interface MarkdownEditorProps {
@@ -429,6 +440,10 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     focus: () => viewRef.current?.focus(),
     undo: () => (viewRef.current ? undo(viewRef.current) : false),
     redo: () => (viewRef.current ? redo(viewRef.current) : false),
+    runTableCellClipboardCommand: (command) =>
+      viewRef.current
+        ? runTableCellClipboardCommand(viewRef.current, command)
+        : Promise.resolve(false),
   }), []);
 
   return (
