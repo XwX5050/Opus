@@ -7,6 +7,7 @@ import {
   type DocumentState,
 } from "./documentReducer";
 import { DocumentPortError } from "./DocumentPort";
+import { hashText } from "../recovery/drafts";
 import { MemoryDocumentPort } from "./memoryDocumentPort";
 import type {
   DocumentSnapshot,
@@ -985,7 +986,7 @@ describe("normalizePathKey", () => {
     expect(normalizePathKey("/../../a", "linux")).toBe("/a");
   });
 
-  it("normalizes Windows roots without merging their distinct semantics", () => {
+  it("normalizes Windows roots while folding extended and device prefixes into their DOS form", () => {
     expect(normalizePathKey("C:\\a\\..\\x", "windows")).toBe("c:\\x");
     expect(normalizePathKey("C:a\\..\\x", "windows")).toBe("c:x");
     expect(normalizePathKey("\\a\\..\\x", "windows")).toBe("\\x");
@@ -1003,12 +1004,43 @@ describe("normalizePathKey", () => {
     expect(normalizePathKey("C:\\x", "windows")).not.toBe(
       normalizePathKey("\\x", "windows"),
     );
-    expect(normalizePathKey("\\\\?\\C:\\x", "windows")).not.toBe(
-      normalizePathKey("C:\\x", "windows"),
-    );
-    expect(normalizePathKey("\\\\?\\C:\\x", "windows")).not.toBe(
+    // Extended-length and device prefixes denote the same file as the plain
+    // DOS path, so they must fold into it instead of staying distinct keys.
+    expect(normalizePathKey("\\\\?\\C:\\x", "windows")).toBe("c:\\x");
+    expect(normalizePathKey("\\\\.\\C:\\x", "windows")).toBe("c:\\x");
+    expect(normalizePathKey("\\\\?\\C:\\x", "windows")).toBe(
       normalizePathKey("\\\\.\\C:\\x", "windows"),
     );
+    expect(
+      normalizePathKey("\\\\?\\UNC\\Server\\Share\\x", "windows"),
+    ).toBe("\\\\server\\share\\x");
+  });
+
+  it("keeps an opened extended-path tab from being overwritten by a plain-path save-as", () => {
+    let state = documentReducer(initialDocumentState, {
+      type: "fileOpened",
+      id: "extended",
+      pathPlatform: "windows",
+      file: openedFile({ path: "\\\\?\\C:\\docs\\target.md" }),
+    });
+    state = documentReducer(state, {
+      type: "newDocument",
+      id: "source",
+    });
+    state = documentReducer(state, {
+      type: "textChanged",
+      id: "source",
+      text: "content",
+    });
+    state = documentReducer(state, {
+      type: "saveRequested",
+      id: "source",
+      pathPlatform: "windows",
+      target: { path: "C:\\docs\\target.md", expectedVersion: null },
+    });
+
+    expect(state.tabs.find((tab) => tab.id === "source")?.pendingSave).toBeUndefined();
+    expect(state.tabs.find((tab) => tab.id === "source")?.status).toBe("conflict");
   });
 });
 
@@ -1438,6 +1470,59 @@ describe("documentReducer disk events", () => {
       status: "dirty",
     });
     expect(state.activeId).toBe("doc-1");
+  });
+
+  it("restores an emptied draft as dirty when its saved version was not empty", () => {
+    const state = reduce([
+      {
+        type: "documentRestored",
+        id: "doc-1",
+        draft: {
+          draftId: "draft-document-7",
+          originalPath: "/notes/a.md",
+          title: "a.md",
+          text: "",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: "1a2b3c4d",
+          savedVersion: "v9",
+        },
+      },
+    ]);
+
+    // Deleting the whole document is an unsaved edit over a non-empty saved
+    // version: the restored tab must stay dirty so closing it asks for
+    // confirmation and its draft lifecycle keeps protecting the empty text.
+    expect(state.tabs[0]).toMatchObject({
+      text: "",
+      savedText: "",
+      status: "dirty",
+    });
+  });
+
+  it("restores a blank draft clean only when the saved version was empty too", () => {
+    const state = reduce([
+      {
+        type: "documentRestored",
+        id: "doc-1",
+        draft: {
+          draftId: "draft-document-7",
+          originalPath: null,
+          title: "Untitled",
+          text: "",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: hashText(""),
+          savedVersion: null,
+        },
+      },
+    ]);
+
+    // A genuinely new document that never had content has nothing to recover.
+    expect(state.tabs[0]).toMatchObject({
+      text: "",
+      status: "clean",
+    });
   });
 
   it("merges a restored draft into an already-open tab for the same path", () => {

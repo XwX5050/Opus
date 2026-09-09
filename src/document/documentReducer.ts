@@ -1,4 +1,5 @@
 import type { DocumentPortError, SavedFile } from "./DocumentPort";
+import { hashText } from "../recovery/drafts";
 import type {
   DocumentSnapshot,
   DocumentState,
@@ -107,11 +108,23 @@ const normalizePosixPath = (path: string): string => {
 };
 
 const normalizeWindowsPath = (path: string): string => {
-  const windowsPath = path.replaceAll("/", "\\");
+  let windowsPath = path.replaceAll("/", "\\");
   const lower = (value: string) => value.toLocaleLowerCase("en-US");
 
-  if (windowsPath.startsWith("\\\\?\\") || windowsPath.startsWith("\\\\.\\")) {
-    return lower(windowsPath);
+  // Fold extended-length (\\?\) and device (\.\) namespace prefixes into the
+  // ordinary DOS path so alias spellings of one file compare equal: both
+  // \\?\C:\docs\target.md and \\.\C:\docs\target.md denote C:\docs\target.md
+  // and must collide with it in conflict checks. Extended UNC paths
+  // (\\?\UNC\server\share) fold to their ordinary \\server\share form; the
+  // device namespace has no ordinary DOS equivalent, so its remainder is
+  // normalized like any other path below.
+  if (lower(windowsPath).startsWith("\\\\?\\")) {
+    windowsPath = windowsPath.slice(4);
+    if (lower(windowsPath).startsWith("unc\\")) {
+      windowsPath = `\\${windowsPath.slice(3)}`;
+    }
+  } else if (lower(windowsPath).startsWith("\\\\.\\")) {
+    windowsPath = windowsPath.slice(4);
   }
 
   if (windowsPath.startsWith("\\\\")) {
@@ -507,7 +520,11 @@ export const documentReducer = (
 
       // The draft only stores a hash of the last saved text, so the restored
       // tab treats the saved text as unknown ("") and stays dirty until the
-      // user saves or discards it.
+      // user saves or discards it — including a draft whose text was emptied
+      // by deleting the whole document: that is an unsaved edit over a
+      // non-empty saved version. Only a draft that is both empty and whose
+      // saved version was empty too (a genuinely new document that never had
+      // content) restores clean.
       const restored: DocumentSnapshot = {
         id: action.id,
         path: draft.originalPath,
@@ -518,7 +535,10 @@ export const documentReducer = (
         newline: draft.newline,
         modifiedUnixMs: null,
         version: draft.savedVersion,
-        status: draft.text === "" ? "clean" : "dirty",
+        status:
+          draft.text === "" && draft.savedTextHash === hashText("")
+            ? "clean"
+            : "dirty",
       };
       return { ...state, tabs: [...state.tabs, restored], activeId: action.id };
     }
