@@ -2370,3 +2370,560 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 });
+
+describe("useAppController restore transaction order", () => {
+  const leftover = (changes: Partial<RecoveryDraft> = {}): RecoveryDraft => ({
+    draftId: "draft-document-1",
+    originalPath: null,
+    title: "Unsaved crash note",
+    text: "Unique recovered text",
+    hasUtf8Bom: false,
+    newline: "lf",
+    savedTextHash: "811c9dc5",
+    savedVersion: null,
+    ...changes,
+  });
+
+  it("keeps a durable copy when restoring an untitled draft whose id the new tab reuses", async () => {
+    // The leftover comes from a crashed session whose first tab was
+    // document-1; the fresh session's first tab id is document-1 again, so
+    // draftIdForTab(added.id) === info.draftId. The immediate write replaces
+    // the leftover in place, and discarding the "leftover" afterwards would
+    // delete the freshly written copy — the restored content must survive.
+    const port = new MemoryDocumentPort(new Map(), { drafts: [leftover()] });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    await act(() =>
+      hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]),
+    );
+
+    expect(hook.result.current.recoveryDrafts).toEqual([]);
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "Unique recovered text",
+      status: "dirty",
+    });
+    expect(port.drafts).toHaveLength(1);
+    expect(port.drafts[0]).toMatchObject({
+      draftId: "draft-document-1",
+      text: "Unique recovered text",
+    });
+    hook.unmount();
+  });
+
+  it("durably migrates a draft merged into a tab already restored from disk before discarding the leftover", async () => {
+    const opened: OpenedFile = {
+      path: "/docs/original.md",
+      text: "Original English text",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 1,
+      version: "v1",
+    };
+    const port = new MemoryDocumentPort(new Map([[opened.path, opened]]), {
+      drafts: [
+        leftover({
+          draftId: "leftover-9",
+          originalPath: opened.path,
+          title: "original.md",
+          savedVersion: "v1",
+        }),
+      ],
+      session: {
+        recent: [],
+        openPaths: [opened.path],
+        activePath: opened.path,
+        workspacePath: null,
+      },
+    });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.state.tabs).toHaveLength(1));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    await act(() =>
+      hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]),
+    );
+
+    // The merged tab's own draft now holds the recovered text and the
+    // leftover is gone — the copy is persisted before the leftover is
+    // discarded, so no crash window loses the only recovery copy.
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "Unique recovered text",
+      status: "dirty",
+    });
+    expect(port.drafts).toHaveLength(1);
+    expect(port.drafts[0]).toMatchObject({
+      draftId: `draft-${hook.result.current.state.tabs[0].id}`,
+      text: "Unique recovered text",
+    });
+    hook.unmount();
+  });
+
+  it("preserves an intentionally emptied document as an unsaved recovery edit", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      drafts: [
+        leftover({
+          text: "",
+          originalPath: "/docs/deleted-body.md",
+          title: "deleted-body.md",
+          savedTextHash: "nonempty-before",
+          savedVersion: "v-old",
+        }),
+      ],
+    });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    await act(() =>
+      hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]),
+    );
+
+    // Deleting the whole file body is an unsaved edit: the tab stays dirty so
+    // closing asks for confirmation and the empty draft keeps its disk copy.
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "",
+      status: "dirty",
+    });
+    expect(port.drafts.some((item) => item.draftId === "draft-document-1")).toBe(true);
+    hook.unmount();
+  });
+});
+
+describe("useAppController translation failure and close flows", () => {
+  const flowFile = (path: string, text = "Original English text"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: "v1",
+  });
+
+  it("accepts edits and saves again after a translation error, and retries from the toggle", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", flowFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...DEFAULT_TRANSLATION_SETTINGS,
+        apiKey: "test-key",
+      }),
+    );
+
+    vi.mocked(translateDocument).mockRejectedValueOnce(new Error("Simulated HTTP 401"));
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("error"),
+    );
+    // The error never leaves the translation on screen: the editor and the
+    // save path stay live.
+    expect(hook.result.current.translationOf(id)).toEqual({
+      state: { phase: "error", error: "Simulated HTTP 401" },
+      visible: false,
+    });
+
+    act(() => hook.result.current.changeText(id, "User text after error"));
+    expect(hook.result.current.state.tabs[0].text).toBe("User text after error");
+
+    await act(() => hook.result.current.save(id));
+    expect(port.writes.at(-1)?.text).toBe("User text after error");
+    expect(hook.result.current.state.tabs[0].status).toBe("clean");
+
+    // The existing translate toggle restarts the failed run.
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    hook.unmount();
+  });
+
+  it("permits save-and-close of the original dirty text while a ready translation is visible", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", flowFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...DEFAULT_TRANSLATION_SETTINGS,
+        apiKey: "test-key",
+      }),
+    );
+    act(() => hook.result.current.changeText(id, "New original English text"));
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+
+    // The close dialog's save must not be swallowed by the translation guard:
+    // the save writes the original buffer the translation only overlaid.
+    act(() => hook.result.current.close(id));
+    await act(async () => {
+      await hook.result.current.confirmClose("save");
+    });
+
+    expect(port.writes.at(-1)?.text).toBe("New original English text");
+    expect(hook.result.current.state.tabs).toHaveLength(0);
+    hook.unmount();
+  });
+});
+
+describe("useAppController translation settings binding", () => {
+  it("drops a hidden result when the target language changes and re-translates on show", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        [
+          "/notes/a.md",
+          {
+            path: "/notes/a.md",
+            text: "hello world",
+            hasUtf8Bom: false,
+            newline: "lf",
+            modifiedUnixMs: 1,
+            version: "v1",
+          },
+        ],
+      ]),
+    );
+    const translate = vi.spyOn(port, "translateSegments");
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...DEFAULT_TRANSLATION_SETTINGS,
+        apiKey: "test-key",
+      }),
+    );
+
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(translate.mock.calls.at(-1)?.[0].targetLanguage).toBe("中文");
+
+    // Hiding keeps the entry; changing the target language invalidates it.
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)).toMatchObject({ visible: false });
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...hook.result.current.translationSettings,
+        targetLanguage: "日本語",
+      }),
+    );
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+
+    // Showing again starts a fresh run under the new settings instead of
+    // reusing the stale in-memory result.
+    act(() => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(translate.mock.calls.at(-1)?.[0].targetLanguage).toBe("日本語");
+    hook.unmount();
+  });
+
+  it("aborts an in-flight run when a settings-signature field changes", async () => {
+    class DeferredTranslateMemoryPort extends MemoryDocumentPort {
+      resolvePending: ((value: string[]) => void)[] = [];
+      override translateSegments(
+        _settings: TranslationSettings,
+        segments: string[],
+      ): Promise<string[]> {
+        return new Promise((resolve) => {
+          this.resolvePending.push(resolve);
+        });
+      }
+    }
+    const port = new DeferredTranslateMemoryPort(
+      new Map([
+        [
+          "/notes/a.md",
+          {
+            path: "/notes/a.md",
+            text: "hello world",
+            hasUtf8Bom: false,
+            newline: "lf",
+            modifiedUnixMs: 1,
+            version: "v1",
+          },
+        ],
+      ]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...DEFAULT_TRANSLATION_SETTINGS,
+        apiKey: "test-key",
+      }),
+    );
+
+    act(() => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.translationOf(id)?.state.phase).toBe("translating");
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...hook.result.current.translationSettings,
+        model: "gpt-5",
+      }),
+    );
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+
+    // The late resolution of the abandoned run must not resurrect the entry.
+    await act(async () => {
+      port.resolvePending[0](["late result"]);
+    });
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+    hook.unmount();
+  });
+});
+
+describe("useAppController rename watch retargeting", () => {
+  const renameFile = (path: string, text = "saved"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version:${path}`,
+  });
+
+  it("retargets the document watch to the new path and keeps serving its events", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", renameFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+
+    await act(async () => {
+      await hook.result.current.renameDocument(tab.id, "renamed");
+    });
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/renamed.md",
+    });
+
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "unwatch", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
+      ]),
+    );
+
+    // An external modification of the renamed file must still reload the tab.
+    act(() => port.updateFile("/notes/renamed.md", "external edit", "v2", 9));
+    act(() =>
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/renamed.md",
+        modifiedUnixMs: 9,
+        version: "v2",
+      }),
+    );
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "external edit",
+        status: "clean",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("does not double-unwatch when a moved event from the rename already retargeted the watch", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", renameFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+
+    // The backend rename is slow; meanwhile the watcher already delivered the
+    // move as a disk event and retargeted the watch to the new path.
+    let resolveRename!: (value: string) => void;
+    vi.spyOn(port, "renameDocument").mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveRename = resolve; }),
+    );
+    let renaming!: Promise<void>;
+    act(() => {
+      renaming = hook.result.current.renameDocument(tab.id, "renamed");
+    });
+    act(() =>
+      port.emitDiskEvent({ kind: "moved", from: "/notes/a.md", to: "/notes/renamed.md" }),
+    );
+    await waitFor(() =>
+      expect(port.watchCalls).toEqual([
+        { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+        { kind: "unwatch", consumerId: tab.id },
+        { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
+      ]),
+    );
+
+    // The rename callback lands afterwards: its own retarget must recognize
+    // that the watch already moved and not unwatch the fresh watch.
+    await act(async () => {
+      resolveRename("/notes/renamed.md");
+      await renaming;
+    });
+
+    expect(port.watchCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+      { kind: "unwatch", consumerId: tab.id },
+      { kind: "document", consumerId: tab.id, path: "/notes/renamed.md" },
+    ]);
+    hook.unmount();
+  });
+});
+
+describe("useAppController reopen from disk", () => {
+  it("reopens a closed clean file with the disk content changed while closed", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        [
+          "/notes/a.md",
+          {
+            path: "/notes/a.md",
+            text: "saved",
+            hasUtf8Bom: false,
+            newline: "lf",
+            modifiedUnixMs: 1,
+            version: "v1",
+          },
+        ],
+      ]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    act(() => hook.result.current.close(hook.result.current.state.activeId!));
+
+    act(() => port.updateFile("/notes/a.md", "External new text", "v2", 42));
+    act(() => hook.result.current.reopenClosed());
+
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "External new text",
+        savedText: "External new text",
+        version: "v2",
+        status: "clean",
+      }),
+    );
+    hook.unmount();
+  });
+
+  it("marks a reopened file missing when it vanished while closed", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        [
+          "/notes/a.md",
+          {
+            path: "/notes/a.md",
+            text: "saved",
+            hasUtf8Bom: false,
+            newline: "lf",
+            modifiedUnixMs: 1,
+            version: "v1",
+          },
+        ],
+      ]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    act(() => hook.result.current.close(hook.result.current.state.activeId!));
+
+    act(() => port.removeFile("/notes/a.md"));
+    act(() => hook.result.current.reopenClosed());
+    await waitFor(() =>
+      expect(hook.result.current.state.tabs[0]).toMatchObject({
+        text: "saved",
+        status: "missing",
+      }),
+    );
+    hook.unmount();
+  });
+});
+
+describe("useAppController stale external reads", () => {
+  it("rejects a stale external read completed after a Save As retarget", async () => {
+    const opened: OpenedFile = {
+      path: "/docs/original.md",
+      text: "Original English text",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 1,
+      version: "v1",
+    };
+    const port = new MemoryDocumentPort(new Map([[opened.path, opened]]), {
+      savePath: "/docs/saved-as.md",
+    });
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath(opened.path));
+    const id = hook.result.current.state.activeId!;
+
+    let resolveRead!: (value: OpenedFile) => void;
+    vi.spyOn(port, "openPath").mockImplementationOnce(
+      () => new Promise<OpenedFile>((resolve) => { resolveRead = resolve; }),
+    );
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: opened.path, modifiedUnixMs: 2, version: "v2" }),
+    );
+    await act(() => hook.result.current.saveAs());
+    expect(hook.result.current.state.tabs[0].path).toBe("/docs/saved-as.md");
+
+    // The old-path read completes after the tab retargeted: its content must
+    // not overwrite the new path's buffer.
+    await act(async () => {
+      resolveRead({ ...opened, text: "Late old-path contents", version: "v2" });
+    });
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/docs/saved-as.md",
+      text: "Original English text",
+    });
+    expect(hook.result.current.state.tabs.find((tab) => tab.id === id)?.text).toBe(
+      "Original English text",
+    );
+    hook.unmount();
+  });
+
+  it("rejects a stale external read completed after an in-app rename", async () => {
+    const opened: OpenedFile = {
+      path: "/notes/a.md",
+      text: "saved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 1,
+      version: "v1",
+    };
+    const port = new MemoryDocumentPort(new Map([[opened.path, opened]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath(opened.path));
+    const id = hook.result.current.state.activeId!;
+
+    let resolveRead!: (value: OpenedFile) => void;
+    vi.spyOn(port, "openPath").mockImplementationOnce(
+      () => new Promise<OpenedFile>((resolve) => { resolveRead = resolve; }),
+    );
+    act(() =>
+      port.emitDiskEvent({ kind: "changed", path: opened.path, modifiedUnixMs: 2, version: "v2" }),
+    );
+    await act(async () => {
+      await hook.result.current.renameDocument(id, "renamed");
+    });
+    expect(hook.result.current.state.tabs[0].path).toBe("/notes/renamed.md");
+
+    await act(async () => {
+      resolveRead({ ...opened, text: "Late old-path contents", version: "v2" });
+    });
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/renamed.md",
+      text: "saved",
+    });
+    hook.unmount();
+  });
+});

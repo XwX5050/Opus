@@ -3,6 +3,7 @@ import {
   DEFAULT_TRANSLATION_SETTINGS,
   normalizeTranslationSettings,
   stashApiKey,
+  translationSettingsSignature,
 } from "./types";
 
 describe("normalizeTranslationSettings", () => {
@@ -226,5 +227,42 @@ describe("stashApiKey", () => {
     const third = stashApiKey(second, "custom", "sk-a2");
     expect(third.presetApiKeys).toEqual({ custom: "sk-a2", glm: "sk-b" });
     expect(third.apiKey).toBe("sk-a2");
+  });
+});
+
+describe("translationSettingsSignature", () => {
+  it("is equal for settings objects with the same output-affecting values", () => {
+    const first = { ...DEFAULT_TRANSLATION_SETTINGS, apiKey: "sk-1" };
+    const second = { ...DEFAULT_TRANSLATION_SETTINGS, apiKey: "sk-2" };
+    expect(translationSettingsSignature(first)).toBe(
+      translationSettingsSignature(second),
+    );
+  });
+
+  it("changes when the endpoint, model, target language or concurrency change", () => {
+    const base = DEFAULT_TRANSLATION_SETTINGS;
+    const signature = translationSettingsSignature(base);
+    expect(
+      translationSettingsSignature({ ...base, endpoint: "https://other.example/v1" }),
+    ).not.toBe(signature);
+    expect(
+      translationSettingsSignature({ ...base, model: "gpt-5" }),
+    ).not.toBe(signature);
+    expect(
+      translationSettingsSignature({ ...base, targetLanguage: "English" }),
+    ).not.toBe(signature);
+    expect(translationSettingsSignature({ ...base, concurrency: 3 })).not.toBe(
+      signature,
+    );
+  });
+
+  it("ignores presetApiKeys and apiKey changes", () => {
+    expect(
+      translationSettingsSignature({
+        ...DEFAULT_TRANSLATION_SETTINGS,
+        apiKey: "sk-rotated",
+        presetApiKeys: { custom: "sk-rotated" },
+      }),
+    ).toBe(translationSettingsSignature(DEFAULT_TRANSLATION_SETTINGS));
   });
 });
