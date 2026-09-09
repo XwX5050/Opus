@@ -96,6 +96,33 @@ describe("splitManualSlides", () => {
     expect(splitManualSlides(doc)).toEqual(["```js\nx\n```", "B"]);
   });
 
+  it("does not split on --- inside a blockquoted fenced code block", () => {
+    const doc = "A\n\n> ```\n> ---\n> ```\n\n---\n\nB\n";
+    expect(splitManualSlides(doc)).toEqual([
+      "A\n\n> ```\n> ---\n> ```",
+      "B",
+    ]);
+  });
+
+  it("does not treat a suffixed fence line as a close inside slide scanning", () => {
+    // Before the fix the suffixed line closed the fence, exposing the
+    // following --- as a slide separator.
+    const doc = "Before\n\n```\n---\n```suffix\n---\n```\n\nAfter\n";
+    expect(splitManualSlides(doc)).toBeNull();
+  });
+
+  it("splits only after a fence closes at its own blockquote depth", () => {
+    // A shallower marker run is code inside the depth-2 fence, so the ---
+    // stays protected and never splits.
+    expect(splitManualSlides("A\n\n> > ```\n> > x\n> ```\n---\n\nB\n")).toBeNull();
+    // A proper depth-1 close releases the separator for splitting.
+    expect(
+      splitManualSlides(
+        "A\n\n> ```\n> code\n> > ```\n> more\n> ```\n\n---\n\nB\n",
+      ),
+    ).toEqual(["A\n\n> ```\n> code\n> > ```\n> more\n> ```", "B"]);
+  });
+
   it("does not split on --- inside a display-math block", () => {
     expect(splitManualSlides("$$\n---\n$$\n\nA\n")).toBeNull();
     expect(
@@ -168,6 +195,44 @@ describe("splitNaturalBlocks", () => {
   it("closes a fence only with the same character of equal or greater length", () => {
     expect(splitNaturalBlocks("```js\nx\n````\n")).toEqual(["```js\nx\n````"]);
     expect(splitNaturalBlocks("```\nx\n~~~\n")).toEqual(["```\nx\n~~~"]);
+  });
+
+  it("does not close a fence on a line with trailing content", () => {
+    expect(
+      splitNaturalBlocks(
+        "~~~text\ncode one\n~~~not-a-closing-fence\ncode two\n~~~\n",
+      ),
+    ).toEqual(["~~~text\ncode one\n~~~not-a-closing-fence\ncode two\n~~~"]);
+    expect(splitNaturalBlocks("```js\nx\n```suffix\n```\n")).toEqual([
+      "```js\nx\n```suffix\n```",
+    ]);
+  });
+
+  it("keeps a fenced code block inside a blockquote as one block", () => {
+    expect(
+      splitNaturalBlocks("> ```js\n> x\n\n> y\n> ```\n\nafter\n"),
+    ).toEqual(["> ```js\n> x\n\n> y\n> ```", "after"]);
+    expect(
+      splitNaturalBlocks("> ~~~text\n> code\n> ~~~\n"),
+    ).toEqual(["> ~~~text\n> code\n> ~~~"]);
+  });
+
+  it("does not close a top-level fence with a blockquoted fence-looking line", () => {
+    expect(splitNaturalBlocks("```\nx\n> ```\ny\n```\n")).toEqual([
+      "```\nx\n> ```\ny\n```",
+    ]);
+  });
+
+  it("closes a quoted fence only at its own blockquote depth", () => {
+    // A deeper marker run inside a depth-1 fence is code content, never the
+    // close (mirrors the editor's CommonMark parser).
+    expect(
+      splitNaturalBlocks("> ```\n> code\n> > ```\n> more\n> ```\nrest\n"),
+    ).toEqual(["> ```\n> code\n> > ```\n> more\n> ```", "rest"]);
+    // A shallower marker run does not close a depth-2 fence either.
+    expect(
+      splitNaturalBlocks("> > ```\n> > code\n> ```\n> rest\n"),
+    ).toEqual(["> > ```\n> > code\n> ```\n> rest"]);
   });
 
   it("keeps a display-math block with interior blank lines as one block", () => {

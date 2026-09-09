@@ -12,14 +12,57 @@
  * The line scanning mirrors `src/translate/segments.ts`: a deliberately
  * lexical state machine that tracks YAML frontmatter, fenced code blocks,
  * whole-block display math, and HTML comments without parsing Markdown.
- * Fences open with three or more backticks or tildes and close with the same
- * character at equal or greater length; math blocks open and close on
- * independent `$$` delimiter lines; anything left unclosed runs to EOF.
+ * Fences open with three or more backticks or tildes — optionally under
+ * CommonMark blockquote markers — and close with the same character at
+ * equal or greater length, followed only by spaces/tabs; math blocks open
+ * and close on independent `$$` delimiter lines; anything left unclosed
+ * runs to EOF.
  */
 
 type ProtectedState = "fence" | "math" | "comment";
 
-const FENCE_RE = /^[ \t]*(`{3,}|~{3,})/;
+/**
+ * An opening Markdown code fence: optional indentation, an optional run of
+ * CommonMark blockquote markers (`>` each followed by optional whitespace —
+ * nested `> > ` quoted fences included), then three or more backticks or
+ * tildes; the rest of the line is the info string, as in CommonMark. Only
+ * the line's classification is consumed — the original line stays part of
+ * the slide/block text, so quoting never loses bytes.
+ */
+const FENCE_RE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})/;
+
+/**
+ * Blockquote marker depth of a fence line — how many `>` markers precede the
+ * fence run (`> ```` is depth 1, `> > ```` depth 2, a plain fence depth 0).
+ * CommonMark strips one marker per open quote level, so a quoted fence only
+ * closes on a run at its own depth.
+ */
+const fenceMarkerDepth = (line: string): number => {
+  const prefix = /^[ \t]*(?:>[ \t]*)*/.exec(line)?.[0] ?? "";
+  return (prefix.match(/>/g) ?? []).length;
+};
+
+/**
+ * Closing line of a fence that was opened without a blockquote prefix: the
+ * fence run must follow only indentation — a `>`-prefixed line is code
+ * inside a top-level fence, never its close — and be followed only by
+ * spaces/tabs plus the line's own trailing line break. Closing fences carry
+ * no info string, so `~~~not-a-closing-fence` never closes a fence.
+ * Character and length matching against the opening run are the caller's
+ * job.
+ */
+const FENCE_CLOSE_RE = /^[ \t]*(`{3,}|~{3,})[ \t]*\r?\n?$/;
+
+/**
+ * Closing-line candidate of a fence that was opened inside a blockquote: at
+ * least one `>` marker, then the same trailing rules as `FENCE_CLOSE_RE`.
+ * The caller additionally requires the candidate's marker depth to equal the
+ * opening fence's — a run at shallower or deeper nesting is code content,
+ * not the close.
+ */
+const FENCE_QUOTED_CLOSE_RE =
+  /^[ \t]*(?:>[ \t]*)+(`{3,}|~{3,})[ \t]*\r?\n?$/;
+
 const COMMENT_OPEN_RE = /^[ \t]*<!--/;
 
 /**
@@ -100,6 +143,9 @@ export function splitManualSlides(markdown: string): string[] | null {
   let state: "normal" | ProtectedState = "normal";
   let fenceChar = "";
   let fenceLength = 0;
+  // Marker depth of the open fence's line (0 for a plain fence); a quoted
+  // fence only closes on a line carrying the same depth.
+  let fenceDepth = 0;
   let prevLine: PrevLineKind = "start";
   let separatorCount = 0;
 
@@ -121,9 +167,12 @@ export function splitManualSlides(markdown: string): string[] | null {
     switch (state) {
       case "fence": {
         pending.push(line);
-        const closing = FENCE_RE.exec(line);
+        const closing = (fenceDepth > 0 ? FENCE_QUOTED_CLOSE_RE : FENCE_CLOSE_RE).exec(
+          line,
+        );
         if (
           closing &&
+          fenceMarkerDepth(line) === fenceDepth &&
           closing[1][0] === fenceChar &&
           closing[1].length >= fenceLength
         ) {
@@ -173,6 +222,7 @@ export function splitManualSlides(markdown: string): string[] | null {
           pending.push(line);
           fenceChar = fence[1][0];
           fenceLength = fence[1].length;
+          fenceDepth = fenceMarkerDepth(line);
           state = "fence";
           break;
         }
@@ -222,6 +272,9 @@ export function splitNaturalBlocks(markdown: string): string[] {
   let state: "normal" | ProtectedState = "normal";
   let fenceChar = "";
   let fenceLength = 0;
+  // Marker depth of the open fence's line (0 for a plain fence); a quoted
+  // fence only closes on a line carrying the same depth.
+  let fenceDepth = 0;
 
   const flush = (): void => {
     const block = pending.join("").trim();
@@ -242,9 +295,12 @@ export function splitNaturalBlocks(markdown: string): string[] {
     switch (state) {
       case "fence": {
         pending.push(line);
-        const closing = FENCE_RE.exec(line);
+        const closing = (fenceDepth > 0 ? FENCE_QUOTED_CLOSE_RE : FENCE_CLOSE_RE).exec(
+          line,
+        );
         if (
           closing &&
+          fenceMarkerDepth(line) === fenceDepth &&
           closing[1][0] === fenceChar &&
           closing[1].length >= fenceLength
         ) {
@@ -278,6 +334,7 @@ export function splitNaturalBlocks(markdown: string): string[] {
           pending.push(line);
           fenceChar = fence[1][0];
           fenceLength = fence[1].length;
+          fenceDepth = fenceMarkerDepth(line);
           state = "fence";
           break;
         }

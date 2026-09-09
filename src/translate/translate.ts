@@ -2,7 +2,7 @@
  * Document translation pipeline: segments the Markdown, protects inline
  * code/math spans with placeholders, subdivides over-long paragraphs into
  * provider-friendly chunks, drops chunks already written in the target
- * language, and packs the remainder into static contiguous batches — at most
+ * language, and packs the remainder into static batches — at most
  * TRANSLATION_BATCH_MAX_UNITS units or TRANSLATION_BATCH_MAX_CHARS characters
  * each — so one provider request covers several chunks. Batches run through a
  * bounded pool of port calls ordered by the caller's visible range when a
@@ -125,14 +125,19 @@ interface TranslationUnit {
 }
 
 /**
- * A static run of contiguous translation units sent to the provider as one
- * request. Workers mark a batch in-flight when they pick it so no two workers
- * ever send the same units.
+ * A static run of translation units sent to the provider as one request.
+ * Workers mark a batch in-flight when they pick it so no two workers ever
+ * send the same units.
  */
 interface TranslationBatch {
   readonly units: TranslationUnit[];
-  /** Index of the batch's first unit in the full unit list. */
-  readonly firstUnitIndex: number;
+  /**
+   * Each unit's index in the full unit list, aligned with `units`. Batch
+   * construction skips units already written in the target language, so the
+   * indices are not necessarily consecutive — results must map back by
+   * identity, never by `first + offset`.
+   */
+  readonly unitIndices: number[];
   status: "pending" | "in-flight" | "done";
 }
 
@@ -235,7 +240,7 @@ export async function translateDocument(
     emitPartial();
   };
 
-  /** Packs the untranslated units into static contiguous batches. */
+  /** Packs the untranslated units into static batches in document order. */
   const batches: TranslationBatch[] = [];
   let openBatch: TranslationBatch | null = null;
   let openBatchChars = 0;
@@ -243,7 +248,9 @@ export async function translateDocument(
     const unit = units[index];
     if (isLikelyTargetLanguage(unit.originalText, settings.targetLanguage)) {
       // Already in the target language: complete immediately with the
-      // original text and never send it to the provider.
+      // original text and never send it to the provider. The unit keeps its
+      // own slot in the unit list, so batches formed around it record their
+      // members' real indices rather than assuming contiguity.
       unitResults[index] = unit.originalText;
       completeUnit();
       continue;
@@ -254,11 +261,12 @@ export async function translateDocument(
       openBatch.units.length >= TRANSLATION_BATCH_MAX_UNITS ||
       openBatchChars + unitChars > TRANSLATION_BATCH_MAX_CHARS
     ) {
-      openBatch = { units: [], firstUnitIndex: index, status: "pending" };
+      openBatch = { units: [], unitIndices: [], status: "pending" };
       batches.push(openBatch);
       openBatchChars = 0;
     }
     openBatch.units.push(unit);
+    openBatch.unitIndices.push(index);
     openBatchChars += unitChars;
   }
 
@@ -345,8 +353,9 @@ export async function translateDocument(
    * The pending batch nearest the visible units. The range is re-evaluated on
    * every pick so scroll changes re-order work immediately; distance is the
    * unit-index gap between the batch and the visible interval (0 when they
-   * intersect), ties go to the lower first-unit-index so content above the
-   * viewport completes first, and a null range means plain document order.
+   * intersect), ties go to the batch whose first unit comes first in the
+   * document so content above the viewport completes first, and a null range
+   * means plain document order.
    */
   const pickBatch = (): TranslationBatch | undefined => {
     const visible = visibleUnitInterval();
@@ -354,19 +363,20 @@ export async function translateDocument(
     let bestDistance = Infinity;
     for (const batch of batches) {
       if (batch.status !== "pending") continue;
-      const lastUnitIndex = batch.firstUnitIndex + batch.units.length - 1;
+      const firstUnitIndex = batch.unitIndices[0];
+      const lastUnitIndex = batch.unitIndices[batch.unitIndices.length - 1];
       const distance =
         visible === null
-          ? batch.firstUnitIndex
+          ? firstUnitIndex
           : lastUnitIndex < visible.lo
             ? visible.lo - lastUnitIndex
-            : batch.firstUnitIndex > visible.hi
-              ? batch.firstUnitIndex - visible.hi
+            : firstUnitIndex > visible.hi
+              ? firstUnitIndex - visible.hi
               : 0;
       if (
         best === undefined ||
         distance < bestDistance ||
-        (distance === bestDistance && batch.firstUnitIndex < best.firstUnitIndex)
+        (distance === bestDistance && firstUnitIndex < best.unitIndices[0])
       ) {
         best = batch;
         bestDistance = distance;
@@ -406,11 +416,15 @@ export async function translateDocument(
   };
 
   /**
-   * Applies a batch's results to its units. Units holding protected inline
-   * spans restore them from the reply; if the model mangled or dropped a
-   * placeholder, that unit alone is re-translated without protection so a
-   * placeholder can never leak into the document. Empty replies fall back to
-   * the original chunk text. Each completed unit emits its own partial.
+   * Applies a batch's results to its units. Each result lands on the unit
+   * identified by `unitIndices[offset]` — never `first + offset`, because
+   * units skipped as already in the target language are not in any batch, so
+   * a batch's members are not contiguous in the unit list. Units holding
+   * protected inline spans restore them from the reply; if the model mangled
+   * or dropped a placeholder, that unit alone is re-translated without
+   * protection so a placeholder can never leak into the document. Empty
+   * replies fall back to the original chunk text. Each completed unit emits
+   * its own partial.
    */
   const applyBatchResults = async (
     batch: TranslationBatch,
@@ -419,7 +433,7 @@ export async function translateDocument(
     for (let offset = 0; offset < batch.units.length; offset++) {
       if (failed) return;
       const unit = batch.units[offset];
-      const unitIndex = batch.firstUnitIndex + offset;
+      const unitIndex = batch.unitIndices[offset];
       const translated = results[offset];
       let result: string;
       if (unit.spans.length === 0) {

@@ -879,6 +879,37 @@ describe("translateDocument", () => {
     expect(partials[2].text).toBe("你好世界\n\nHELLO WORLD\n\n中文不错\n");
   });
 
+  it("maps batch results back to their units when a skipped unit sits between them", async () => {
+    // Regression for F05: the two English units share one batch even though
+    // the Chinese unit between them was skipped, so results must land by
+    // unit identity — never by `batch start + offset`, which would write the
+    // last paragraph's translation into the Chinese paragraph's slot.
+    const doc =
+      "First English paragraph.\n\n" +
+      "这是一段已经写好的中文内容。\n\n" +
+      "Last English paragraph.\n";
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        async (_settings: TranslationSettings, texts: string[]) =>
+          texts.map((text) =>
+            text.includes("First") ? "第一段译文。" : "最后一段译文。",
+          ),
+      ),
+    };
+    await expect(translateDocument(port, settings, doc)).resolves.toBe(
+      "第一段译文。\n\n" +
+        "这是一段已经写好的中文内容。\n\n" +
+        "最后一段译文。\n",
+    );
+    // Both English units still pack into a single batch around the skipped
+    // Chinese unit.
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, [
+      "First English paragraph.\n",
+      "Last English paragraph.\n",
+    ]);
+  });
+
   it("never calls the port when the whole document is in the target language", async () => {
     const doc = "你好世界\n\n天气很好\n";
     const partials: TranslationPartial[] = [];
