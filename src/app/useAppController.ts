@@ -48,6 +48,7 @@ import {
 import {
   DEFAULT_TRANSLATION_SETTINGS,
   normalizeTranslationSettings,
+  translationSettingsSignature,
   type TranslationSettings,
   type TranslationViewState,
 } from "../translate/types";
@@ -103,21 +104,6 @@ const parentPathKey = (path: string): string => {
   const normalized = path.replaceAll("\\", "/");
   const index = normalized.lastIndexOf("/");
   return normalizePathKey(index <= 0 ? "/" : normalized.slice(0, index), PATH_PLATFORM);
-};
-
-/**
- * Computes the absolute path an in-app rename lands on: same directory and
- * original extension as `path`, with `newBaseName` as the new base — the
- * exact path the backend's rename_document command constructs.
- */
-const renamedDocumentPath = (path: string, newBaseName: string): string => {
-  const normalized = path.replaceAll("\\", "/");
-  const index = normalized.lastIndexOf("/");
-  const directory =
-    index === -1 ? "" : index === 0 ? "/" : normalized.slice(0, index);
-  const lastDot = normalized.lastIndexOf(".");
-  const extension = lastDot === -1 ? "" : normalized.slice(lastDot);
-  return `${directory}/${newBaseName}${extension}`;
 };
 
 /**
@@ -189,8 +175,16 @@ export function useAppController(
   const workspacePathRef = useRef<string | null>(null);
   // Stable consumer IDs (tab IDs) that currently hold an asset scope.
   const acquiredScopeIds = useRef(new Set<string>());
-  // Stable consumer IDs (tab IDs, `workspace:<path>`) that hold a disk watch.
-  const watchedIds = useRef(new Set<string>());
+  // Per-consumer disk-watch bookkeeping: the exact target each consumer
+  // currently watches, mirroring the backend's per-consumer refcount. Tracked
+  // by value so a retarget (rename, move, save-as) can tell whether the
+  // recorded watch still matches the old target before unwatching — an
+  // unwatch issued after another handler already retargeted the same consumer
+  // would drop the fresh watch, since the backend releases every watch the
+  // consumer holds on one unwatch call.
+  const watchedTargets = useRef(
+    new Map<string, { target: string; kind: "document" | "workspace" }>(),
+  );
   // Per-tab debounce timers for recovery drafts, the tab IDs whose draft is
   // known to be persisted (so it must be discarded once the tab is clean),
   // and each tab's last-scheduled draft signature (status + text) so an
@@ -289,27 +283,38 @@ export function useAppController(
   // Disk watches follow the same consumer discipline as asset scopes: one
   // watch per tab id (or `workspace:<path>`), acquired on genuine opens,
   // released through releaseScope. Watching is best-effort — a watch failure
-  // must never roll back the asset scope or block editing.
+  // must never roll back the asset scope or block editing. The recorded
+  // target is compared by value, so re-watching a target the consumer already
+  // watches is a no-op and a retarget never double-registers.
   const watchConsumer = useCallback((
     id: string,
     target: string,
     kind: "document" | "workspace",
   ) => {
-    if (watchedIds.current.has(id)) return;
-    watchedIds.current.add(id);
+    const current = watchedTargets.current.get(id);
+    if (current?.target === target && current.kind === kind) return;
+    const record = { target, kind };
+    watchedTargets.current.set(id, record);
     enqueueScopeOperation(id, async () => {
       try {
         if (kind === "workspace") await port.watchWorkspace(id, target);
         else await port.watchDocument(id, target);
       } catch {
-        watchedIds.current.delete(id);
+        // Only a failure of the registration this record represents clears it.
+        // A rename / disk move / save-as retarget that already replaced the
+        // record owns a newer backend registration, and deleting it here would
+        // orphan that bookkeeping: the tab's later close would skip its
+        // unwatch and leak the backend watch for the consumer id.
+        if (watchedTargets.current.get(id) === record) {
+          watchedTargets.current.delete(id);
+        }
       }
     });
   }, [enqueueScopeOperation, port]);
 
   const releaseScope = useCallback((id: string) => {
     const hadScope = acquiredScopeIds.current.delete(id);
-    const hadWatch = watchedIds.current.delete(id);
+    const hadWatch = watchedTargets.current.delete(id);
     if (!hadScope && !hadWatch) return;
     // The scope release is enqueued first so cross-consumer ordering of
     // acquire/release matches the pre-watch behavior.
@@ -331,6 +336,27 @@ export function useAppController(
         }
       });
     }
+  }, [enqueueScopeOperation, port]);
+
+  // Retargets a consumer's document watch from its current target to a new
+  // path: the old watch is released first, then the new one is registered,
+  // both serialized through the consumer's operation chain so the backend
+  // never observes a gap-ordered release after a re-registration. The release
+  // only fires when the recorded watch still matches `expectedTarget` — a
+  // caller whose tab was already retargeted elsewhere (a disk moved event
+  // racing the caller's own retarget) must not unwatch the fresh watch.
+  const releaseWatch = useCallback((id: string, expectedTarget: string) => {
+    const current = watchedTargets.current.get(id);
+    if (!current || current.target !== expectedTarget) return false;
+    watchedTargets.current.delete(id);
+    enqueueScopeOperation(id, async () => {
+      try {
+        await port.unwatch(id);
+      } catch {
+        // Watch release is best-effort; the backend refcounts per consumer.
+      }
+    });
+    return true;
   }, [enqueueScopeOperation, port]);
 
   const rememberRecent = useCallback((item: RecentItem) => {
@@ -525,11 +551,15 @@ export function useAppController(
         if (translationControllers.current.get(id) !== controller) return;
         translationControllers.current.delete(id);
         translationViewportProviderRef.current = null;
+        // An errored run never leaves the translation on screen: the error
+        // banner surfaces through the entry's phase while `visible: false`
+        // keeps the editor and the save path live, so a failed request can
+        // never lock the user out of editing or saving the original text.
         setTranslations((current) => {
           const next = new Map(current);
           next.set(id, {
             state: { phase: "error", error: errorMessage(caught) },
-            visible: true,
+            visible: false,
           });
           return next;
         });
@@ -548,7 +578,9 @@ export function useAppController(
       return;
     }
     if (current.state.phase === "ready") {
-      // Hide/show the in-memory result; re-showing never re-calls the API.
+      // Hide/show the in-memory result; entries are bound to the settings
+      // signature they ran under (see the signature effect), so a result that
+      // still exists is always current and re-showing never re-calls the API.
       setTranslations((entries) => {
         const next = new Map(entries);
         next.set(id, { state: current.state, visible: !current.visible });
@@ -556,7 +588,7 @@ export function useAppController(
       });
       return;
     }
-    // Error state: retry from scratch.
+    // Error state: the toggle retries the failed run from scratch.
     startTranslation(id);
   }, [dropTranslation, startTranslation]);
 
@@ -617,6 +649,24 @@ export function useAppController(
       if (!state.tabs.some((tab) => tab.id === id)) seen.delete(id);
     }
   });
+
+  // A per-tab translation is bound to the settings signature it ran under
+  // (endpoint, model, target language, concurrency — the API key never
+  // changes output, so it is not part of the signature). When the signature
+  // changes, every cached result and in-flight run is dropped: re-showing can
+  // never surface a stale translation produced under different settings, and
+  // the next toggle translates under the new ones.
+  const lastTranslationSignatureRef = useRef(
+    translationSettingsSignature(DEFAULT_TRANSLATION_SETTINGS),
+  );
+  const translationSettingsKey = translationSettingsSignature(translationSettings);
+  useEffect(() => {
+    if (translationSettingsKey === lastTranslationSignatureRef.current) return;
+    lastTranslationSignatureRef.current = translationSettingsKey;
+    for (const id of [...translationsRef.current.keys()]) dropTranslation(id);
+    // The signature is the only input; dropTranslation is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translationSettingsKey, dropTranslation]);
 
   const addOpenedFiles = useCallback((
     files: ReadonlyArray<OpenedFile>,
@@ -774,8 +824,13 @@ export function useAppController(
   const save = useCallback((id = stateRef.current.activeId) => {
     // While a translation is showing, saving is a no-op: the buffer belongs
     // to the original document and must stay untouched (the read-only editor
-    // is the first line of defense, this guard the second).
-    if (id && translationsRef.current.get(id)?.visible) {
+    // is the first line of defense, this guard the second). An errored run is
+    // never visible (see startTranslation), so it never blocks saving; a
+    // close-save bypasses the guard too — the close dialog is the user's
+    // explicit decision to leave, and the save writes the original buffer the
+    // translation only ever overlaid.
+    const translation = id ? translationsRef.current.get(id) : undefined;
+    if (translation?.visible && !closeSavingRef.current) {
       return Promise.resolve(false);
     }
     return performSave(id, false);
@@ -789,7 +844,8 @@ export function useAppController(
   const changeText = useCallback((id: string, text: string) => {
     // Same guard as save: edits reaching the controller while a translation
     // is visible (visible also covers the in-flight phase) are dropped so
-    // the original text can never be corrupted.
+    // the original text can never be corrupted. An errored translation is
+    // never visible, so editing resumes immediately after a failure.
     if (translationsRef.current.get(id)?.visible) return;
     dispatch({ type: "textChanged", id, text });
   }, [dispatch]);
@@ -856,7 +912,8 @@ export function useAppController(
   }, [closeDocumentId, dispatch, isCurrent, releaseScope, save]);
 
   const reopenClosed = useCallback(() => {
-    const reopeningId = stateRef.current.recentlyClosed[0]?.document.id;
+    const closed = stateRef.current.recentlyClosed[0]?.document;
+    const reopeningId = closed?.id;
     const before = stateRef.current;
     const next = dispatch({ type: "reopenLastClosed", pathPlatform: PATH_PLATFORM });
     if (!reopeningId) return;
@@ -869,15 +926,71 @@ export function useAppController(
       acquireDocumentScope(added);
       if (added.path) watchConsumer(added.id, added.path, "document");
     }
-  }, [acquireDocumentScope, dispatch, watchConsumer]);
+    if (!added || added.path === null) return;
+    // The snapshot is reopened in memory first (the tab appears instantly),
+    // then the disk is re-read: a clean snapshot follows the disk's current
+    // content — the file may have changed while it was closed — while a dirty
+    // snapshot keeps the local draft and only surfaces a conflict when the
+    // saved version actually moved. The commit is guarded on generation, path
+    // and the snapshot's saved version, so a stale read can never overwrite a
+    // newer save or land on a tab that was retargeted meanwhile.
+    const path = added.path;
+    const expectedVersion = added.version;
+    const closedStatus = closed.status;
+    const generation = lifecycleGenerationRef.current;
+    void (async () => {
+      try {
+        const fresh = await port.openPath(path);
+        if (!isCurrent(generation)) return;
+        const latest = stateRef.current.tabs.find(
+          (candidate) => candidate.id === reopeningId,
+        );
+        if (
+          !latest ||
+          latest.path === null ||
+          normalizePathKey(latest.path, PATH_PLATFORM) !==
+            normalizePathKey(path, PATH_PLATFORM) ||
+          latest.version !== expectedVersion
+        ) {
+          return;
+        }
+        if (closedStatus === "clean") {
+          if (fresh.version !== expectedVersion || fresh.text !== closed.text) {
+            dispatch({ type: "externalChanged", id: reopeningId, file: fresh });
+          }
+        } else if (expectedVersion !== null && fresh.version !== expectedVersion) {
+          dispatch({ type: "externalChanged", id: reopeningId, file: fresh });
+        }
+      } catch (caught) {
+        if (!isCurrent(generation)) return;
+        const latest = stateRef.current.tabs.find(
+          (candidate) => candidate.id === reopeningId,
+        );
+        if (
+          !latest ||
+          latest.path === null ||
+          normalizePathKey(latest.path, PATH_PLATFORM) !==
+            normalizePathKey(path, PATH_PLATFORM)
+        ) {
+          return;
+        }
+        if (caught instanceof DocumentPortError && caught.code === "not_found") {
+          dispatch({ type: "externalMissing", id: reopeningId });
+        }
+      }
+    })();
+  }, [acquireDocumentScope, dispatch, watchConsumer, port]);
 
   /**
    * Renames the document behind a tab in place. `newBaseName` carries no
    * extension: the original extension and directory of the tab's path are
-   * kept. On success the tab follows to the new path regardless of its
-   * status, and recent entries pointing at the old path are re-pointed the
-   * same way disk moves update paths. On failure nothing is committed and
-   * the error propagates to the caller.
+   * kept. On success the tab follows to the canonical path returned by the
+   * backend regardless of its status, and recent entries pointing at the old
+   * path are re-pointed the same way disk moves update paths. The disk watch
+   * is retargeted under the same consumer id — unwatch the old path, then
+   * watch the new one, serialized through the consumer's operation chain — so
+   * later external modifications of the new path still reach the tab. On
+   * failure nothing is committed and the error propagates to the caller.
    */
   const renameDocument = useCallback(async (tabId: string, newBaseName: string) => {
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === tabId);
@@ -885,8 +998,10 @@ export function useAppController(
       throw new Error(`No open document for tab: ${tabId}`);
     }
     const oldPath = tab.path;
-    const newPath = renamedDocumentPath(oldPath, newBaseName);
-    await port.renameDocument(oldPath, newBaseName);
+    const newPath = await port.renameDocument(oldPath, newBaseName);
+    const stillOpen = stateRef.current.tabs.some(
+      (candidate) => candidate.id === tabId,
+    );
     dispatch({
       type: "tabRenamed",
       id: tabId,
@@ -901,15 +1016,34 @@ export function useAppController(
           : entry,
       ),
     );
-  }, [dispatch, port]);
+    if (!stillOpen) {
+      // The tab was closed while the rename was in flight; its close already
+      // released the watch under the tab's consumer id, so nothing to retarget.
+      return;
+    }
+    if (
+      normalizePathKey(newPath, PATH_PLATFORM) ===
+      normalizePathKey(oldPath, PATH_PLATFORM)
+    ) {
+      // Renamed onto the current name: nothing moved, keep the existing watch.
+      return;
+    }
+    // The backend's own rename may already have surfaced as a disk moved
+    // event that retargeted the watch; releaseWatch only unwatches when the
+    // recorded watch still targets the old path, so the fresh watch survives.
+    releaseWatch(tabId, oldPath);
+    watchConsumer(tabId, newPath, "document");
+  }, [dispatch, port, releaseWatch, watchConsumer]);
 
   // Release every still-held scope and watch when the controller unmounts,
   // keeping the same acquire-then-release serialization as tab closes.
   useEffect(() => {
     const acquired = acquiredScopeIds.current;
-    const watched = watchedIds.current;
+    const watched = watchedTargets.current;
     return () => {
-      for (const id of new Set([...acquired, ...watched])) releaseScope(id);
+      for (const id of new Set([...acquired, ...watched.keys()])) {
+        releaseScope(id);
+      }
     };
   }, [releaseScope]);
 
@@ -998,22 +1132,55 @@ export function useAppController(
     };
   }, [addOpenedFiles, openWorkspacePath, port, subscribeToEvents]);
 
+  /**
+   * True while the tab still holds the same path and saved version it had
+   * when an asynchronous disk read started — the read's commit precondition.
+   * Save As, rename, a disk move, a close, or a completed save all move the
+   * tab past this check, so a stale read result can never land on a tab that
+   * no longer refers to the path it read.
+   */
+  const isReadCommitCurrent = useCallback((
+    id: string,
+    path: string,
+    expectedVersion: string | null,
+  ): boolean => {
+    const latest = stateRef.current.tabs.find((candidate) => candidate.id === id);
+    return (
+      latest !== undefined &&
+      latest.path !== null &&
+      normalizePathKey(latest.path, PATH_PLATFORM) ===
+        normalizePathKey(path, PATH_PLATFORM) &&
+      latest.version === expectedVersion
+    );
+  }, []);
+
   const reloadFromDisk = useCallback(async (id: string) => {
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
     if (!tab?.path) return;
     const generation = lifecycleGenerationRef.current;
+    const path = tab.path;
+    const expectedVersion = tab.version;
     try {
-      const fresh = await port.openPath(tab.path);
-      // The reducer decides atomically: still-clean tabs reload, anything
-      // else becomes a conflict without losing local text.
-      if (isCurrent(generation)) dispatch({ type: "externalChanged", id, file: fresh });
+      const fresh = await port.openPath(path);
+      // The commit is validated against the generation, the path and the
+      // saved version captured at read start: a read that outlives a Save As,
+      // rename or save on the same tab is stale and must not overwrite the
+      // tab's new content. The reducer then decides atomically: still-clean
+      // tabs reload, anything else becomes a conflict without losing text.
+      if (
+        isCurrent(generation) &&
+        isReadCommitCurrent(id, path, expectedVersion)
+      ) {
+        dispatch({ type: "externalChanged", id, file: fresh });
+      }
     } catch (caught) {
       if (!isCurrent(generation)) return;
+      if (!isReadCommitCurrent(id, path, expectedVersion)) return;
       if (caught instanceof DocumentPortError && caught.code === "not_found") {
         dispatch({ type: "externalMissing", id });
       }
     }
-  }, [dispatch, isCurrent, port]);
+  }, [dispatch, isCurrent, isReadCommitCurrent, port]);
 
   const handleDiskEvent = useCallback((event: DiskEvent) => {
     if (event.kind === "moved") {
@@ -1034,15 +1201,10 @@ export function useAppController(
         tab.path !== null &&
         moved.path !== tab.path
       ) {
-        if (watchedIds.current.delete(moved.id)) {
-          enqueueScopeOperation(moved.id, async () => {
-            try {
-              await port.unwatch(moved.id);
-            } catch {
-              // Watch release is best-effort.
-            }
-          });
-        }
+        // Release the old-path watch only while it is still recorded at the
+        // old path (a concurrent retarget already moved it on, nothing to
+        // drop here), then register the new path under the same consumer id.
+        releaseWatch(moved.id, tab.path);
         // The asset scope grants the document's parent directory, so it only
         // needs a release/re-acquire when the move crossed a directory
         // boundary; a same-parent rename keeps the existing grant, which
@@ -1067,7 +1229,7 @@ export function useAppController(
     // Echoes of our own completed saves carry the version we just wrote.
     if (tab.version !== null && tab.version === event.version) return;
     void reloadFromDisk(tab.id);
-  }, [acquireDocumentScope, dispatch, enqueueScopeOperation, port, releaseScope, reloadFromDisk, watchConsumer]);
+  }, [acquireDocumentScope, dispatch, releaseScope, releaseWatch, reloadFromDisk, watchConsumer]);
 
   useEffect(() => {
     let disposed = false;
@@ -1339,13 +1501,24 @@ export function useAppController(
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
     if (!tab?.path) return;
     const generation = lifecycleGenerationRef.current;
+    const path = tab.path;
     try {
-      const fresh = await port.openPath(tab.path);
-      if (isCurrent(generation)) dispatch({ type: "diskVersionLoaded", id, file: fresh });
+      const fresh = await port.openPath(path);
+      // The disk version only lands while the tab still refers to the path
+      // that was read: a Save As or rename in flight must not be overwritten
+      // by the stale read of the old location.
+      if (
+        isCurrent(generation) &&
+        isReadCommitCurrent(id, path, tab.version)
+      ) {
+        dispatch({ type: "diskVersionLoaded", id, file: fresh });
+      }
     } catch (caught) {
-      if (isCurrent(generation)) setError(errorMessage(caught));
+      if (isCurrent(generation) && isReadCommitCurrent(id, path, tab.version)) {
+        setError(errorMessage(caught));
+      }
     }
-  }, [dispatch, isCurrent, port]);
+  }, [dispatch, isCurrent, isReadCommitCurrent, port]);
 
   const keepLocalVersion = useCallback((id: string) => {
     dispatch({ type: "conflictKeptLocal", id });
@@ -1374,20 +1547,44 @@ export function useAppController(
       setRecoveryDrafts((current) =>
         current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
       );
-      // A restored tab is dirty, so its own debounce would eventually write a
-      // draft — but a crash inside that 2s window would lose the recovery
-      // copy entirely, since the leftover draft is gone by then. Persist the
-      // restored tab's draft immediately, and only discard the leftover once
-      // the new copy is safely on disk.
+      // The restored content lands either on the fresh tab (`added`) or, when
+      // the reducer merged it into an already-open tab for the same path, on
+      // that existing tab. Find the owner so the transaction below targets
+      // whichever tab now holds the recovered text.
+      const ownerPath = draft.originalPath;
+      const owner =
+        added ??
+        (ownerPath === null
+          ? undefined
+          : next.tabs.find(
+              (tab) =>
+                tab.path !== null &&
+                normalizePathKey(tab.path, PATH_PLATFORM) ===
+                  normalizePathKey(ownerPath, PATH_PLATFORM) &&
+                tab.text === draft.text,
+            ));
+      // Transaction ordering: the owner's own draft must be persisted and its
+      // write confirmed BEFORE the leftover draft is discarded — a crash in
+      // the debounce window must never find the only recovery copy already
+      // deleted. When the owner's draft id equals the leftover's id (a fresh
+      // tab reusing the crashed tab's `document-N` id), a successful write has
+      // replaced the leftover in place, so the discard is skipped entirely —
+      // deleting that id would remove the freshly written copy. A clean owner
+      // (nothing to recover) still discards the leftover, whose content was
+      // fully superseded by the restore.
       let leftoverDiscardable = true;
-      if (added && needsRecoveryDraft(added)) {
-        persistedDraftIds.current.add(added.id);
+      if (owner && needsRecoveryDraft(owner)) {
+        persistedDraftIds.current.add(owner.id);
         try {
-          await port.writeDraft(draftFromSnapshot(added));
+          await port.writeDraft(draftFromSnapshot(owner));
+          if (draftIdForTab(owner.id) === info.draftId) {
+            // The fresh copy now occupies the leftover's id; it must survive.
+            leftoverDiscardable = false;
+          }
         } catch {
           // The immediate write failed: the leftover draft stays as the only
           // disk copy and resurfaces in the recovery dialog next launch.
-          persistedDraftIds.current.delete(added.id);
+          persistedDraftIds.current.delete(owner.id);
           leftoverDiscardable = false;
         }
       }
@@ -1397,7 +1594,14 @@ export function useAppController(
     } catch (caught) {
       if (isCurrent(generation)) setError(errorMessage(caught));
     }
-  }, [acquireDocumentScope, dispatch, isCurrent, nextId, port, watchConsumer]);
+  }, [
+    acquireDocumentScope,
+    dispatch,
+    isCurrent,
+    nextId,
+    port,
+    watchConsumer,
+  ]);
 
   const discardRecoveryDraft = useCallback(async (info: RecoveryDraftInfo) => {
     try {

@@ -105,6 +105,24 @@ export const stashApiKey = (
   presetApiKeys: { ...settings.presetApiKeys, [slot]: apiKey },
 });
 
+/**
+ * Opaque signature of the settings fields that change what a translation
+ * looks like: endpoint, model, target language and concurrency. The API key
+ * and remembered preset keys authenticate the same output and are
+ * deliberately excluded. In-memory per-tab translation results are bound to
+ * this signature, so changing any listed field drops (or marks stale) every
+ * cached result and the next show re-translates under the new settings.
+ */
+export const translationSettingsSignature = (
+  settings: TranslationSettings,
+): string =>
+  JSON.stringify([
+    settings.endpoint,
+    settings.model,
+    settings.targetLanguage,
+    settings.concurrency,
+  ]);
+
 export type TranslationViewState =
   | {
       readonly phase: "translating";
