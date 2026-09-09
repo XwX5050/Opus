@@ -171,6 +171,41 @@ describe("splitMarkdownSegments", () => {
     ]);
   });
 
+  it("closes a quoted fence only at its own blockquote depth", () => {
+    // A deeper marker run inside a depth-1 fence is code content, never the
+    // close (mirrors the editor's CommonMark parser).
+    const deeper = "> ```\n> code\n> > ```\n> more\n> ```\nrest\n";
+    const deeperSegments = splitMarkdownSegments(deeper);
+    expect(deeperSegments).toEqual([
+      {
+        kind: "protected",
+        text: "> ```\n> code\n> > ```\n> more\n> ```\n",
+      },
+      { kind: "translatable", text: "rest\n" },
+    ]);
+    expect(joined(deeperSegments)).toBe(deeper);
+
+    // A shallower marker run does not close a depth-2 fence either: the
+    // fence runs on (everything stays code, as in the editor).
+    const shallower = "> > ```\n> > code\n> ```\n> rest\n";
+    const shallowerSegments = splitMarkdownSegments(shallower);
+    expect(shallowerSegments).toEqual([
+      { kind: "protected", text: shallower },
+    ]);
+    expect(joined(shallowerSegments)).toBe(shallower);
+  });
+
+  it("translates text after a quoted fence closed at its own depth", () => {
+    const doc = "> > ```\n> > code\n> > ```\n> rest\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "> > ```\n> > code\n> > ```\n",
+    });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "> rest\n" });
+    expect(joined(segments)).toBe(doc);
+  });
+
   it("keeps a quoted fence-line with trailing content inside the fence", () => {
     const doc = "> ```\n> code\n> ```extra\n> more\n> ```\n";
     expect(splitMarkdownSegments(doc)).toEqual([

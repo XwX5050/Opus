@@ -111,6 +111,18 @@ describe("splitManualSlides", () => {
     expect(splitManualSlides(doc)).toBeNull();
   });
 
+  it("splits only after a fence closes at its own blockquote depth", () => {
+    // A shallower marker run is code inside the depth-2 fence, so the ---
+    // stays protected and never splits.
+    expect(splitManualSlides("A\n\n> > ```\n> > x\n> ```\n---\n\nB\n")).toBeNull();
+    // A proper depth-1 close releases the separator for splitting.
+    expect(
+      splitManualSlides(
+        "A\n\n> ```\n> code\n> > ```\n> more\n> ```\n\n---\n\nB\n",
+      ),
+    ).toEqual(["A\n\n> ```\n> code\n> > ```\n> more\n> ```", "B"]);
+  });
+
   it("does not split on --- inside a display-math block", () => {
     expect(splitManualSlides("$$\n---\n$$\n\nA\n")).toBeNull();
     expect(
@@ -209,6 +221,18 @@ describe("splitNaturalBlocks", () => {
     expect(splitNaturalBlocks("```\nx\n> ```\ny\n```\n")).toEqual([
       "```\nx\n> ```\ny\n```",
     ]);
+  });
+
+  it("closes a quoted fence only at its own blockquote depth", () => {
+    // A deeper marker run inside a depth-1 fence is code content, never the
+    // close (mirrors the editor's CommonMark parser).
+    expect(
+      splitNaturalBlocks("> ```\n> code\n> > ```\n> more\n> ```\nrest\n"),
+    ).toEqual(["> ```\n> code\n> > ```\n> more\n> ```", "rest"]);
+    // A shallower marker run does not close a depth-2 fence either.
+    expect(
+      splitNaturalBlocks("> > ```\n> > code\n> ```\n> rest\n"),
+    ).toEqual(["> > ```\n> > code\n> ```\n> rest"]);
   });
 
   it("keeps a display-math block with interior blank lines as one block", () => {
