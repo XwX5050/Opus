@@ -21,6 +21,7 @@ import { extractMarkdownTables } from "./markdownTable";
 import {
   focusMarkdownTableCell,
   MarkdownTableWidget,
+  runTableCellClipboardCommand,
   type TableWidgetsOptions,
   tableWidgetsExtension,
 } from "./tableWidgets";
@@ -1706,6 +1707,30 @@ describe("MarkdownTableWidget", () => {
       }))).toBe(true);
     }
 
+    // Clipboard events and cell select-all chords are owned by the native
+    // cell: CodeMirror's editor-level handling must never claim them.
+    for (const type of ["copy", "cut", "paste"]) {
+      expect(widget.ignoreEvent(new Event(type))).toBe(true);
+      expect(new MarkdownTableWidget(table, false).ignoreEvent(
+        new Event(type),
+      )).toBe(false);
+      expect(new MarkdownTableWidget(table, true, true).ignoreEvent(
+        new Event(type),
+      )).toBe(false);
+    }
+    expect(widget.ignoreEvent(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true }),
+    )).toBe(true);
+    expect(widget.ignoreEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    )).toBe(true);
+    expect(widget.ignoreEvent(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true, shiftKey: true }),
+    )).toBe(false);
+    expect(new MarkdownTableWidget(table, true, true).ignoreEvent(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true }),
+    )).toBe(false);
+
     expect(new MarkdownTableWidget(table, false).ignoreEvent(
       new KeyboardEvent("keydown", { key: "Backspace" }),
     )).toBe(false);
@@ -1742,5 +1767,362 @@ describe("MarkdownTableWidget", () => {
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("td")?.textContent)
       .toBe("<img src=x onerror=alert(1)>");
+  });
+});
+
+const selectCellRange = (cell: HTMLElement, start: number, end: number) => {
+  const text = cell.firstChild;
+  if (!text || text.nodeType !== Node.TEXT_NODE) {
+    throw new Error("Expected a plain-text cell");
+  }
+  const range = document.createRange();
+  range.setStart(text, start);
+  range.setEnd(text, end);
+  const selection = document.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
+describe("table cell clipboard commands", () => {
+  const auditDoc = [
+    "Before untouched",
+    "",
+    "| Name | Note |",
+    "| --- | --- |",
+    "| Ada | old |",
+    "",
+    "After untouched",
+    "",
+  ].join("\n");
+
+  const recordingClipboardData = () => {
+    const recorded = { cleared: 0, written: [] as string[] };
+    const clipboardData = {
+      clearData: () => {
+        recorded.cleared += 1;
+      },
+      setData: (type: string, value: string) => {
+        if (type === "text/plain") recorded.written.push(value);
+      },
+      getData: () => "",
+    };
+    return { recorded, clipboardData };
+  };
+
+  const dispatchClipboardEvent = (
+    cell: HTMLElement,
+    type: "copy" | "cut",
+    clipboardData: unknown,
+  ) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: clipboardData });
+    cell.dispatchEvent(event);
+    return event;
+  };
+
+  it("copies a partial cell DOM selection on a copy event, not editor text", () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 0, 2);
+    const { recorded, clipboardData } = recordingClipboardData();
+
+    const event = dispatchClipboardEvent(cell, "copy", clipboardData);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(recorded.cleared).toBe(1);
+    expect(recorded.written).toEqual(["Ad"]);
+    expect(view.state.doc.toString()).toBe(auditDoc);
+  });
+
+  it("cuts only the selected cell content and commits it back to Markdown", () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 0, 2);
+    const { recorded, clipboardData } = recordingClipboardData();
+
+    const event = dispatchClipboardEvent(cell, "cut", clipboardData);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(recorded.written).toEqual(["Ad"]);
+    expect(tableCell(view, 2).textContent).toBe("a");
+    expect(view.state.doc.toString()).toBe([
+      "Before untouched",
+      "",
+      "| Name | Note |",
+      "| --- | --- |",
+      "| a | old |",
+      "",
+      "After untouched",
+      "",
+    ].join("\n"));
+    expect(tableCell(view, 3).textContent).toBe("old");
+  });
+
+  it("never cuts or copies when the DOM selection lives outside the cell", () => {
+    const first = createView(auditDoc);
+    const second = createView(auditDoc);
+    const foreignCell = tableCell(second, 2);
+    foreignCell.focus();
+    selectCellRange(foreignCell, 1, 3);
+    const { recorded, clipboardData } = recordingClipboardData();
+
+    const event = dispatchClipboardEvent(tableCell(first, 2), "cut", clipboardData);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(recorded.written).toEqual([]);
+    expect(first.state.doc.toString()).toBe(auditDoc);
+    expect(second.state.doc.toString()).toBe(auditDoc);
+  });
+
+  it("swallows caret-only copy and cut without writing or mutating", () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 1, 1);
+    const { recorded, clipboardData } = recordingClipboardData();
+
+    for (const type of ["copy", "cut"] as const) {
+      const event = dispatchClipboardEvent(cell, type, clipboardData);
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(recorded.written).toEqual([]);
+    expect(view.state.doc.toString()).toBe(auditDoc);
+  });
+
+  it("selects the whole cell for a select-all chord typed inside the cell", () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 1, 1);
+
+    const event = dispatchKeyDown(cell, "a", { metaKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.getSelection()?.toString()).toBe("Ada");
+    expect(view.state.doc.toString()).toBe(auditDoc);
+  });
+
+  it("leaves select-all chords outside a cell to the editor", () => {
+    const view = createView(auditDoc);
+    const root = view.dom.querySelector<HTMLElement>(".md-table-scroll");
+    expect(root).not.toBeNull();
+
+    const event = dispatchKeyDown(root!, "a", { ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("copies the cell DOM selection for the menu copy command without execCommand", async () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 0, 2);
+    const written: string[] = [];
+    const clipboard = {
+      writeText: vi.fn(async (text: string) => {
+        written.push(text);
+      }),
+      readText: vi.fn(async () => ""),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+
+    expect(await runTableCellClipboardCommand(view, "copy")).toBe(true);
+    expect(written).toEqual(["Ad"]);
+    expect(tableCell(view, 2).textContent).toBe("Ada");
+    expect(view.state.doc.toString()).toBe(auditDoc);
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  });
+
+  it("cuts the cell DOM selection for the menu cut command without execCommand", async () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 0, 2);
+    const written: string[] = [];
+    const clipboard = {
+      writeText: vi.fn(async (text: string) => {
+        written.push(text);
+      }),
+      readText: vi.fn(async () => ""),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+
+    expect(await runTableCellClipboardCommand(view, "cut")).toBe(true);
+    expect(written).toEqual(["Ad"]);
+    expect(tableCell(view, 2).textContent).toBe("a");
+    expect(view.state.doc.toString()).toContain("| a | old |");
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  });
+
+  it("pastes async clipboard text into the cell at the caret for the menu command", async () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 1, 1);
+    const clipboard = {
+      readText: vi.fn(async () => "XY\nZ"),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+
+    expect(await runTableCellClipboardCommand(view, "paste")).toBe(true);
+    expect(tableCell(view, 2).textContent).toBe("AXY Zda");
+    expect(view.state.doc.toString()).toContain("| AXY Zda | old |");
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  });
+
+  it("replaces a cell selection when the menu paste command inserts text", async () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 1, 3);
+    const clipboard = { readText: vi.fn(async () => "XY") };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+
+    expect(await runTableCellClipboardCommand(view, "paste")).toBe(true);
+    expect(tableCell(view, 2).textContent).toBe("AXY");
+    expect(view.state.doc.toString()).toContain("| AXY | old |");
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  });
+
+  it("selects the whole cell for the menu select-all command", async () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 1, 1);
+
+    expect(await runTableCellClipboardCommand(view, "selectAll")).toBe(true);
+    expect(document.getSelection()?.toString()).toBe("Ada");
+    expect(document.activeElement).toBe(cell);
+    expect(view.state.doc.toString()).toBe(auditDoc);
+  });
+
+  it("returns false for menu commands when no editable cell owns the selection", async () => {
+    const view = createView(auditDoc);
+    const line = [...view.contentDOM.querySelectorAll(".cm-line")].find(
+      (element) => element.textContent === "Before untouched",
+    );
+    const text = line?.firstChild;
+    if (!text || text.nodeType !== Node.TEXT_NODE) {
+      throw new Error("Missing plain line text");
+    }
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 7);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    expect(await runTableCellClipboardCommand(view, "copy")).toBe(false);
+    expect(await runTableCellClipboardCommand(view, "cut")).toBe(false);
+    expect(await runTableCellClipboardCommand(view, "paste")).toBe(false);
+    expect(await runTableCellClipboardCommand(view, "selectAll")).toBe(false);
+  });
+
+  it("does not delete a cell selection when pasting an empty clipboard", () => {
+    const view = createView(auditDoc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 0, 2);
+
+    const event = dispatchPaste(cell, "", "");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(cell.textContent).toBe("Ada");
+    expect(view.state.doc.toString()).toBe(auditDoc);
+  });
+});
+
+describe("table cell selection across context-menu focus moves", () => {
+  const doc = [
+    "| A | B |",
+    "| --- | --- |",
+    "| **x** | keep |",
+  ].join("\n");
+
+  it("keeps the raw cell DOM and its selection while the menu holds focus", () => {
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 0, 2); // "**" in the raw source
+    expect(cell.textContent).toBe("**x**");
+
+    const menu = document.createElement("div");
+    menu.className = "context-menu";
+    const item = document.createElement("button");
+    item.type = "button";
+    menu.append(item);
+    document.body.append(menu);
+
+    cell.dispatchEvent(new FocusEvent("blur", { relatedTarget: item }));
+
+    expect(cell.textContent).toBe("**x**");
+    expect(cell.querySelector(".cm-live-preview-strong")).toBeNull();
+    expect(document.getSelection()?.toString()).toBe("**");
+
+    // The menu closes and focus moves away for real: formatting returns.
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    cell.dispatchEvent(new FocusEvent("blur", { relatedTarget: outside }));
+
+    expect(cell.querySelector(".cm-live-preview-strong")?.textContent).toBe("x");
+    expect(cell.textContent).toBe("x");
+    menu.remove();
+    outside.remove();
+  });
+
+  it("keeps the caret when focus returns to a still-raw cell after the menu", () => {
+    const view = createView(doc);
+    const cell = tableCell(view, 2);
+    cell.focus();
+    selectCellRange(cell, 1, 1);
+
+    const menu = document.createElement("div");
+    menu.className = "context-menu";
+    const item = document.createElement("button");
+    item.type = "button";
+    menu.append(item);
+    document.body.append(menu);
+    cell.dispatchEvent(new FocusEvent("blur", { relatedTarget: item }));
+
+    cell.focus();
+    const range = document.getSelection()?.getRangeAt(0);
+    expect(range?.startContainer).toBe(cell.firstChild);
+    expect(range?.startOffset).toBe(1);
+    expect(cell.textContent).toBe("**x**");
+    menu.remove();
+  });
+
+  it("switches an already-raw cell to editing without replacing its text node", () => {
+    const view = createView(["| A | B |", "| --- | --- |", "| plain | keep |"].join("\n"));
+    const cell = tableCell(view, 2);
+    cell.focus();
+    expect(cell.firstChild?.nodeValue).toBe("plain");
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    const afterBlur = cell.firstChild;
+    expect(afterBlur?.nodeValue).toBe("plain");
+
+    cell.focus();
+
+    expect(cell.firstChild).toBe(afterBlur);
+    expect(cell.textContent).toBe("plain");
+    outside.remove();
   });
 });

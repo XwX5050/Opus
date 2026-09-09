@@ -1114,10 +1114,19 @@ export default function AppShell({
   // the editing commands are disabled; 复制/全选 and the mode switch stay
   // available.
   const runEditorCommand = (command: "cut" | "copy" | "paste" | "selectAll") => {
-    editorRef.current?.focus();
-    // jsdom and older engines lack execCommand; the editor still receives
-    // focus, which is the part the menu can guarantee.
-    document.execCommand?.(command);
+    void (async () => {
+      // A rendered table cell owns the DOM selection when the user is
+      // editing a cell: the menu command must then read/write that cell's
+      // DOM selection (restored by the context menu before the item runs),
+      // never CodeMirror's state selection.
+      const handledByCell =
+        (await editorRef.current?.runTableCellClipboardCommand(command)) ?? false;
+      if (handledByCell) return;
+      editorRef.current?.focus();
+      // jsdom and older engines lack execCommand; the editor still receives
+      // focus, which is the part the menu can guarantee.
+      document.execCommand?.(command);
+    })();
   };
 
   const openEditorAreaContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {

@@ -23,6 +23,38 @@ export interface ContextMenuProps {
 
 type MenuActionItem = Extract<ContextMenuItem, { id: string }>;
 
+interface SavedFocusState {
+  readonly element: HTMLElement | null;
+  readonly range: Range | null;
+}
+
+const clampTextOffset = (node: Node, offset: number) =>
+  node instanceof Text ? Math.min(offset, node.nodeValue?.length ?? 0) : offset;
+
+/**
+ * Re-asserts a range captured when the menu opened. Nodes that were removed
+ * or rewritten while the menu was open make the restore a silent no-op; a
+ * surviving range (the cell keeps its editing DOM while the menu is open)
+ * is re-selected so the menu never eats the user's selection.
+ */
+const restoreSelectionRange = (saved: Range) => {
+  const selection = document.getSelection();
+  if (!selection) return;
+  try {
+    const startNode = saved.startContainer;
+    const endNode = saved.endContainer;
+    if (!startNode.isConnected || !endNode.isConnected) return;
+    const range = document.createRange();
+    range.setStart(startNode, clampTextOffset(startNode, saved.startOffset));
+    range.setEnd(endNode, clampTextOffset(endNode, saved.endOffset));
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } catch {
+    // The DOM shifted under the saved range; a stale restore must never
+    // throw or clobber whatever selection the closing action produced.
+  }
+};
+
 /**
  * Shared context menu rendered in a portal on `document.body`. Implements the
  * ARIA menu pattern: roving focus over the enabled items (arrow keys wrap,
@@ -60,9 +92,23 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     itemRefs.current[index]?.focus();
   };
 
+  // Focus and DOM-selection state captured when the menu opened. An action
+  // item restores both before its handler runs; closing without an action
+  // restores them on unmount.
+  const savedFocusRef = useRef<SavedFocusState>({ element: null, range: null });
+  const activatedRef = useRef(false);
+
+  const restoreFocusAndSelection = () => {
+    const { element, range } = savedFocusRef.current;
+    if (element?.isConnected) element.focus();
+    if (range) restoreSelectionRange(range);
+  };
+
   const selectItem = (index: number) => {
     const item = items[index];
     if (!item || !isActionItem(item) || item.disabled) return;
+    activatedRef.current = true;
+    restoreFocusAndSelection();
     item.onSelect();
     onClose();
   };
@@ -82,18 +128,29 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     // Position is fixed for the menu's lifetime; measure on open only.
   }, []);
 
-  // Focus the first enabled item on open and hand focus back to the element
-  // that had it before the menu opened, no matter how the menu closes. The
-  // previously focused element is recorded inside the effect, so the
-  // StrictMode double-invoke (setup → cleanup → setup) still ends with the
-  // pre-open element as the restore target.
+  // Focus the first enabled item on open, remembering the element that had
+  // focus and the DOM selection the menu opened over. On unmount, focus and
+  // (unless an item was activated and produced its own state) the selection
+  // are handed back, no matter how the menu closed. The previously focused
+  // element is recorded inside the effect, so the StrictMode double-invoke
+  // (setup → cleanup → setup) still ends with the pre-open element as the
+  // restore target.
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const selection = document.getSelection();
+    const savedRange =
+      selection && selection.rangeCount > 0
+        ? selection.getRangeAt(0).cloneRange()
+        : null;
+    savedFocusRef.current = { element: previouslyFocused, range: savedRange };
+    activatedRef.current = false;
     const firstEnabled = enabledIndices[0];
     if (firstEnabled !== undefined) focusItem(firstEnabled);
     return () => {
-      previouslyFocused?.focus();
+      const { element, range } = savedFocusRef.current;
+      if (element?.isConnected) element.focus();
+      if (range && !activatedRef.current) restoreSelectionRange(range);
     };
   }, []);
 

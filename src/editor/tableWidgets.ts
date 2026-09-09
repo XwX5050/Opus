@@ -101,9 +101,23 @@ const nativeCellPointerEvents = new Set([
 ]);
 
 const nativeCellDeletionKeys = new Set(["Backspace", "Delete"]);
+const nativeCellClipboardEvents = new Set(["copy", "cut", "paste"]);
 
 const isNativeCellDeletionEvent = (event: Event) =>
   event instanceof KeyboardEvent && nativeCellDeletionKeys.has(event.key);
+
+const isNativeCellSelectAllKey = (event: Event) =>
+  event instanceof KeyboardEvent &&
+  !event.altKey &&
+  !event.shiftKey &&
+  (event.metaKey || event.ctrlKey) &&
+  event.key.toLowerCase() === "a";
+
+const currentDomSelectionRange = () => {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  return selection.getRangeAt(0);
+};
 
 interface DOMPoint {
   readonly node: Node;
@@ -292,6 +306,50 @@ const resolveCurrentOwnedCell = (
   };
 };
 
+/**
+ * The DOM selection is inside a cell (the user selected or is editing that
+ * cell) exactly when both range endpoints are inside one owned editable
+ * cell. Clipboard commands for rendered tables are decided on this fact,
+ * never on CodeMirror's state selection, which may sit elsewhere in the
+ * document (e.g. the audit F01 case: cell focused, selection state at the
+ * document head).
+ */
+const resolveOwnedCellAtSelection = (
+  root: HTMLElement,
+  context: TableWidgetContext,
+): ResolvedCell | null => {
+  const range = currentDomSelectionRange();
+  if (!range) return null;
+  const cell = context.ownedCells.find((candidate) =>
+    candidate.getAttribute("contenteditable") === "true" &&
+    candidate.contains(range.startContainer) &&
+    candidate.contains(range.endContainer)
+  ) ?? null;
+  if (!cell) return null;
+  const resolved = resolveCurrentOwnedCell(root, context, cell);
+  if (!resolved || resolved.context.composing.has(cell)) return null;
+  return resolved;
+};
+
+/** Plain-text offsets of a DOM range inside a cell, per `plainCellText`. */
+const cellSelectionTextOffsets = (cell: HTMLElement, range: Range) => {
+  const { text, pointOffsets } = plainCellText(cell, [
+    { node: range.startContainer, offset: range.startOffset },
+    { node: range.endContainer, offset: range.endOffset },
+  ]);
+  if (pointOffsets[0] === null || pointOffsets[1] === null) return null;
+  return { text, start: pointOffsets[0], end: pointOffsets[1] };
+};
+
+const selectCellContents = (cell: HTMLElement) => {
+  const selection = document.getSelection();
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  selection.removeAllRanges();
+  selection.addRange(range);
+};
+
 const handleClick = (root: HTMLElement, event: MouseEvent) => {
   if (event.button !== 0) return;
   const context = widgetContexts.get(root);
@@ -402,13 +460,48 @@ const handleInput = (root: HTMLElement, event: InputEvent) => {
   commitCell(resolved);
 };
 
+/**
+ * Copy/cut events whose DOM selection lives in a rendered cell are owned by
+ * that cell: the clipboard carries the cell selection text and a cut only
+ * removes the selected cell content, committing the table change back to the
+ * Markdown source. Everything else falls through to CodeMirror's editor-level
+ * clipboard handling (whole-document and reading-mode copy keep working).
+ */
+const handleCellClipboard = (
+  root: HTMLElement,
+  event: ClipboardEvent,
+  action: "copy" | "cut",
+) => {
+  const context = widgetContexts.get(root);
+  if (!context || !context.editable || context.view.state.readOnly) return;
+  const resolved = resolveOwnedCellAtSelection(root, context);
+  if (!resolved) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const range = currentDomSelectionRange();
+  if (!range || range.collapsed) return;
+  const offsets = cellSelectionTextOffsets(resolved.element, range);
+  if (offsets === null) return;
+  if (action === "cut") {
+    range.deleteContents();
+    commitCell(resolved);
+  }
+  const data = event.clipboardData;
+  if (data) {
+    data.clearData();
+    data.setData("text/plain", offsets.text.slice(offsets.start, offsets.end));
+  }
+};
+
 const handlePaste = (root: HTMLElement, event: ClipboardEvent) => {
   const resolved = resolveCurrentCell(root, event);
   if (!resolved) return;
   event.preventDefault();
+  event.stopPropagation();
   const text = normalizeLineBreaks(
     event.clipboardData?.getData("text/plain") ?? "",
   );
+  if (text.length === 0) return;
   insertPlainText(resolved.element, text);
   commitCell(resolved);
 };
@@ -624,6 +717,16 @@ const switchCellToEditingSource = (element: HTMLElement) => {
   if (!context || !context.editable || context.view.state.readOnly) return;
   const resolved = resolveCurrentOwnedCell(root, context, element);
   if (!resolved || resolved.context.composing.has(element)) return;
+  // The cell already shows the editable plain text: re-rendering it would
+  // destroy the live caret/DOM selection (e.g. focus returning after the
+  // context menu closes over the cell).
+  if (
+    element.childNodes.length === 1 &&
+    element.firstChild instanceof Text &&
+    element.firstChild.nodeValue === resolved.model.displayText
+  ) {
+    return;
+  }
   resolved.element.replaceChildren(
     document.createTextNode(resolved.model.displayText),
   );
@@ -648,6 +751,17 @@ const restoreCellInlineMarkdown = (
   // Focus moving within the same cell (relatedTarget inside it) is not a
   // leave; never clobber caret/selection that is still inside the cell.
   if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget)) {
+    return;
+  }
+  // Focus handed to the app's own context menu (opened over this cell):
+  // defer the formatted re-render until the menu closes and the cell either
+  // regains focus (still editing, raw text kept) or loses it for real (the
+  // restore runs then). Re-rendering here would detach the DOM range the
+  // menu's copy/cut/paste commands rely on.
+  if (
+    event.relatedTarget instanceof Element &&
+    event.relatedTarget.closest(".context-menu")
+  ) {
     return;
   }
   const resolved = resolveCurrentOwnedCell(root, context, element);
@@ -750,6 +864,103 @@ export const focusMarkdownTableCell = (
   return false;
 };
 
+const editableResolvedCellForSelection = (
+  view: EditorView,
+): ResolvedCell | null => {
+  if (view.state.readOnly || !view.dom.isConnected) return null;
+  const roots = view.dom.querySelectorAll<HTMLElement>(".md-table-scroll");
+  for (const root of roots) {
+    const context = widgetContexts.get(root);
+    if (!context || context.view !== view || !context.editable) continue;
+    const resolved = resolveOwnedCellAtSelection(root, context);
+    if (resolved) return resolved;
+  }
+  return null;
+};
+
+const writeClipboardText = (text: string) => {
+  const clipboard = navigator.clipboard;
+  if (clipboard?.writeText) {
+    // Best-effort: a refused clipboard write must never crash the command.
+    void clipboard.writeText(text).catch(() => {});
+  }
+};
+
+const readClipboardText = async (): Promise<string | null> => {
+  const clipboard = navigator.clipboard;
+  if (!clipboard?.readText) return null;
+  try {
+    return await clipboard.readText();
+  } catch {
+    return null;
+  }
+};
+
+export type TableCellClipboardCommand = "cut" | "copy" | "paste" | "selectAll";
+
+/**
+ * Runs a clipboard/selection menu command against the rendered table cell
+ * that owns the current DOM selection (restored by the context menu before
+ * the item handler runs). Returns false when no editable cell owns the DOM
+ * selection, so the caller can fall back to the CodeMirror-level command.
+ * Paste never depends on `document.execCommand("paste")` reading the
+ * clipboard: it tries the native paste on the focused cell first and, when
+ * the engine refuses it, inserts the async clipboard text itself.
+ */
+export const runTableCellClipboardCommand = async (
+  view: EditorView,
+  command: TableCellClipboardCommand,
+): Promise<boolean> => {
+  const resolved = editableResolvedCellForSelection(view);
+  if (!resolved) return false;
+  const cell = resolved.element;
+  cell.focus();
+
+  if (command === "selectAll") {
+    selectCellContents(cell);
+    return true;
+  }
+
+  const range = currentDomSelectionRange();
+  if (
+    !range ||
+    !cell.contains(range.startContainer) ||
+    !cell.contains(range.endContainer)
+  ) {
+    return false;
+  }
+
+  if (command === "paste") {
+    if (document.execCommand?.("paste")) return true;
+    const text = await readClipboardText();
+    if (text === null || text.length === 0) return true;
+    insertPlainText(cell, normalizeLineBreaks(text));
+    commitCell(resolved);
+    return true;
+  }
+
+  // copy / cut
+  if (range.collapsed) return true;
+  const offsets = cellSelectionTextOffsets(cell, range);
+  if (offsets === null) return false;
+  const text = offsets.text.slice(offsets.start, offsets.end);
+  if (document.execCommand?.(command)) return true;
+  // execCommand is unavailable or refused (jsdom, restricted engines):
+  // perform the same cell-local operation manually. A cut whose range was
+  // already consumed by a handled native cut event is skipped.
+  if (
+    command === "cut" &&
+    range.startContainer.isConnected &&
+    range.endContainer.isConnected &&
+    cell.contains(range.startContainer)
+  ) {
+    range.deleteContents();
+    commitCell(resolved);
+  }
+  writeClipboardText(text);
+  return true;
+};
+
 const queueCellFocus = (
   view: EditorView,
   tableFrom: number,
@@ -784,6 +995,22 @@ const queueCellFocus = (
 };
 
 const handleKeyDown = (root: HTMLElement, event: KeyboardEvent) => {
+  if (isNativeCellSelectAllKey(event)) {
+    // A select-all chord typed inside a rendered cell belongs to that cell:
+    // select the cell's own DOM content and keep CodeMirror's document-wide
+    // select-all out of the way.
+    const resolved = resolveCurrentCell(root, event);
+    if (
+      resolved &&
+      !event.isComposing &&
+      !resolved.context.composing.has(resolved.element)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectCellContents(resolved.element);
+    }
+    return;
+  }
   const isTab = event.key === "Tab";
   const isEscape = event.key === "Escape";
   if (
@@ -866,6 +1093,12 @@ const addDelegatedListeners = (root: HTMLElement) => {
   });
   root.addEventListener("keydown", (event) => {
     handleKeyDown(root, event);
+  });
+  root.addEventListener("copy", (event) => {
+    handleCellClipboard(root, event as ClipboardEvent, "copy");
+  });
+  root.addEventListener("cut", (event) => {
+    handleCellClipboard(root, event as ClipboardEvent, "cut");
   });
   root.addEventListener("beforeinput", (event) => {
     handleBeforeInput(root, event as InputEvent);
@@ -1101,7 +1334,13 @@ export class MarkdownTableWidget extends WidgetType {
 
   ignoreEvent(event: Event) {
     return nativeCellPointerEvents.has(event.type) ||
-      (this.editable && !this.readOnly && isNativeCellDeletionEvent(event));
+      (this.editable && !this.readOnly &&
+        (isNativeCellDeletionEvent(event) ||
+          // Clipboard events and cell select-all originate inside the
+          // native cell (never in CodeMirror's document selection), so the
+          // editor-level clipboard/keymap handling must not claim them.
+          nativeCellClipboardEvents.has(event.type) ||
+          isNativeCellSelectAllKey(event)));
   }
 }
 

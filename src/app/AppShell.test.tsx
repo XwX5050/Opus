@@ -2292,6 +2292,105 @@ describe("AppShell context menus and document title", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("copies a table cell DOM selection through the editor menu without touching CodeMirror", async () => {
+    const user = userEvent.setup();
+    const source = [
+      "Before untouched",
+      "",
+      "| Name | Note |",
+      "| --- | --- |",
+      "| Ada | old |",
+      "",
+    ].join("\n");
+    render(
+      <AppShell port={new InspectablePort([file("/notes/table.md", source)])} />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const cell = tableCell(2);
+    cell.focus();
+    const text = cell.firstChild;
+    if (!text || text.nodeType !== Node.TEXT_NODE) {
+      throw new Error("Expected a plain-text cell");
+    }
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 2);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async (value: string) => {
+          written.push(value);
+        }),
+        readText: vi.fn(async () => ""),
+      },
+    });
+    try {
+      fireEvent.contextMenu(screen.getByRole("tabpanel"), {
+        clientX: 120,
+        clientY: 120,
+      });
+      await user.click(menuItem("复制"));
+      await waitFor(() => expect(written).toEqual(["Ad"]));
+      // Menu open/close kept the cell DOM selection alive.
+      await waitFor(() => expect(cell).toHaveFocus());
+      expect(document.getSelection()?.toString()).toBe("Ad");
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it("pastes clipboard text into a table cell through the editor menu and commits the source", async () => {
+    const user = userEvent.setup();
+    const source = [
+      "Before untouched",
+      "",
+      "| Name | Note |",
+      "| --- | --- |",
+      "| Ada | old |",
+      "",
+    ].join("\n");
+    render(
+      <AppShell port={new InspectablePort([file("/notes/table.md", source)])} />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const cell = tableCell(2);
+    cell.focus();
+    const text = cell.firstChild;
+    if (!text || text.nodeType !== Node.TEXT_NODE) {
+      throw new Error("Expected a plain-text cell");
+    }
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.collapse(true);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        readText: vi.fn(async () => "XY"),
+      },
+    });
+    try {
+      fireEvent.contextMenu(screen.getByRole("tabpanel"), {
+        clientX: 120,
+        clientY: 120,
+      });
+      await user.click(menuItem("粘贴"));
+      await waitFor(() => expect(cell.textContent).toBe("AXYda"));
+      const view = EditorView.findFromDOM(editor());
+      expect(view?.state.doc.toString()).toContain("| AXYda | old |");
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
   it("opens the fallback menu in the empty state with new/open/settings actions", async () => {
     const user = userEvent.setup();
     render(<AppShell port={new InspectablePort()} />);
