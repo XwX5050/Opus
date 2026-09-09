@@ -355,7 +355,7 @@ Automated gates:
 
 - Frontend unit/component tests live beside implementations as
   `*.test.ts` / `*.test.tsx` and run in jsdom via Vitest. The Vitest config
-  (in `vite.config.ts`) excludes `tests/e2e/**` and `.worktrees/**`.
+  (in `vite.config.ts`) excludes `tests/e2e/**`, `.worktrees/**`, and `.tower/**`.
 - Rust integration tests live in `src-tauri/tests/` and cover document I/O,
   commands, workspace operations, asset scopes, recovery, open events,
   clipboard images, document renaming, and the translation pipeline (cache
