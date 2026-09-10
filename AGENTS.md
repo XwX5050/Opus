@@ -88,7 +88,11 @@ Rust/Tauri backend.
 
 - `src/app/`: composition root (`App.tsx`, `createApp.tsx`), top-level shell
   (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings
-  dialog (`SettingsDialog.tsx`), tab bar (`TabList.tsx`), automatic
+  dialog (`SettingsDialog.tsx` — its API Key field is write-only: it never
+  echoes a stored key, shows an 已保存 placeholder when the addressed slot has
+  one, commits on blur/Enter straight to the credential store, and offers a
+  清除 button plus a warning when the store fell back to the weakly-protected
+  file), tab bar (`TabList.tsx`), automatic
   performance-mode hook (`usePerformanceMode.ts`), in-app update checks
   (`updates.ts`), and the E2E fixture bridge (`e2e.ts`). The header is
   platform-specific: macOS keeps the native menu bar (so the header stays
@@ -133,7 +137,13 @@ Rust/Tauri backend.
   implementations:
   - `tauriDocumentPort.ts` — production backend via Tauri invoke/events; also
     owns session persistence (`session.json` via plugin-store) and window
-    geometry restore.
+    geometry restore. It owns the translation-key upgrade path too:
+    `loadSession` hands every plaintext key of a pre-slot session to
+    `store_translation_key` and only then persists the sanitized session; if
+    any store call fails, the plaintext fields stay on disk *and* are
+    re-attached to every later session write of that run, so no save and no
+    relaunch can drop a key — the next launch retries the (idempotent)
+    migration.
   - `memoryDocumentPort.ts` — in-memory port used by unit tests, the dev demo,
     and Playwright E2E fixtures.
 - `src/editor/`: `MarkdownEditor.tsx` plus CodeMirror extensions for live
@@ -171,12 +181,17 @@ Rust/Tauri backend.
   `src/app/ContextMenu.tsx`, reusing the same editing state machine as the
   inline row buttons.
 - `src/translate/`: document translation pipeline. `types.ts` holds
-  `TranslationSettings` (endpoint, API key, model, target language, concurrency
-  — the number of batch requests translated concurrently, configurable in
-  settings within 1-32, default 10 — and `presetApiKeys`, an API key
-  remembered per preset id so switching presets never re-asks for a key;
-  `stashApiKey` writes the active key into a slot) and the per-tab
-  `TranslationViewState`;
+  `TranslationSettings` (endpoint, model, target language, concurrency — the
+  number of batch requests translated concurrently, configurable in settings
+  within 1-32, default 10) and the per-tab `TranslationViewState`.
+  Translation settings carry no API key: a key is addressed by *slot*
+  (`translationKeySlot` = `matchPreset(endpoint, model)?.id` or `"custom"`,
+  computed from the settings so it can never go stale) and the backend keeps
+  the secret in the OS credential store. `normalizeTranslationSettings`
+  therefore returns `{ settings, pendingKeys }`, where `pendingKeys` reports
+  the plaintext keys of a session written before slot addressing — the port
+  migrates them into the credential store (see `src/document/`) instead of
+  the upgrade silently dropping them;
   `presets.ts` defines the provider presets for the settings dialog
   (智谱 GLM-4.7-Flash free tier, 腾讯混元 Hy-MT2-Lite, DeepSeek V4 Flash, each
   with a verified endpoint/model/concurrency) plus `matchPreset`;
@@ -413,10 +428,18 @@ CI:
   an atomic rename to avoid data loss.
 - **Translation cache and API keys**: translated segments are cached under the
   app data directory (`translation-cache/`, one sha256-named JSON file per
-  segment, written with the same atomic discipline as recovery drafts); the
-  provider API keys (the active key plus per-preset `presetApiKeys`) are
-  stored in plaintext in the local `session.json`
-  (accepted for v1 — never commit or upload them).
+  segment, written with the same atomic discipline as recovery drafts).
+  Provider API keys are held by the OS credential store (Keychain / Windows
+  Credential Manager / Secret Service), one entry per provider slot; the
+  frontend never reads a key back — it can only write one
+  (`storeTranslationKey`), delete one (`deleteTranslationKey`) and ask whether
+  one exists (`hasTranslationKey`), and requests name the slot instead of
+  carrying the secret. `translation_key_protection` reports "system" or, when
+  no credential store is available, "file" for the weakly-protected local
+  fallback, which the settings dialog surfaces to the user. A session written
+  by an older version still holds plaintext keys; the port migrates them into
+  the credential store on load and keeps the plaintext copy until every key is
+  stored, so an upgrade can never lose a key (see `src/document/`).
 - **Asset scopes**: runtime Tauri scopes are additive-only; the Rust
   `AssetScopeRegistry` is the authoritative record of which consumer holds
   which directory. Workspace mutations enforce root-boundary checks against
