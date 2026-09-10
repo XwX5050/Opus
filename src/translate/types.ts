@@ -130,10 +130,12 @@ const pendingKeysOf = (
   for (const [slot, key] of Object.entries(
     storedPresetKeys(record.presetApiKeys),
   )) {
-    // A stale slot id (a preset that no longer exists) is still migrated —
-    // the key is the user's, not ours to drop — but only well-formed slots
-    // can be addressed, so anything else is left alone rather than sent to
-    // a backend that would reject it.
+    // A stale but well-formed slot id (a preset that no longer exists) is
+    // still migrated — the key is the user's, not ours to drop. A malformed
+    // one is not reported at all: the backend would reject it and no provider
+    // can ever address it, so once the other keys migrate successfully the
+    // sanitizing write drops that entry (reachable only through a
+    // hand-edited or corrupt session).
     if (isValidTranslationKeySlot(slot)) keys[slot] = key;
   }
   const active = storedKey(record.apiKey);

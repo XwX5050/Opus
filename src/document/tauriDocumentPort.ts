@@ -256,10 +256,11 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
   // saveSession each, and every write is a Store.load + set + save round
   // trip. A trailing-edge timer collapses a burst into a single write (the
   // latest snapshot wins). Translation-settings changes bypass the timer and
-  // write immediately — an API key configured in the settings dialog must
-  // survive even a force-kill or an in-app relaunch, and settings are
-  // applied in discrete steps rather than keystroke bursts, so the extra
-  // write is cheap.
+  // write immediately — the provider a document is translated with must
+  // survive even a force-kill or an in-app relaunch, and settings are applied
+  // in discrete steps rather than keystroke bursts, so the extra write is
+  // cheap. API keys are no longer part of the session at all: they go
+  // straight to the OS credential store (see migrateLegacyTranslationKeys).
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSession: PersistedSession | null = null;
   // Translation settings of the last successful store write; a differing

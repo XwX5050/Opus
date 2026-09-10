@@ -162,7 +162,9 @@ interface TextFieldProps {
 /**
  * Text counterpart of NumberField: a local draft committed on blur/Enter, so
  * typing never round-trips through the parent mid-keystroke. An emptied field
- * commits as "" (clearing the API key is a legitimate change).
+ * commits as "" — the endpoint field relies on that, and the controller
+ * repairs the blank value. The write-only API Key field is the exception: it
+ * ignores empty commits, since removing a key is the 清除 button's job.
  */
 function TextField({
   id,
