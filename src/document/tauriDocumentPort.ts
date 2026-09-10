@@ -10,7 +10,12 @@ import {
   normalizeThemePreference,
 } from "../theme/preferences";
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecentItem, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "./types";
-import { normalizeTranslationSettings, type TranslationSettings } from "../translate/types";
+import {
+  normalizeTranslationSettings,
+  translationKeySlot,
+  type TranslationKeyProtection,
+  type TranslationSettings,
+} from "../translate/types";
 import {
   normalizeOutlinePreferences,
   normalizeSidebarPreferences,
@@ -113,11 +118,33 @@ const parseSession = (value: unknown): PersistedSession | null => {
       ? { outline: normalizeOutlinePreferences(record.outline) }
       : {}),
     // Translation settings are optional too; malformed stored values fall
-    // back to the defaults in the translate module.
+    // back to the defaults in the translate module. A pre-slot session's
+    // plaintext keys are never part of the settings — loadSession migrates
+    // them into the credential store first (see migrateLegacyTranslationKeys).
     ...(record.translationSettings !== undefined
-      ? { translationSettings: normalizeTranslationSettings(record.translationSettings) }
+      ? {
+          translationSettings: normalizeTranslationSettings(
+            record.translationSettings,
+          ).settings,
+        }
       : {}),
   };
+};
+
+/**
+ * The raw plaintext key fields of a pre-slot `translationSettings` record, or
+ * null when the record has none. Kept verbatim (not re-derived) so a session
+ * write can put back exactly what the upgrade found.
+ */
+const legacyKeyFields = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  if (record.apiKey !== undefined) fields.apiKey = record.apiKey;
+  if (record.presetApiKeys !== undefined) {
+    fields.presetApiKeys = record.presetApiKeys;
+  }
+  return Object.keys(fields).length > 0 ? fields : null;
 };
 
 interface WindowGeometry {
@@ -229,10 +256,11 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
   // saveSession each, and every write is a Store.load + set + save round
   // trip. A trailing-edge timer collapses a burst into a single write (the
   // latest snapshot wins). Translation-settings changes bypass the timer and
-  // write immediately — an API key configured in the settings dialog must
-  // survive even a force-kill or an in-app relaunch, and settings are
-  // applied in discrete steps rather than keystroke bursts, so the extra
-  // write is cheap.
+  // write immediately — the provider a document is translated with must
+  // survive even a force-kill or an in-app relaunch, and settings are applied
+  // in discrete steps rather than keystroke bursts, so the extra write is
+  // cheap. API keys are no longer part of the session at all: they go
+  // straight to the OS credential store (see migrateLegacyTranslationKeys).
   let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSession: PersistedSession | null = null;
   // Translation settings of the last successful store write; a differing
@@ -245,10 +273,71 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     a === null || b === null
       ? a === b
       : a.endpoint === b.endpoint &&
-        a.apiKey === b.apiKey &&
         a.model === b.model &&
         a.targetLanguage === b.targetLanguage &&
         a.concurrency === b.concurrency;
+  // Plaintext key fields of a pre-slot session that could not be handed over
+  // to the credential store yet. Held verbatim for the rest of the run so
+  // every session write re-attaches them: a failed migration must never be
+  // turned into a lost key by a later save. Cleared once a migration lands.
+  let unmigratedLegacyKeys: Record<string, unknown> | null = null;
+  const withUnmigratedLegacyKeys = (
+    session: PersistedSession,
+  ): PersistedSession => {
+    const settings = session.translationSettings;
+    if (unmigratedLegacyKeys === null || settings === undefined) return session;
+    // The extra fields are the legacy shape normalizeTranslationSettings
+    // reports as pending; they are restored here only so the next launch can
+    // retry the migration, never to reach the frontend.
+    return {
+      ...session,
+      translationSettings: {
+        ...settings,
+        ...unmigratedLegacyKeys,
+      } as unknown as TranslationSettings,
+    };
+  };
+  /**
+   * Hands the plaintext keys of a pre-slot session over to the credential
+   * store, then persists the sanitized session immediately so the plaintext
+   * copy does not outlive the launch that migrated it. Best-effort by design:
+   * a failure leaves the plaintext fields on disk (and in every write of this
+   * run) for the next launch to retry.
+   */
+  const migrateLegacyTranslationKeys = async (raw: unknown): Promise<void> => {
+    if (typeof raw !== "object" || raw === null) {
+      unmigratedLegacyKeys = null;
+      return;
+    }
+    const fields = legacyKeyFields(
+      (raw as Record<string, unknown>).translationSettings,
+    );
+    if (fields === null) {
+      unmigratedLegacyKeys = null;
+      return;
+    }
+    const { pendingKeys } = normalizeTranslationSettings(
+      (raw as Record<string, unknown>).translationSettings,
+    );
+    try {
+      for (const [slot, key] of Object.entries(pendingKeys)) {
+        await invoke("store_translation_key", { slot, key });
+      }
+    } catch {
+      unmigratedLegacyKeys = fields;
+      return;
+    }
+    unmigratedLegacyKeys = null;
+    try {
+      const store = await sessionStore();
+      await store.set("session", parseSession(raw));
+      await store.save();
+    } catch {
+      // Every key already sits in the credential store, so re-running the
+      // (idempotent) migration on the next launch is harmless; until then the
+      // plaintext copy simply stays where it is.
+    }
+  };
   const flushSession = async (): Promise<void> => {
     if (sessionSaveTimer) {
       clearTimeout(sessionSaveTimer);
@@ -259,7 +348,7 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     if (session === null) return;
     try {
       const store = await sessionStore();
-      await store.set("session", session);
+      await store.set("session", withUnmigratedLegacyKeys(session));
       await store.save();
       const settings = session.translationSettings ?? null;
       if (settings !== null) lastFlushedTranslationSettings = settings;
@@ -361,7 +450,9 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
         return await invoke<string[]>("translate_segments", {
           settings: {
             endpoint: settings.endpoint,
-            apiKey: settings.apiKey,
+            // The backend holds the secret; the frontend only names the slot
+            // its settings currently address.
+            keySlot: translationKeySlot(settings),
             model: settings.model,
             targetLanguage: settings.targetLanguage,
           },
@@ -369,9 +460,28 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
         });
       } catch (error) { throw failure(error); }
     },
-    async listTranslationModels(endpoint: string, apiKey: string): Promise<string[]> {
+    async listTranslationModels(endpoint: string, keySlot: string): Promise<string[]> {
       try {
-        return await invoke<string[]>("list_translation_models", { endpoint, apiKey });
+        return await invoke<string[]>("list_translation_models", { endpoint, keySlot });
+      } catch (error) { throw failure(error); }
+    },
+    async storeTranslationKey(slot: string, key: string): Promise<void> {
+      try { await invoke("store_translation_key", { slot, key }); } catch (error) { throw failure(error); }
+    },
+    async deleteTranslationKey(slot: string): Promise<void> {
+      try { await invoke("delete_translation_key", { slot }); } catch (error) { throw failure(error); }
+    },
+    async hasTranslationKey(slot: string): Promise<boolean> {
+      try { return await invoke<boolean>("has_translation_key", { slot }); } catch (error) { throw failure(error); }
+    },
+    async translationKeyProtection(): Promise<TranslationKeyProtection> {
+      try {
+        // Anything that is not the OS credential store is treated as the weak
+        // file fallback: the warning may show up unnecessarily, but the dialog
+        // never claims a protection level the backend did not confirm.
+        return (await invoke<string>("translation_key_protection")) === "system"
+          ? "system"
+          : "file";
       } catch (error) { throw failure(error); }
     },
     subscribeToDiskEvents(handler: (event: DiskEvent) => void): Promise<() => void> {
@@ -405,7 +515,14 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     async loadSession(): Promise<PersistedSession | null> {
       try {
         const store = await sessionStore();
-        return parseSession(await store.get("session"));
+        const raw = await store.get("session");
+        const session = parseSession(raw);
+        // Upgrade path for sessions written before slot addressing: their
+        // plaintext keys go into the credential store now, and only then is
+        // the sanitized session persisted. Never fatal — a failed migration
+        // keeps the plaintext fields and retries on the next launch.
+        await migrateLegacyTranslationKeys(raw);
+        return session;
       } catch (error) { throw failure(error); }
     },
     async saveSession(session: PersistedSession): Promise<void> {

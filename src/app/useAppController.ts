@@ -48,6 +48,7 @@ import {
 import {
   DEFAULT_TRANSLATION_SETTINGS,
   normalizeTranslationSettings,
+  translationKeySlot,
   translationSettingsSignature,
   type TranslationSettings,
   type TranslationViewState,
@@ -381,7 +382,7 @@ export function useAppController(
   );
   const setTranslationSettings = useCallback(
     (value: TranslationSettings) =>
-      setTranslationSettingsState(normalizeTranslationSettings(value)),
+      setTranslationSettingsState(normalizeTranslationSettings(value).settings),
     [],
   );
 
@@ -465,12 +466,13 @@ export function useAppController(
     translationViewportProviderRef.current = provider;
   }, []);
 
-  const startTranslation = useCallback((id: string) => {
-    const settings = translationSettings;
-    if (!settings.apiKey) {
-      setError("请先在设置中配置翻译 API");
-      return;
-    }
+  /**
+   * Starts a translation run whose credentials are already confirmed. Split
+   * from startTranslation so the credential-store lookup — which is
+   * asynchronous, and so can never be a synchronous guard — gates the run
+   * without nesting the whole pipeline inside its callback.
+   */
+  const beginTranslation = useCallback((id: string, settings: TranslationSettings, generation: number) => {
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
     if (!tab) return;
     const controller = new AbortController();
@@ -480,7 +482,6 @@ export function useAppController(
       next.set(id, { state: { phase: "translating" }, visible: true });
       return next;
     });
-    const generation = lifecycleGenerationRef.current;
     const text = tab.text;
     // Batch completions update the translating state under the same per-run
     // guards as the final result: a partial only lands while this run is
@@ -564,7 +565,34 @@ export function useAppController(
           return next;
         });
       });
-  }, [isCurrent, port, translationSettings]);
+  }, [isCurrent, port]);
+
+  /** Runs whose credential-store lookup has not answered yet. */
+  const translationStartsRef = useRef(new Set<string>());
+
+  const startTranslation = useCallback((id: string) => {
+    const settings = translationSettings;
+    // The check is re-run per click instead of being cached: a key saved in
+    // the settings dialog must be usable immediately, and only the backend
+    // knows which slots hold one (the frontend can never read the secret).
+    // Rejected lookups count as "no key" — the run must not start on a
+    // credential the backend could not confirm.
+    if (translationStartsRef.current.has(id)) return;
+    translationStartsRef.current.add(id);
+    const generation = lifecycleGenerationRef.current;
+    void port
+      .hasTranslationKey(translationKeySlot(settings))
+      .catch(() => false)
+      .then((keyPresent) => {
+        translationStartsRef.current.delete(id);
+        if (!isCurrent(generation)) return;
+        if (!keyPresent) {
+          setError("请先在设置中配置翻译 API");
+          return;
+        }
+        beginTranslation(id, settings, generation);
+      });
+  }, [beginTranslation, isCurrent, port, translationSettings]);
 
   const toggleTranslation = useCallback((id: string) => {
     const current = translationsRef.current.get(id);
@@ -1396,7 +1424,7 @@ export function useAppController(
         setSidebarPreferences(normalizeSidebarPreferences(session.sidebar));
         setOutlinePreferences(normalizeOutlinePreferences(session.outline));
         setTranslationSettingsState(
-          normalizeTranslationSettings(session.translationSettings),
+          normalizeTranslationSettings(session.translationSettings).settings,
         );
       }
 

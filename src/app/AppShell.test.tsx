@@ -77,6 +77,8 @@ class InspectablePort implements DocumentPort {
   readonly writes: PendingWriteRequest[] = [];
   readonly chosenTitles: string[] = [];
   writeResult: Promise<SavedFile> | undefined;
+  /** Slots the stub credential store holds a key for. */
+  readonly translationKeySlots = new Set<string>();
 
   constructor(
     readonly files: OpenedFile[] = [],
@@ -129,6 +131,10 @@ class InspectablePort implements DocumentPort {
   async saveSession() {}
   async flushSession() {}
   async onCloseRequested() { return () => {}; }
+  async storeTranslationKey(slot: string) { this.translationKeySlots.add(slot); }
+  async deleteTranslationKey(slot: string) { this.translationKeySlots.delete(slot); }
+  async hasTranslationKey(slot: string) { return this.translationKeySlots.has(slot); }
+  async translationKeyProtection() { return "system" as const; }
 }
 
 const editor = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
@@ -1890,11 +1896,14 @@ describe("AppShell document translation", () => {
   const translateFile = (path: string, text = "saved"): OpenedFile =>
     file(path, text);
 
-  // A configured key (via the persisted session) so translation starts.
+  // A configured key so translation starts: the endpoint+model below match no
+  // preset, so the settings address the "custom" slot — which is where the
+  // credential-store fixture puts the key.
   const keyedPort = (files: Map<string, OpenedFile> | OpenedFile[] = []) =>
     new MemoryDocumentPort(
       files instanceof Map ? files : new Map(files.map((f) => [f.path, f])),
       {
+        translationKeys: { custom: "test-key" },
         session: {
           recent: [],
           openPaths: [],
@@ -1902,11 +1911,9 @@ describe("AppShell document translation", () => {
           workspacePath: null,
           translationSettings: {
             endpoint: "https://example.com/v1",
-            apiKey: "test-key",
             model: "gpt-4o-mini",
             targetLanguage: "中文",
             concurrency: 10,
-            presetApiKeys: {},
           },
         },
       },

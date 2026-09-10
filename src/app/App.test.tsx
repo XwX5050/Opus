@@ -42,6 +42,10 @@ vi.mock("../document/tauriDocumentPort", () => ({
       async saveSession() {},
       async flushSession() {},
       async onCloseRequested() { return () => {}; },
+      async storeTranslationKey() {},
+      async deleteTranslationKey() {},
+      async hasTranslationKey() { return false; },
+      async translationKeyProtection() { return "system"; },
     };
   },
   subscribeToOpenPaths: async () => ({

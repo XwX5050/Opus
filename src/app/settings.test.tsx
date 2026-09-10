@@ -797,9 +797,13 @@ describe("settings: translation", () => {
       DEFAULT_TRANSLATION_SETTINGS.endpoint,
     );
     const apiKey = within(dialog).getByLabelText("API Key");
-    expect(apiKey).toHaveValue(DEFAULT_TRANSLATION_SETTINGS.apiKey);
+    // Write-only: the field starts empty and never shows a stored key.
+    expect(apiKey).toHaveValue("");
     expect(apiKey).toHaveAttribute("type", "password");
     expect(apiKey).toHaveAttribute("placeholder", "sk-...");
+    expect(
+      within(dialog).getByRole("button", { name: "清除" }),
+    ).toBeDisabled();
     expect(within(dialog).getByLabelText("模型")).toHaveValue(
       DEFAULT_TRANSLATION_SETTINGS.model,
     );
@@ -817,10 +821,11 @@ describe("settings: translation", () => {
     ).toBeInTheDocument();
   });
 
-  it("commits endpoint, API key and model edits as settings patches", async () => {
+  it("commits endpoint and model edits as settings patches and stores the key", async () => {
     const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
     const { dialog, onTranslationSettingsChange } =
-      renderLiveTranslationDialog();
+      renderLiveTranslationDialog(DEFAULT_TRANSLATION_SETTINGS, port);
 
     const endpoint = within(dialog).getByLabelText("API 端点");
     await user.clear(endpoint);
@@ -838,19 +843,26 @@ describe("settings: translation", () => {
       endpoint: "https://example.com/v1",
     });
 
+    // The key never becomes a settings patch: it goes to the credential store
+    // under the slot the endpoint+model address ("custom" here), and the field
+    // clears instead of echoing it back.
     const apiKey = within(dialog).getByLabelText("API Key");
     fireEvent.change(apiKey, { target: { value: "sk-live-000" } });
     fireEvent.blur(apiKey);
-    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
-      ...DEFAULT_TRANSLATION_SETTINGS,
-      endpoint: "https://example.com/v1",
-      apiKey: "sk-live-000",
-      // No preset matches, so the key is remembered under the custom slot.
-      presetApiKeys: { custom: "sk-live-000" },
-    });
+    await waitFor(() =>
+      expect(port.translationKeys).toEqual({ custom: "sk-live-000" }),
+    );
+    expect(onTranslationSettingsChange).toHaveBeenCalledTimes(1);
+    expect(apiKey).toHaveValue("");
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("API Key")).toHaveAttribute(
+        "placeholder",
+        "已保存",
+      ),
+    );
 
     // The model is a native select: fetch the list, then pick a model. The
-    // last patch carries every edit made so far.
+    // last patch carries every (key-free) edit made so far.
     const model = within(dialog).getByLabelText("模型");
     await user.click(
       within(dialog).getByRole("button", { name: "获取模型列表" }),
@@ -862,9 +874,7 @@ describe("settings: translation", () => {
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...DEFAULT_TRANSLATION_SETTINGS,
       endpoint: "https://example.com/v1",
-      apiKey: "sk-live-000",
       model: "gpt-4o",
-      presetApiKeys: { custom: "sk-live-000" },
     });
   });
 
@@ -904,11 +914,9 @@ describe("settings: translation", () => {
     const user = userEvent.setup();
     const persisted: TranslationSettings = {
       endpoint: "https://custom.example.com/v1",
-      apiKey: "sk-persisted",
       model: "custom-model",
       targetLanguage: "Français",
       concurrency: 7,
-      presetApiKeys: {},
     };
     const { dialog, onTranslationSettingsChange } =
       renderLiveTranslationDialog(persisted);
@@ -916,9 +924,7 @@ describe("settings: translation", () => {
     expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
       persisted.endpoint,
     );
-    expect(within(dialog).getByLabelText("API Key")).toHaveValue(
-      persisted.apiKey,
-    );
+    expect(within(dialog).getByLabelText("API Key")).toHaveValue("");
     expect(within(dialog).getByLabelText("模型")).toHaveValue(persisted.model);
     expect(within(dialog).getByLabelText("并发数")).toHaveValue(
       persisted.concurrency,
@@ -1011,10 +1017,12 @@ describe("settings: translation", () => {
     expect(
       within(dialog).getByText("已加载 2 个模型"),
     ).toBeInTheDocument();
+    // The fetch names the slot the configured endpoint+model address; the
+    // key itself never leaves the credential store.
     expect(port.translationModelCalls).toEqual([
       {
         endpoint: DEFAULT_TRANSLATION_SETTINGS.endpoint,
-        apiKey: DEFAULT_TRANSLATION_SETTINGS.apiKey,
+        keySlot: "custom",
       },
     ]);
 
@@ -1223,15 +1231,17 @@ describe("settings: translation", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("selecting a preset stashes the current key and fills endpoint, model and concurrency", async () => {
+  it("selecting a preset fills endpoint, model and concurrency without touching keys", async () => {
     const user = userEvent.setup();
     const persisted: TranslationSettings = {
       ...DEFAULT_TRANSLATION_SETTINGS,
-      apiKey: "sk-persisted",
       targetLanguage: "Français",
     };
+    const port = new MemoryDocumentPort(new Map(), {
+      translationKeys: { custom: "sk-persisted" },
+    });
     const { dialog, onTranslationSettingsChange } =
-      renderLiveTranslationDialog(persisted);
+      renderLiveTranslationDialog(persisted, port);
 
     const preset = TRANSLATION_PRESETS[0];
     await user.selectOptions(
@@ -1239,15 +1249,11 @@ describe("settings: translation", () => {
       preset.id,
     );
 
-    // The key in use is remembered under the custom slot; the preset has no
-    // key of its own yet, so the field clears.
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...persisted,
       endpoint: preset.endpoint,
       model: preset.model,
       concurrency: preset.concurrency,
-      apiKey: "",
-      presetApiKeys: { custom: "sk-persisted" },
     });
     expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
       preset.endpoint,
@@ -1256,18 +1262,22 @@ describe("settings: translation", () => {
     expect(within(dialog).getByLabelText("并发数")).toHaveValue(
       preset.concurrency,
     );
-    // The key was stashed, not carried over; the target language survives.
-    expect(within(dialog).getByLabelText("API Key")).toHaveValue("");
+    // The target language survives and no key moved: the custom slot still
+    // holds the key it held before the switch.
     expect(within(dialog).getByLabelText("目标语言")).toHaveValue("Français");
+    expect(port.translationKeys).toEqual({ custom: "sk-persisted" });
     // The selector now identifies the preset and shows its note.
     expect(within(dialog).getByLabelText("服务商预设")).toHaveValue(preset.id);
     expect(within(dialog).getByText(preset.note)).toBeInTheDocument();
   });
 
-  it("remembers each preset's API key and restores it when switching back", async () => {
+  it("addresses each provider's own key slot while switching presets", async () => {
     const user = userEvent.setup();
-    const { dialog, onTranslationSettingsChange } = renderLiveTranslationDialog();
-
+    const port = new MemoryDocumentPort(new Map(), {
+      translationKeys: { custom: "sk-a" },
+    });
+    const { dialog, onTranslationSettingsChange } =
+      renderLiveTranslationDialog(DEFAULT_TRANSLATION_SETTINGS, port);
     const presetSelect = within(dialog).getByLabelText("服务商预设");
     const apiKey = within(dialog).getByLabelText("API Key");
     const glm = TRANSLATION_PRESETS.find((preset) => preset.id === "glm")!;
@@ -1275,76 +1285,133 @@ describe("settings: translation", () => {
       (preset) => preset.id === "deepseek",
     )!;
 
-    // Key A is typed while no preset matches, so it lands in the custom slot.
-    fireEvent.change(apiKey, { target: { value: "sk-a" } });
-    fireEvent.blur(apiKey);
-    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
-      ...DEFAULT_TRANSLATION_SETTINGS,
-      apiKey: "sk-a",
-      presetApiKeys: { custom: "sk-a" },
-    });
-
-    // Switching to GLM stashes A under "custom"; GLM has no key of its own
-    // yet, so the field clears while the fields fill from the preset.
+    // The custom slot's key is acknowledged without being echoed.
+    await waitFor(() => expect(apiKey).toHaveAttribute("placeholder", "已保存"));
+    expect(apiKey).toHaveValue("");
     await user.selectOptions(presetSelect, glm.id);
     expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
       ...DEFAULT_TRANSLATION_SETTINGS,
       endpoint: glm.endpoint,
       model: glm.model,
       concurrency: glm.concurrency,
-      apiKey: "",
-      presetApiKeys: { custom: "sk-a" },
     });
-    expect(apiKey).toHaveValue("");
+    // GLM holds no key yet, so the acknowledgment goes away.
+    await waitFor(() =>
+      expect(apiKey).toHaveAttribute("placeholder", "sk-..."),
+    );
+    expect(within(dialog).getByRole("button", { name: "清除" })).toBeDisabled();
 
-    // Key B typed while GLM matches is remembered under GLM's slot.
+    // A key typed now lands in GLM's own slot.
     fireEvent.change(apiKey, { target: { value: "sk-b" } });
     fireEvent.blur(apiKey);
-    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
-      ...DEFAULT_TRANSLATION_SETTINGS,
-      endpoint: glm.endpoint,
-      model: glm.model,
-      concurrency: glm.concurrency,
-      apiKey: "sk-b",
-      presetApiKeys: { custom: "sk-a", glm: "sk-b" },
-    });
-
-    // Switching to DeepSeek stashes B under "glm"; DeepSeek has no key yet.
-    await user.selectOptions(presetSelect, deepseek.id);
-    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
-      ...DEFAULT_TRANSLATION_SETTINGS,
-      endpoint: deepseek.endpoint,
-      model: deepseek.model,
-      concurrency: deepseek.concurrency,
-      apiKey: "",
-      presetApiKeys: { custom: "sk-a", glm: "sk-b" },
-    });
+    await waitFor(() =>
+      expect(port.translationKeys).toEqual({ custom: "sk-a", glm: "sk-b" }),
+    );
     expect(apiKey).toHaveValue("");
+    await waitFor(() => expect(apiKey).toHaveAttribute("placeholder", "已保存"));
 
-    // Back to GLM: the empty DeepSeek key is stashed and B is restored.
+    // DeepSeek has no key, and switching back to GLM finds B where it was
+    // left — nothing is stashed or restored by the switch itself.
+    await user.selectOptions(presetSelect, deepseek.id);
+    await waitFor(() =>
+      expect(apiKey).toHaveAttribute("placeholder", "sk-..."),
+    );
+    expect(port.translationKeys).toEqual({ custom: "sk-a", glm: "sk-b" });
     await user.selectOptions(presetSelect, glm.id);
-    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
-      ...DEFAULT_TRANSLATION_SETTINGS,
-      endpoint: glm.endpoint,
-      model: glm.model,
-      concurrency: glm.concurrency,
-      apiKey: "sk-b",
-      presetApiKeys: { custom: "sk-a", glm: "sk-b", deepseek: "" },
-    });
-    expect(apiKey).toHaveValue("sk-b");
+    await waitFor(() => expect(apiKey).toHaveAttribute("placeholder", "已保存"));
+    expect(port.translationKeys).toEqual({ custom: "sk-a", glm: "sk-b" });
+    // Both logs still carry the same keys; the endpoint fields follow the
+    // preset.
+    expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
+      glm.endpoint,
+    );
+    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ endpoint: glm.endpoint, model: glm.model }),
+    );
+  });
 
-    // Back to 自定义: the GLM key stays stashed and A is restored. Endpoint
-    // and model keep the preset's values — editing them detaches from GLM.
-    await user.selectOptions(presetSelect, "custom");
-    expect(onTranslationSettingsChange).toHaveBeenLastCalledWith({
-      ...DEFAULT_TRANSLATION_SETTINGS,
-      endpoint: glm.endpoint,
-      model: glm.model,
-      concurrency: glm.concurrency,
-      apiKey: "sk-a",
-      presetApiKeys: { custom: "sk-a", glm: "sk-b", deepseek: "" },
+  it("clears the key of the addressed slot", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map(), {
+      translationKeys: { custom: "sk-a", glm: "sk-b" },
     });
-    expect(apiKey).toHaveValue("sk-a");
+    const { dialog } = renderLiveTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      port,
+    );
+    const apiKey = within(dialog).getByLabelText("API Key");
+    const clear = within(dialog).getByRole("button", { name: "清除" });
+    await waitFor(() => expect(clear).toBeEnabled());
+
+    await user.click(clear);
+
+    // Only the addressed slot loses its key.
+    await waitFor(() =>
+      expect(port.translationKeys).toEqual({ glm: "sk-b" }),
+    );
+    expect(apiKey).toHaveAttribute("placeholder", "sk-...");
+    expect(within(dialog).getByRole("button", { name: "清除" })).toBeDisabled();
+    expect(within(dialog).getByText("已清除")).toBeInTheDocument();
+  });
+
+  it("reports a failed key save inline and keeps the field empty", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map());
+    vi.spyOn(port, "storeTranslationKey").mockRejectedValue(
+      new Error("keychain locked"),
+    );
+    const { dialog } = renderLiveTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      port,
+    );
+    const apiKey = within(dialog).getByLabelText("API Key");
+
+    fireEvent.change(apiKey, { target: { value: "sk-x" } });
+    fireEvent.blur(apiKey);
+
+    expect(
+      await within(dialog).findByText("保存失败：keychain locked"),
+    ).toBeInTheDocument();
+    // Nothing was stored, so the field still asks for a key rather than
+    // claiming one is saved.
+    expect(apiKey).toHaveValue("");
+    expect(await within(dialog).findByRole("button", { name: "清除" })).toBeDisabled();
+    await user.click(apiKey);
+    expect(apiKey).toHaveValue("");
+  });
+
+  it("warns when the credential store falls back to a weakly-protected file", async () => {
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      new MemoryDocumentPort(new Map(), { translationKeyProtection: "file" }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "系统凭据存储不可用：API Key 以文件形式保存在本机，保护较弱。",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no protection warning when the OS credential store is in use", async () => {
+    const { dialog } = renderTranslationDialog(
+      DEFAULT_TRANSLATION_SETTINGS,
+      vi.fn(),
+      new MemoryDocumentPort(new Map(), { translationKeyProtection: "system" }),
+    );
+    // The acknowledgement settles before the assertion, so the warning's
+    // absence is not just an unfinished load.
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("API Key")).toHaveAttribute(
+        "placeholder",
+        "sk-...",
+      ),
+    );
+    expect(
+      within(dialog).queryByText(
+        "系统凭据存储不可用：API Key 以文件形式保存在本机，保护较弱。",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("shows 自定义 again once a preset's endpoint is edited", async () => {

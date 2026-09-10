@@ -7,7 +7,10 @@ import type {
   RecoveryDraftInfo,
   SaveTarget,
 } from "./types";
-import type { TranslationSettings } from "../translate/types";
+import type {
+  TranslationKeyProtection,
+  TranslationSettings,
+} from "../translate/types";
 
 export type DocumentPortErrorCode =
   | "invalid_utf8"
@@ -87,8 +90,10 @@ export interface DocumentPort {
   /**
    * Translates a batch of paragraphs with the configured OpenAI-compatible
    * API. The result has the same length as `segments`; each entry is the
-   * translation of the segment at the same index. Rejects with a
-   * DocumentPortError (or a plain Error) when the request fails.
+   * translation of the segment at the same index. The settings carry no key:
+   * the backend resolves the caller's key slot to a secret it holds itself.
+   * Rejects with a DocumentPortError (or a plain Error) when the request
+   * fails.
    */
   translateSegments(
     settings: TranslationSettings,
@@ -96,12 +101,30 @@ export interface DocumentPort {
   ): Promise<string[]>;
   /**
    * Lists the model ids an OpenAI-compatible endpoint advertises (GET
-   * {endpoint}/models with the API key), sorted by id. The settings dialog
-   * uses this to populate the model picker and to test the connection.
-   * Rejects with a DocumentPortError (or a plain Error) when the request
-   * fails.
+   * {endpoint}/models with the key stored for `keySlot`), sorted by id. The
+   * settings dialog uses this to populate the model picker and to test the
+   * connection. Rejects with a DocumentPortError (or a plain Error) when the
+   * request fails.
    */
-  listTranslationModels(endpoint: string, apiKey: string): Promise<string[]>;
+  listTranslationModels(endpoint: string, keySlot: string): Promise<string[]>;
+  /**
+   * Stores the API key of one provider slot ("custom" or a preset id) in the
+   * OS credential store. The key is write-only from the frontend's point of
+   * view: it is never read back.
+   */
+  storeTranslationKey(slot: string, key: string): Promise<void>;
+  /** Forgets the key stored for one provider slot. */
+  deleteTranslationKey(slot: string): Promise<void>;
+  /**
+   * Whether a key is stored for one provider slot — the frontend's only way
+   * to know a key exists, since it can never read the secret.
+   */
+  hasTranslationKey(slot: string): Promise<boolean>;
+  /**
+   * How the backend protects stored keys: "system" for the OS credential
+   * store, "file" when it falls back to a weakly-protected local file.
+   */
+  translationKeyProtection(): Promise<TranslationKeyProtection>;
   /**
    * Subscribes to the normalized disk-event stream. Resolves to an
    * unsubscribe function. Events arrive for any path covered by an active

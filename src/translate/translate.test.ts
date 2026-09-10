@@ -11,11 +11,9 @@ import type { TranslationSettings } from "./types";
 
 const settings: TranslationSettings = {
   endpoint: "https://example.com/v1",
-  apiKey: "sk-test",
   model: "gpt-test",
   targetLanguage: "中文",
   concurrency: 10,
-  presetApiKeys: {},
 };
 
 interface FakeTranslatePort {

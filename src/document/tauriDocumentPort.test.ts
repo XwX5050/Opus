@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open, save: mocks.save
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen, emit: mocks.emit }));
 
 import { DocumentPortError } from "./DocumentPort";
+import { TRANSLATION_PRESETS } from "../translate/presets";
 import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
 import { createTauriDocumentPort, restoreWindowGeometry, subscribeToImageDrops, subscribeToMenuActions, subscribeToOpenPaths, tauriImagePreviewUrl } from "./tauriDocumentPort";
 
@@ -718,11 +719,9 @@ describe("tauri document port session, window geometry, and close requests", () 
 
       const settings = {
         endpoint: "https://api.openai.com/v1",
-        apiKey: "secret",
         model: "gpt-4o-mini",
         targetLanguage: "中文",
         concurrency: 10,
-        presetApiKeys: {},
       };
       const configured = { ...session, translationSettings: settings };
       await port.saveSession(configured);
@@ -737,12 +736,12 @@ describe("tauri document port session, window geometry, and close requests", () 
       expect(storeMocks.values.get("session")).toEqual(extended);
 
       // A second settings change flushes immediately again.
-      const rekeyed = {
+      const retargeted = {
         ...extended,
-        translationSettings: { ...settings, apiKey: "new-secret" },
+        translationSettings: { ...settings, model: "gpt-5" },
       };
-      await port.saveSession(rekeyed);
-      expect(storeMocks.values.get("session")).toEqual(rekeyed);
+      await port.saveSession(retargeted);
+      expect(storeMocks.values.get("session")).toEqual(retargeted);
     } finally {
       vi.useRealTimers();
     }
@@ -889,17 +888,16 @@ describe("tauri document port session, window geometry, and close requests", () 
         workspacePath: null,
         translationSettings: {
           endpoint: "https://api.openai.com/v1",
-          apiKey: "secret",
           model: "gpt-4o-mini",
           targetLanguage: "中文",
           concurrency: 10,
-          presetApiKeys: {},
         },
       };
       await port.saveSession(session);
       await vi.advanceTimersByTimeAsync(500);
       // Reloading through parseSession must recover the exact translation
-      // settings the user configured (the API key included), not the defaults.
+      // settings the user configured, not the defaults — and never a key,
+      // which is not part of the settings anymore.
       await expect(port.loadSession()).resolves.toEqual(session);
 
       storeMocks.values.set("session", {
@@ -907,7 +905,7 @@ describe("tauri document port session, window geometry, and close requests", () 
         openPaths: [],
         activePath: null,
         workspacePath: null,
-        translationSettings: { endpoint: 42, apiKey: "", model: "   " },
+        translationSettings: { endpoint: 42, model: "   " },
       });
       await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
         recent: [],
@@ -916,16 +914,209 @@ describe("tauri document port session, window geometry, and close requests", () 
         workspacePath: null,
         translationSettings: {
           endpoint: DEFAULT_TRANSLATION_SETTINGS.endpoint,
-          apiKey: DEFAULT_TRANSLATION_SETTINGS.apiKey,
           model: DEFAULT_TRANSLATION_SETTINGS.model,
           targetLanguage: DEFAULT_TRANSLATION_SETTINGS.targetLanguage,
           concurrency: DEFAULT_TRANSLATION_SETTINGS.concurrency,
-          presetApiKeys: DEFAULT_TRANSLATION_SETTINGS.presetApiKeys,
         },
       });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("migrates a pre-slot session's plaintext keys into the credential store and sanitizes the session", async () => {
+    const preset = TRANSLATION_PRESETS[0];
+    storeMocks.values.set("session", {
+      recent: [],
+      openPaths: ["/notes/a.md"],
+      activePath: "/notes/a.md",
+      workspacePath: null,
+      translationSettings: {
+        endpoint: preset.endpoint,
+        apiKey: "sk-active",
+        model: preset.model,
+        targetLanguage: "中文",
+        concurrency: 2,
+        presetApiKeys: { custom: "sk-custom", deepseek: "sk-deepseek" },
+      },
+    });
+    invoke.mockResolvedValue(undefined);
+
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      recent: [],
+      openPaths: ["/notes/a.md"],
+      activePath: "/notes/a.md",
+      workspacePath: null,
+      translationSettings: {
+        endpoint: preset.endpoint,
+        model: preset.model,
+        targetLanguage: "中文",
+        concurrency: 2,
+      },
+    });
+
+    // Every key went into the store under its own slot, the active one under
+    // the slot its endpoint+model address.
+    expect(
+      invoke.mock.calls.filter(([command]) => command === "store_translation_key"),
+    ).toEqual([
+      ["store_translation_key", { slot: "custom", key: "sk-custom" }],
+      ["store_translation_key", { slot: "deepseek", key: "sk-deepseek" }],
+      ["store_translation_key", { slot: preset.id, key: "sk-active" }],
+    ]);
+
+    // The plaintext fields are gone from disk once every key is stored.
+    expect(
+      (storeMocks.values.get("session") as {
+        translationSettings: Record<string, unknown>;
+      }).translationSettings,
+    ).toEqual({
+      endpoint: preset.endpoint,
+      model: preset.model,
+      targetLanguage: "中文",
+      concurrency: 2,
+    });
+  });
+
+  it("keeps the plaintext fields and retries when a key cannot be stored", async () => {
+    const legacySession = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      translationSettings: {
+        endpoint: "https://api.openai.com/v1",
+        apiKey: "sk-active",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+        concurrency: 10,
+        presetApiKeys: {},
+      },
+    };
+    storeMocks.values.set("session", legacySession);
+    invoke.mockRejectedValue({ code: "io", message: "keychain locked" });
+
+    await expect(createTauriDocumentPort().loadSession()).resolves.toEqual({
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      translationSettings: {
+        endpoint: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+        concurrency: 10,
+      },
+    });
+
+    // Nothing was sanitized: the key is still there for the next launch.
+    expect(storeMocks.values.get("session")).toEqual(legacySession);
+  });
+
+  it("re-attaches unmigrated plaintext fields to every later session write", async () => {
+    vi.useFakeTimers();
+    try {
+      const legacySettings = {
+        endpoint: "https://api.openai.com/v1",
+        apiKey: "sk-active",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+        concurrency: 10,
+        presetApiKeys: { glm: "sk-glm" },
+      };
+      storeMocks.values.set("session", {
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        translationSettings: legacySettings,
+      });
+      invoke.mockRejectedValue({ code: "io", message: "keychain locked" });
+      const port = createTauriDocumentPort();
+      await port.loadSession();
+
+      // The app persists the (sanitized) session it read back; a save must
+      // not be the write that drops the unmigrated key.
+      await port.saveSession({
+        recent: [],
+        openPaths: ["/notes/b.md"],
+        activePath: "/notes/b.md",
+        workspacePath: null,
+        translationSettings: {
+          endpoint: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          targetLanguage: "中文",
+          concurrency: 10,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(storeMocks.values.get("session")).toMatchObject({
+        openPaths: ["/notes/b.md"],
+        translationSettings: legacySettings,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries an idempotent migration on the next launch after a partial failure", async () => {
+    const legacySession = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      translationSettings: {
+        endpoint: "https://api.openai.com/v1",
+        apiKey: "sk-active",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+        concurrency: 10,
+        presetApiKeys: {},
+      },
+    };
+    storeMocks.values.set("session", legacySession);
+    invoke.mockRejectedValueOnce({ code: "io", message: "keychain locked" });
+
+    await createTauriDocumentPort().loadSession();
+    expect(storeMocks.values.get("session")).toEqual(legacySession);
+
+    // Second launch: the store is reachable now, so the same key lands and
+    // the plaintext copy is dropped.
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    await createTauriDocumentPort().loadSession();
+    expect(invoke).toHaveBeenCalledWith("store_translation_key", {
+      slot: "custom",
+      key: "sk-active",
+    });
+    expect(
+      (storeMocks.values.get("session") as {
+        translationSettings: Record<string, unknown>;
+      }).translationSettings,
+    ).not.toHaveProperty("apiKey");
+  });
+
+  it("leaves a session without legacy key fields untouched", async () => {
+    const session = {
+      recent: [],
+      openPaths: [],
+      activePath: null,
+      workspacePath: null,
+      translationSettings: {
+        endpoint: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+        concurrency: 10,
+      },
+    };
+    storeMocks.values.set("session", session);
+    // The module-level invoke mock is shared with the tests above, so start
+    // from a clean call list.
+    invoke.mockClear();
+    await createTauriDocumentPort().loadSession();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(storeMocks.values.get("session")).toEqual(session);
   });
 
   it("flushes on close request before destroying the window", async () => {
@@ -1020,26 +1211,40 @@ describe("tauri document port translation", () => {
 
   const settings = {
     endpoint: "https://api.openai.com/v1",
-    apiKey: "secret",
     model: "gpt-4o-mini",
     targetLanguage: "中文",
     concurrency: 10,
-    presetApiKeys: {},
   };
 
-  it("invokes translate_segments with camel case settings and returns translations in order", async () => {
+  it("invokes translate_segments with camel case settings and a key slot instead of a key", async () => {
     invoke.mockResolvedValue(["Ｈｅｌｌｏ", "Ｗｏｒｌｄ"]);
     const result = await createTauriDocumentPort().translateSegments(settings, ["Hello", "World"]);
     expect(invoke).toHaveBeenCalledWith("translate_segments", {
       settings: {
         endpoint: "https://api.openai.com/v1",
-        apiKey: "secret",
+        // No provider preset matches, so the key slot is "custom".
+        keySlot: "custom",
         model: "gpt-4o-mini",
         targetLanguage: "中文",
       },
       segments: ["Hello", "World"],
     });
     expect(result).toEqual(["Ｈｅｌｌｏ", "Ｗｏｒｌｄ"]);
+  });
+
+  it("addresses the matched preset's slot when the settings match one", async () => {
+    const preset = TRANSLATION_PRESETS[0];
+    invoke.mockResolvedValue(["Ｈｅｌｌｏ"]);
+    await createTauriDocumentPort().translateSegments(
+      { ...settings, endpoint: preset.endpoint, model: preset.model },
+      ["Hello"],
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      "translate_segments",
+      expect.objectContaining({
+        settings: expect.objectContaining({ keySlot: preset.id }),
+      }),
+    );
   });
 
   it("maps structured translate_segments failures", async () => {
@@ -1056,15 +1261,15 @@ describe("tauri document port translation", () => {
     ).rejects.toMatchObject({ code: "io", message: "boom" });
   });
 
-  it("invokes list_translation_models with a camel case api key", async () => {
+  it("invokes list_translation_models with a camel case key slot", async () => {
     invoke.mockResolvedValue(["gpt-4o", "gpt-4o-mini"]);
     const result = await createTauriDocumentPort().listTranslationModels(
       "https://api.openai.com/v1",
-      "secret",
+      "glm",
     );
     expect(invoke).toHaveBeenCalledWith("list_translation_models", {
       endpoint: "https://api.openai.com/v1",
-      apiKey: "secret",
+      keySlot: "glm",
     });
     expect(result).toEqual(["gpt-4o", "gpt-4o-mini"]);
   });
@@ -1074,8 +1279,57 @@ describe("tauri document port translation", () => {
     await expect(
       createTauriDocumentPort().listTranslationModels(
         "https://api.openai.com/v1",
-        "secret",
+        "custom",
       ),
     ).rejects.toMatchObject({ code: "io", message: "listing failed" });
+  });
+
+  it("stores, deletes and reports keys through the credential-store commands", async () => {
+    const port = createTauriDocumentPort();
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
+    await port.storeTranslationKey("glm", "sk-secret");
+    expect(invoke).toHaveBeenNthCalledWith(1, "store_translation_key", {
+      slot: "glm",
+      key: "sk-secret",
+    });
+    await port.deleteTranslationKey("glm");
+    expect(invoke).toHaveBeenNthCalledWith(2, "delete_translation_key", {
+      slot: "glm",
+    });
+
+    invoke.mockResolvedValueOnce(true);
+    await expect(port.hasTranslationKey("glm")).resolves.toBe(true);
+    expect(invoke).toHaveBeenNthCalledWith(3, "has_translation_key", {
+      slot: "glm",
+    });
+    invoke.mockResolvedValueOnce(false);
+    await expect(port.hasTranslationKey("custom")).resolves.toBe(false);
+  });
+
+  it("maps credential-store command failures to DocumentPortError", async () => {
+    const port = createTauriDocumentPort();
+    invoke.mockRejectedValue({ code: "io", message: "keychain locked" });
+    await expect(port.storeTranslationKey("glm", "k")).rejects.toMatchObject({
+      code: "io",
+      message: "keychain locked",
+    });
+    await expect(port.deleteTranslationKey("glm")).rejects.toMatchObject({
+      code: "io",
+    });
+    await expect(port.hasTranslationKey("glm")).rejects.toMatchObject({
+      code: "io",
+    });
+  });
+
+  it("reports the protection level, treating anything but system as the file fallback", async () => {
+    const port = createTauriDocumentPort();
+    invoke.mockResolvedValueOnce("system");
+    await expect(port.translationKeyProtection()).resolves.toBe("system");
+    expect(invoke).toHaveBeenCalledWith("translation_key_protection");
+    invoke.mockResolvedValueOnce("file");
+    await expect(port.translationKeyProtection()).resolves.toBe("file");
+    // An unrecognized answer never claims the strong level.
+    invoke.mockResolvedValueOnce("something-else");
+    await expect(port.translationKeyProtection()).resolves.toBe("file");
   });
 });
