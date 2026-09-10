@@ -35,7 +35,9 @@ Rust/Tauri backend.
 - **Key Rust crates**: `tauri` 2.11 (with `protocol-asset`),
   `tauri-plugin-dialog/fs/opener/process/store/updater/log`, `notify` 8.2,
   `trash` 5.2, `sha2`, `serde`, `tempfile`, `reqwest` 0.13 (rustls with the
-  ring provider pinned); Windows-only `tauri-plugin-single-instance`
+  ring provider pinned), `keyring` 3.6 (per-target credential backends:
+  `apple-native` / `windows-native` / `async-secret-service` — translation API
+  keys live in the OS credential store, see `api_keys.rs`); Windows-only `tauri-plugin-single-instance`
   (second-launch argv → open-with), `winreg` (installed-font registry
   enumeration), and `windows-sys` (file identity — volume serial + file index
   — via `BY_HANDLE_FILE_INFORMATION`, see `document_io.rs`); macOS-only
@@ -65,7 +67,8 @@ Rust/Tauri backend.
 │   ├── workspace.rs        # Directory listing and workspace mutations
 │   ├── watch.rs            # Debounced filesystem watcher
 │   ├── recovery.rs         # Recovery draft storage
-│   ├── translate.rs        # OpenAI-compatible translation + disk cache
+│   ├── translate.rs        # OpenAI-compatible translation + disk cache (keys resolved per slot from the credential store)
+│   ├── api_keys.rs         # Translation API key store: OS keychain w/ 0600 file fallback
 │   ├── asset_scope.rs      # Webview asset-scope registry
 │   ├── open_events.rs      # Deep-link / drag-drop / argv normalization
 │   ├── menu.rs             # Native macOS menu bar
