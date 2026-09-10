@@ -619,14 +619,104 @@ fn store_translation(
     }
 }
 
+/// The cache's answer for one translation request: the translations it can
+/// serve right away and the segments that still need a provider request.
+/// Keeping the cache lookup separate from the network work is what lets a
+/// caller skip credentials entirely — a fully cached document keeps rendering
+/// on a machine with no key configured, and a keyless slot only fails when a
+/// request would actually be sent.
+pub struct TranslationPlan {
+    /// One entry per input segment; `None` until its translation arrives.
+    results: Vec<Option<String>>,
+    /// Positions into the caller's segment list, with the text to translate.
+    uncached: Vec<(usize, String)>,
+}
+
+impl TranslationPlan {
+    /// Consults the cache for every segment. Best-effort housekeeping runs
+    /// first: the cache is swept down to its cap, throttled to at most once
+    /// an hour per directory.
+    pub fn from_cache(
+        cache: &TranslationCache,
+        settings: &TranslationSettings,
+        segments: &[String],
+    ) -> Self {
+        cache.prune_if_due();
+        let mut results: Vec<Option<String>> = vec![None; segments.len()];
+        let mut uncached: Vec<(usize, String)> = Vec::new();
+        for (index, segment) in segments.iter().enumerate() {
+            let key =
+                TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+            match cache.get(&key) {
+                Some(hit) => results[index] = Some(hit),
+                None => uncached.push((index, segment.clone())),
+            }
+        }
+        Self { results, uncached }
+    }
+
+    /// Whether any segment still needs a provider request — and therefore
+    /// whether an API key has to be resolved at all.
+    pub fn needs_request(&self) -> bool {
+        !self.uncached.is_empty()
+    }
+
+    /// The finished translations, for a plan that needs no request. Panics if
+    /// a segment is still pending, which is why callers check
+    /// [`Self::needs_request`] first.
+    pub fn into_results(self) -> Vec<String> {
+        Self::collect(self.results)
+    }
+
+    /// Translates the pending segments and caches each result. The uncached
+    /// ones are sent as one batched chat completion (or as one plain request
+    /// when only a single segment is missing, or when the batched reply fails
+    /// marker validation); cache write failures are logged and never fail a
+    /// translation.
+    pub async fn translate_uncached(
+        self,
+        client: &reqwest::Client,
+        api_key: &str,
+        settings: &TranslationSettings,
+        cache: &TranslationCache,
+    ) -> Result<Vec<String>, TranslateError> {
+        validate_endpoint(&settings.endpoint)?;
+        let Self {
+            mut results,
+            uncached,
+        } = self;
+        if uncached.len() == 1 {
+            let (index, segment) = &uncached[0];
+            let value = translate_segment(client, api_key, settings, segment).await?;
+            results[*index] = Some(value.clone());
+            store_translation(cache, settings, segment, &value);
+        } else if uncached.len() > 1 {
+            let texts: Vec<String> = uncached.iter().map(|(_, text)| text.clone()).collect();
+            let values = translate_batch_segments(client, api_key, settings, &texts).await?;
+            for ((index, segment), value) in uncached.iter().zip(values) {
+                results[*index] = Some(value.clone());
+                store_translation(cache, settings, segment, &value);
+            }
+        }
+        Ok(Self::collect(results))
+    }
+
+    /// Collects a plan whose every slot is filled; the `expect` is this
+    /// module's invariant, upheld by the flows above (every segment is either
+    /// served from the cache or translated).
+    fn collect(results: Vec<Option<String>>) -> Vec<String> {
+        results
+            .into_iter()
+            .map(|result| result.expect("every segment is translated or served from cache"))
+            .collect()
+    }
+}
+
 /// Core translation flow, separated from the Tauri command so integration
 /// tests can drive it with a real client against a mock server. `api_key` is
-/// the already-resolved key for the settings' slot. Consults the
-/// cache first; the uncached segments are sent as one batched chat completion
-/// (or as one plain request when only a single segment is missing, or when
-/// the batched reply fails marker validation), and each translation is cached
-/// under its own key before the results are returned in original order. Cache
-/// write failures are logged and never fail a translation.
+/// the already-resolved key for the settings' slot; callers that want the key
+/// resolved lazily (so a fully cached document needs none) drive
+/// [`TranslationPlan`] directly.
 pub async fn translate_segments_with_client(
     client: &reqwest::Client,
     api_key: &str,
@@ -634,37 +724,9 @@ pub async fn translate_segments_with_client(
     segments: &[String],
     cache: &TranslationCache,
 ) -> Result<Vec<String>, TranslateError> {
-    validate_endpoint(&settings.endpoint)?;
-    // Best-effort housekeeping before anything is translated: sweeps the
-    // cache down to its cap, throttled to at most once an hour per directory.
-    cache.prune_if_due();
-    let mut results: Vec<Option<String>> = vec![None; segments.len()];
-    let mut uncached: Vec<(usize, String)> = Vec::new();
-    for (index, segment) in segments.iter().enumerate() {
-        let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
-        if let Some(hit) = cache.get(&key) {
-            results[index] = Some(hit);
-        } else {
-            uncached.push((index, segment.clone()));
-        }
-    }
-    if uncached.len() == 1 {
-        let (index, segment) = &uncached[0];
-        let value = translate_segment(client, api_key, settings, segment).await?;
-        results[*index] = Some(value.clone());
-        store_translation(cache, settings, segment, &value);
-    } else if uncached.len() > 1 {
-        let texts: Vec<String> = uncached.iter().map(|(_, text)| text.clone()).collect();
-        let values = translate_batch_segments(client, api_key, settings, &texts).await?;
-        for ((index, segment), value) in uncached.iter().zip(values) {
-            results[*index] = Some(value.clone());
-            store_translation(cache, settings, segment, &value);
-        }
-    }
-    Ok(results
-        .into_iter()
-        .map(|result| result.expect("every segment is translated or served from cache"))
-        .collect())
+    TranslationPlan::from_cache(cache, settings, segments)
+        .translate_uncached(client, api_key, settings, cache)
+        .await
 }
 
 /// Lists the model ids advertised by an OpenAI-compatible endpoint (GET
@@ -756,6 +818,11 @@ pub fn shared_client() -> Result<&'static reqwest::Client, String> {
 /// directory. The API key belongs to `settings.key_slot` and is read from the
 /// credential store here, so it never reaches the frontend; a slot with no
 /// key fails with the structured `missing-key` error the UI matches on.
+///
+/// The key is resolved *lazily*: the cache is consulted first, and a document
+/// the cache can serve in full is returned without touching the credential
+/// store, so a translation made before the key was removed still renders
+/// offline.
 #[tauri::command]
 pub async fn translate_segments(
     app: tauri::AppHandle,
@@ -767,10 +834,14 @@ pub async fn translate_segments(
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let cache = TranslationCache::new(data_dir.join("translation-cache"));
+    let plan = TranslationPlan::from_cache(&cache, &settings, &segments);
+    if !plan.needs_request() {
+        return Ok(plan.into_results());
+    }
     let store = api_keys::store_for_app(&app)?;
     let slot = settings.key_slot.clone();
     let api_key = api_keys::run_store(move || api_keys::key_for_slot(&store, &slot)).await?;
-    translate_segments_with_client(shared_client()?, &api_key, &settings, &segments, &cache)
+    plan.translate_uncached(shared_client()?, &api_key, &settings, &cache)
         .await
         .map_err(|error| error.to_string())
 }

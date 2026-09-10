@@ -6,6 +6,12 @@
 //! key material back, so a secret only exists in this backend (and in the
 //! one-time migration request that carries it in).
 //!
+//! A slot either holds a key or it does not. Stored keys are trimmed of
+//! surrounding whitespace, a blank one is rejected with `invalid-key:`, and
+//! every reader treats a blank stored value as "no key" — so
+//! `has_translation_key`, `translate_segments`, and the settings dialog's
+//! "已保存" state can never disagree about whether a slot is configured.
+//!
 //! The store is the system credential store — macOS Keychain, Windows
 //! Credential Manager, the Linux Secret Service, all through `keyring`, with
 //! the bundle identifier as the service name and the slot as the account. Its
@@ -334,26 +340,23 @@ impl ApiKeyStore {
         )
     }
 
-    /// The key stored for `slot`. The system store is asked first; the file is
-    /// consulted when it is unreachable *or* simply has no entry, so a key
-    /// written during an outage stays readable afterwards.
+    /// The key stored for `slot`, or `None` when the slot holds no usable one
+    /// (see `configured_key`: a blank value counts as none). The system store
+    /// is asked first; the file is consulted when it is unreachable *or*
+    /// simply has no entry, so a key written during an outage stays readable
+    /// afterwards.
     pub fn get(&self, slot: &str) -> Result<Option<String>, String> {
         validate_slot(slot)?;
         match self.system.get(slot) {
-            Ok(Some(key)) => Ok(Some(key)),
-            Ok(None) => self
-                .fallback
-                .get(slot)
-                .map_err(|error| failure_message(self.fallback.as_ref(), &error)),
+            Ok(Some(key)) => Ok(configured_key(Some(key))),
+            Ok(None) => self.fallback_get(slot),
             Err(StoreError::Unavailable(detail)) => {
                 log::warn!(
                     "{} is unavailable ({detail}); reading slot {slot:?} from {}",
                     self.system.describe(),
                     self.fallback.describe()
                 );
-                self.fallback
-                    .get(slot)
-                    .map_err(|error| failure_message(self.fallback.as_ref(), &error))
+                self.fallback_get(slot)
             }
             Err(StoreError::Failed(detail)) => Err(format!(
                 "key-store: {} failed: {detail}",
@@ -362,9 +365,31 @@ impl ApiKeyStore {
         }
     }
 
-    /// Stores `key` for `slot`, preferring the system store.
+    /// Whether `slot` holds a usable key. Kept next to `get` so the settings
+    /// dialog's state and the translation commands can never disagree about
+    /// what "configured" means; the key itself is never returned.
+    pub fn has(&self, slot: &str) -> Result<bool, String> {
+        Ok(self.get(slot)?.is_some())
+    }
+
+    fn fallback_get(&self, slot: &str) -> Result<Option<String>, String> {
+        self.fallback
+            .get(slot)
+            .map(configured_key)
+            .map_err(|error| failure_message(self.fallback.as_ref(), &error))
+    }
+
+    /// Stores `key` for `slot`, preferring the system store. Surrounding
+    /// whitespace is trimmed off (a pasted key often carries a newline, which
+    /// would corrupt the Authorization header), and a key that is blank after
+    /// trimming is rejected: clearing a slot is what `delete` is for, and a
+    /// store never holds a value no request could use.
     pub fn store(&self, slot: &str, key: &str) -> Result<(), String> {
         validate_slot(slot)?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(blank_key_error(slot));
+        }
         match self.system.store(slot, key) {
             Ok(()) => {
                 // The file copy is superseded now: leaving it behind would let
@@ -429,6 +454,15 @@ impl ApiKeyStore {
     }
 }
 
+/// The stored value of a slot, if it counts as a configured key. A blank or
+/// whitespace-only value is a slot nobody filled in — whether it arrived
+/// through a hand-edited key file or an interrupted migration — so every
+/// reader (the translation commands, the settings dialog's "已保存" state)
+/// agrees it is unset.
+fn configured_key(stored: Option<String>) -> Option<String> {
+    stored.filter(|key| !key.trim().is_empty())
+}
+
 /// A failure message that names the store without ever naming its contents.
 fn failure_message(store: &dyn KeyBackend, error: &StoreError) -> String {
     format!("key-store: {} failed: {}", store.describe(), error.detail())
@@ -456,14 +490,10 @@ pub fn validate_slot(slot: &str) -> Result<(), String> {
 }
 
 /// The API key of `slot`, or the structured error the frontend matches on
-/// when the slot holds none.
+/// when the slot holds none. Blank keys are absent keys — `get` never reports
+/// one — so this and `ApiKeyStore::has` always agree.
 pub fn key_for_slot(store: &ApiKeyStore, slot: &str) -> Result<String, String> {
-    match store.get(slot)? {
-        // A blank key is a slot nobody filled in; treat it as unset rather
-        // than sending an empty Authorization header at the provider.
-        Some(key) if !key.trim().is_empty() => Ok(key),
-        _ => Err(missing_key_error(slot)),
-    }
+    store.get(slot)?.ok_or_else(|| missing_key_error(slot))
 }
 
 /// The error a command returns when a slot has no key. The stable prefix is
@@ -471,6 +501,16 @@ pub fn key_for_slot(store: &ApiKeyStore, slot: &str) -> Result<String, String> {
 /// first".
 pub fn missing_key_error(slot: &str) -> String {
     format!("missing-key: no API key stored for slot {slot:?}")
+}
+
+/// The error a blank key is rejected with. Storing one is a caller bug — the
+/// settings dialog's clear button calls `delete_translation_key` — and
+/// silently dropping the slot's key instead would turn a stale form value
+/// into a surprise delete.
+fn blank_key_error(slot: &str) -> String {
+    format!(
+        "invalid-key: the API key for slot {slot:?} is blank; use delete_translation_key to clear a slot"
+    )
 }
 
 /// The store the app uses, with the app data directory resolved.
@@ -497,7 +537,10 @@ where
 }
 
 /// Stores (or replaces) `slot`'s key. This is the only place key material
-/// enters the backend: everything else is addressed by slot.
+/// enters the backend: everything else is addressed by slot. Surrounding
+/// whitespace is trimmed and a blank key is rejected (`invalid-key:`), so the
+/// store can never hold a value that `has_translation_key` would report as
+/// present while translation reports it missing.
 #[tauri::command]
 pub async fn store_translation_key(
     app: tauri::AppHandle,
@@ -515,11 +558,13 @@ pub async fn delete_translation_key(app: tauri::AppHandle, slot: String) -> Resu
     run_store(move || store.delete(&slot)).await
 }
 
-/// Whether `slot` holds a key. The key itself is never returned.
+/// Whether `slot` holds a key. The key itself is never returned, and a blank
+/// stored value counts as no key — the same answer `translate_segments` and
+/// `list_translation_models` reach when they look the slot up.
 #[tauri::command]
 pub async fn has_translation_key(app: tauri::AppHandle, slot: String) -> Result<bool, String> {
     let store = store_for_app(&app)?;
-    run_store(move || store.get(&slot).map(|key| key.is_some())).await
+    run_store(move || store.has(&slot)).await
 }
 
 /// Whether keys are protected by the OS credential store (`system`) or by the
@@ -857,10 +902,47 @@ mod tests {
 
         store.store(CUSTOM_SLOT, KEY).unwrap();
         assert_eq!(key_for_slot(&store, CUSTOM_SLOT).unwrap(), KEY);
+    }
 
-        // A slot holding only whitespace counts as unset.
-        store.store(CUSTOM_SLOT, "   ").unwrap();
-        assert!(key_for_slot(&store, CUSTOM_SLOT).is_err());
+    #[test]
+    fn blank_keys_are_rejected_and_keys_are_stored_trimmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with(FakeBackend::new(), file_backend(dir.path()));
+
+        for blank in ["", "   ", "\n\t "] {
+            let error = store
+                .store(CUSTOM_SLOT, blank)
+                .expect_err("a blank key is not a key");
+            assert!(error.starts_with("invalid-key: "), "{error}");
+        }
+        // The rejected writes left nothing behind — not even the key file.
+        assert_eq!(store.get(CUSTOM_SLOT).unwrap(), None);
+        assert!(!store.has(CUSTOM_SLOT).unwrap());
+        assert!(!dir.path().join(FALLBACK_FILE_NAME).exists());
+
+        // A key pasted with a stray newline is stored without it: the value
+        // goes into an Authorization header verbatim.
+        store.store(CUSTOM_SLOT, "  sk-trimmed\n").unwrap();
+        assert_eq!(
+            store.get(CUSTOM_SLOT).unwrap(),
+            Some("sk-trimmed".to_string())
+        );
+        assert!(store.has(CUSTOM_SLOT).unwrap());
+    }
+
+    #[test]
+    fn a_blank_stored_value_counts_as_no_key_everywhere() {
+        let dir = tempfile::tempdir().unwrap();
+        // Written around the store's own guard, the way a hand-edited key file
+        // or an older build could have left it.
+        file_backend(dir.path()).store(CUSTOM_SLOT, "   ").unwrap();
+        let store = store_with(FakeBackend::new(), file_backend(dir.path()));
+
+        assert_eq!(store.get(CUSTOM_SLOT).unwrap(), None);
+        assert!(!store.has(CUSTOM_SLOT).unwrap());
+        assert!(key_for_slot(&store, CUSTOM_SLOT)
+            .expect_err("blank is not a key")
+            .starts_with("missing-key: "));
     }
 
     #[test]

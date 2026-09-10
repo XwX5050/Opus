@@ -3,7 +3,7 @@ use markdown_edit_lib::api_keys::{
 };
 use markdown_edit_lib::translate::{
     list_translation_models_with_client, shared_client, translate_segments_with_client,
-    TranslationCache, TranslationSettings,
+    TranslationCache, TranslationPlan, TranslationSettings,
 };
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -886,4 +886,73 @@ async fn a_slot_without_a_key_fails_before_any_request() {
 
     assert_eq!(error, "missing-key: no API key stored for slot \"custom\"");
     assert_eq!(server.request_count(), 0);
+}
+
+/// Writes one translation straight into the cache, the way a previous run
+/// would have left it.
+fn seed_cache(
+    cache: &TranslationCache,
+    settings: &TranslationSettings,
+    segment: &str,
+    value: &str,
+) {
+    let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+    cache.store(&key, value).unwrap();
+}
+
+#[test]
+fn a_fully_cached_document_needs_no_provider_and_no_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    // An endpoint that could never carry a request: nothing here reaches the
+    // network, so neither the endpoint nor an API key is consulted.
+    let settings = settings("http://example.com/v1");
+    seed_cache(&cache, &settings, "one", "一");
+    seed_cache(&cache, &settings, "two", "二");
+
+    let plan = TranslationPlan::from_cache(&cache, &settings, &segments(&["one", "two"]));
+
+    assert!(!plan.needs_request(), "a full cache hit needs no request");
+    assert_eq!(
+        plan.into_results(),
+        vec!["一".to_string(), "二".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_plan_requests_only_the_segments_the_cache_misses() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    seed_cache(&cache, &settings, "one", "一");
+    server.queue(chat_text_response("二"));
+
+    let plan = TranslationPlan::from_cache(&cache, &settings, &segments(&["one", "two"]));
+    assert!(plan.needs_request());
+    let result = plan
+        .translate_uncached(&client(), TEST_KEY, &settings, &cache)
+        .await
+        .unwrap();
+
+    // The cached segment is reused in place; only the missing one is sent.
+    assert_eq!(result, vec!["一".to_string(), "二".to_string()]);
+    assert_eq!(server.request_count(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
+    assert_eq!(body["messages"][1]["content"], "two");
+}
+
+#[tokio::test]
+async fn a_plan_needing_a_request_still_fails_loudly_without_a_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let store = ApiKeyStore::new(Box::new(MemoryKeys::new()), Box::new(key_file(dir.path())));
+    let settings = settings("http://127.0.0.1:9/v1");
+
+    let plan = TranslationPlan::from_cache(&cache, &settings, &segments(&["one"]));
+
+    assert!(plan.needs_request());
+    // This is the command's lazy step: it runs only because a request is due.
+    let error = key_for_slot(&store, &settings.key_slot).unwrap_err();
+    assert_eq!(error, "missing-key: no API key stored for slot \"custom\"");
 }
