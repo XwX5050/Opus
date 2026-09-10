@@ -9,14 +9,16 @@
  *   runs and whole protected blocks — which `packBlocksByHeight` then packs
  *   greedily into slides that fit a screen.
  *
- * The line scanning mirrors `src/translate/segments.ts`: a deliberately
+ * The line scanning follows `src/translate/segments.ts`: a deliberately
  * lexical state machine that tracks YAML frontmatter, fenced code blocks,
  * whole-block display math, and HTML comments without parsing Markdown.
  * Fences open with three or more backticks or tildes — optionally under
- * CommonMark blockquote markers — and close with the same character at
- * equal or greater length, followed only by spaces/tabs; math blocks open
- * and close on independent `$$` delimiter lines; anything left unclosed
- * runs to EOF.
+ * CommonMark blockquote markers, or on a list item's own marker line
+ * (`- ```) — and close with the same character at equal or greater length,
+ * followed only by spaces/tabs; math blocks open and close on independent
+ * `$$` delimiter lines; anything left unclosed runs to EOF. Separators may
+ * be indented at most three columns: a deeper `---` is an indented code
+ * block.
  */
 
 type ProtectedState = "fence" | "math" | "comment";
@@ -24,12 +26,15 @@ type ProtectedState = "fence" | "math" | "comment";
 /**
  * An opening Markdown code fence: optional indentation, an optional run of
  * CommonMark blockquote markers (`>` each followed by optional whitespace —
- * nested `> > ` quoted fences included), then three or more backticks or
+ * nested `> > ` quoted fences included), an optional list marker (`- `, `+ `,
+ * `* `, `1. `) whose item the fence opens in — `- ``` is a code block inside
+ * that list item, not a bullet with text — then three or more backticks or
  * tildes; the rest of the line is the info string, as in CommonMark. Only
  * the line's classification is consumed — the original line stays part of
  * the slide/block text, so quoting never loses bytes.
  */
-const FENCE_RE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})/;
+const FENCE_RE =
+  /^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(`{3,}|~{3,})/;
 
 /**
  * Blockquote marker depth of a fence line — how many `>` markers precede the
@@ -102,11 +107,28 @@ const findFrontmatterEnd = (lines: readonly string[]): number => {
 };
 
 /**
+ * Columns of a line's leading whitespace; a tab advances to the next
+ * 4-column tab stop, as CommonMark does when deciding indentation.
+ */
+const indentColumns = (line: string): number => {
+  let columns = 0;
+  for (const character of line) {
+    if (character === " ") columns += 1;
+    else if (character === "\t") columns += 4 - (columns % 4);
+    else break;
+  }
+  return columns;
+};
+
+/**
  * A slide-separator line: its trimmed content, with internal spaces and tabs
  * removed, is three or more dashes (`---`, `----`, `- - -`). `***` and `___`
- * are not separators.
+ * are not separators. Four or more columns of indentation make the line an
+ * indented code block instead — a thematic break may be indented at most
+ * three columns — so a `---` written there stays literal code.
  */
 const isSeparatorCandidate = (line: string): boolean =>
+  indentColumns(line) <= 3 &&
   /^-{3,}$/.test(line.trim().replace(/[ \t]/g, ""));
 
 /**
@@ -125,13 +147,14 @@ type PrevLineKind =
  * `null` when no valid separator exists.
  *
  * A separator is a `---`-style line (see `isSeparatorCandidate`) seen in
- * normal scanner state — never inside a fenced code block, display-math
- * block, HTML comment block, or YAML frontmatter — that is not directly
- * preceded by a content line. Separators are consumed as delimiters rather
- * than emitted, so a separator run after a blank line or another separator
- * still splits; the empty slides that fall between adjacent separators are
- * dropped. Slides are trimmed; the frontmatter text, when present, becomes
- * the leading content of the first slide.
+ * normal scanner state — never inside a fenced code block (including a fence
+ * opened on a list item's marker line), display-math block, HTML comment
+ * block, or YAML frontmatter — that is not directly preceded by a content
+ * line. Separators are consumed as delimiters rather than emitted, so a
+ * separator run after a blank line or another separator still splits; the
+ * empty slides that fall between adjacent separators are dropped. Slides are
+ * trimmed; the frontmatter text, when present, becomes the leading content of
+ * the first slide.
  */
 export function splitManualSlides(markdown: string): string[] | null {
   if (markdown.length === 0) return null;
