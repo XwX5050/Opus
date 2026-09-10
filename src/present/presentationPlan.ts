@@ -12,38 +12,52 @@
  * The line scanning follows `src/translate/segments.ts`: a deliberately
  * lexical state machine that tracks YAML frontmatter, fenced code blocks,
  * whole-block display math, and HTML comments without parsing Markdown.
- * Fences open with three or more backticks or tildes — optionally under
- * CommonMark blockquote markers, or on a list item's own marker line
- * (`- ```) — and close with the same character at equal or greater length,
- * followed only by spaces/tabs; math blocks open and close on independent
- * `$$` delimiter lines; anything left unclosed runs to EOF. Separators may
- * be indented at most three columns: a deeper `---` is an indented code
- * block.
+ * Fences open with three or more backticks or tildes behind any interleaving
+ * of CommonMark blockquote markers and list markers (`> - ```, `- > ```,
+ * `- ```) — a backtick fence's info string may not contain a backtick — and
+ * close with the same character at equal or greater length, followed only by
+ * spaces/tabs; math blocks open and close on independent `$$` delimiter
+ * lines; anything left unclosed runs to EOF. Separators may be indented at
+ * most three columns: a deeper `---` is an indented code block.
  */
 
 type ProtectedState = "fence" | "math" | "comment";
 
 /**
- * An opening Markdown code fence: optional indentation, an optional run of
- * CommonMark blockquote markers (`>` each followed by optional whitespace —
- * nested `> > ` quoted fences included), an optional list marker (`- `, `+ `,
- * `* `, `1. `) whose item the fence opens in — `- ``` is a code block inside
- * that list item, not a bullet with text — then three or more backticks or
- * tildes; the rest of the line is the info string, as in CommonMark. Only
- * the line's classification is consumed — the original line stays part of
- * the slide/block text, so quoting never loses bytes.
+ * The block prefix a fence line may carry, shared with FENCE_RE below: the
+ * optional indentation, then any interleaving of CommonMark blockquote
+ * markers (`>` each followed by optional whitespace — nested `> > ` quoted
+ * fences included) and list markers (`- `, `+ `, `* `, `1. `) whose item the
+ * fence opens in. `- > ``` opens a fence inside a blockquote that sits in a
+ * list item and `> - ``` one inside a list item that sits in a blockquote —
+ * both are code blocks in the editor, not prose. Identical to the prefix
+ * `src/translate/segments.ts` scans with.
+ */
+const FENCE_PREFIX_RE = /^[ \t]*(?:(?:>[ \t]*)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))*/;
+
+/**
+ * An opening Markdown code fence: the block prefix above, then three or more
+ * backticks or tildes; the rest of the line is the info string, as in
+ * CommonMark. A backtick fence's info string may not contain a backtick
+ * (CommonMark — the rule exists precisely so inline code is not read as a
+ * fence opener), so a line such as "``` ```" or "```ts`x`" is ordinary
+ * paragraph text, never a fence opener; tilde fences have no such
+ * restriction. Only the line's classification is consumed — the original
+ * line stays part of the slide/block text, so quoting never loses bytes.
+ * Identical to `src/translate/segments.ts`'s FENCE_RE.
  */
 const FENCE_RE =
-  /^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(`{3,}|~{3,})/;
+  /^[ \t]*(?:(?:>[ \t]*)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))*(?:(`{3,})(?![^\n]*`)|(~{3,}))/;
 
 /**
  * Blockquote marker depth of a fence line — how many `>` markers precede the
- * fence run (`> ```` is depth 1, `> > ```` depth 2, a plain fence depth 0).
- * CommonMark strips one marker per open quote level, so a quoted fence only
- * closes on a run at its own depth.
+ * fence run (`> ```` is depth 1, `> > ```` depth 2, a plain fence depth 0,
+ * and `- > ```` depth 1 through its interleaved prefix). CommonMark strips
+ * one marker per open quote level, so a quoted fence only closes on a run at
+ * its own depth.
  */
 const fenceMarkerDepth = (line: string): number => {
-  const prefix = /^[ \t]*(?:>[ \t]*)*/.exec(line)?.[0] ?? "";
+  const prefix = FENCE_PREFIX_RE.exec(line)?.[0] ?? "";
   return (prefix.match(/>/g) ?? []).length;
 };
 
@@ -148,7 +162,7 @@ type PrevLineKind =
  *
  * A separator is a `---`-style line (see `isSeparatorCandidate`) seen in
  * normal scanner state — never inside a fenced code block (including a fence
- * opened on a list item's marker line), display-math block, HTML comment
+ * behind a list or blockquote prefix), display-math block, HTML comment
  * block, or YAML frontmatter — that is not directly preceded by a content
  * line. Separators are consumed as delimiters rather than emitted, so a
  * separator run after a blank line or another separator still splits; the
@@ -242,9 +256,10 @@ export function splitManualSlides(markdown: string): string[] | null {
         }
         const fence = FENCE_RE.exec(line);
         if (fence) {
+          const run = fence[1] ?? fence[2];
           pending.push(line);
-          fenceChar = fence[1][0];
-          fenceLength = fence[1].length;
+          fenceChar = run[0];
+          fenceLength = run.length;
           fenceDepth = fenceMarkerDepth(line);
           state = "fence";
           break;
@@ -353,10 +368,11 @@ export function splitNaturalBlocks(markdown: string): string[] {
         }
         const fence = FENCE_RE.exec(line);
         if (fence) {
+          const run = fence[1] ?? fence[2];
           flush();
           pending.push(line);
-          fenceChar = fence[1][0];
-          fenceLength = fence[1].length;
+          fenceChar = run[0];
+          fenceLength = run.length;
           fenceDepth = fenceMarkerDepth(line);
           state = "fence";
           break;

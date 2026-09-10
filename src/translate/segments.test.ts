@@ -1,3 +1,4 @@
+import { GFM, parser as markdownParser } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
 import {
   splitManualSlides,
@@ -22,6 +23,102 @@ const texts = (
 
 const joined = (segments: readonly Segment[]): string =>
   segments.map((segment) => segment.text).join("");
+
+/**
+ * Sources of every FencedCode node the editor's own parser (lezer markdown
+ * with GFM, as `editorExtensions.ts` configures it) finds in `markdown` —
+ * the ground truth the two lexical scanners are checked against.
+ */
+const fencedCodeSources = (markdown: string): string[] => {
+  const sources: string[] = [];
+  markdownParser.parse(markdown).iterate({
+    enter(node) {
+      if (node.name === "FencedCode") {
+        sources.push(markdown.slice(node.from, node.to));
+      }
+    },
+  });
+  return sources;
+};
+
+/**
+ * Fence lines opened behind list and blockquote markers in any interleaving
+ * (`- ```, `> - ```, `- > ```, ...). Every opener below really is a
+ * FencedCode node in the editor's parser; `body` is a `---` that would split
+ * slides and translate as prose if the fence were missed.
+ */
+const FENCE_FIXTURES: readonly {
+  readonly name: string;
+  readonly open: string;
+  readonly body: string;
+  readonly close: string;
+}[] = [
+  { name: "a list item", open: "- ```", body: "  ---", close: "  ```" },
+  {
+    name: "an ordered list item",
+    open: "1. ```",
+    body: "   ---",
+    close: "   ```",
+  },
+  {
+    name: "a nested list item",
+    open: "- - ```",
+    body: "    ---",
+    close: "    ```",
+  },
+  { name: "a blockquote", open: "> ```", body: "> ---", close: "> ```" },
+  {
+    name: "nested blockquotes",
+    open: "> > ```",
+    body: "> > ---",
+    close: "> > ```",
+  },
+  {
+    name: "a list item in a blockquote",
+    open: "> - ```",
+    body: ">   ---",
+    close: ">   ```",
+  },
+  {
+    name: "a blockquote in a list item",
+    open: "- > ```",
+    body: "  > ---",
+    close: "  > ```",
+  },
+  {
+    name: "a list item in a blockquote in a list item",
+    open: "- > - ```",
+    body: "  >   ---",
+    close: "  >   ```",
+  },
+  {
+    name: "a list item in nested blockquotes",
+    open: "> > - ```",
+    body: "> >   ---",
+    close: "> >   ```",
+  },
+  {
+    name: "a star-marker list item in a blockquote",
+    open: "* > ```",
+    body: "  > ---",
+    close: "  > ```",
+  },
+];
+
+/**
+ * Backtick fence info strings may not contain a backtick (CommonMark); the
+ * editor's parser reads these lines as ordinary prose, and both scanners
+ * must too instead of opening a fence that swallows the rest of the
+ * document.
+ */
+const NON_FENCE_LINES = [
+  "``` ```",
+  "```ts`x`",
+  "> ```ts`x`",
+  "- ``` ```",
+  "- > ``` ```",
+  "> - ```ts`x`",
+];
 
 describe("splitMarkdownSegments", () => {
   it("splits plain text into paragraph blocks separated by blank lines", () => {
@@ -271,10 +368,12 @@ describe("splitMarkdownSegments", () => {
     expect(joined(segments)).toBe(doc);
   });
 
-  // A fence opened on a list item's own marker line (`- ```) is a code block
-  // inside that list item (CommonMark), so its code must never be translated.
-  // presentationPlan.ts shields the same lines from slide splitting; the
-  // tests below pin the shared marker-prefix semantics of the two scanners.
+  // A fence opened behind a list marker, a blockquote marker, or any
+  // interleaving of the two (`- ```, `> - ```, `- > - ```) is a code block
+  // inside those containers (CommonMark), so its code must never be
+  // translated. presentationPlan.ts shields the same lines from slide
+  // splitting; the tests below pin the shared marker-prefix and info-string
+  // semantics of the two scanners against the editor's own GFM parser.
   it("protects a fence opened on a list item's marker line", () => {
     const bullet = "- ```python\n  const x = 1\n  ```\n\n后续段落\n";
     const bulletSegments = splitMarkdownSegments(bullet);
@@ -338,31 +437,68 @@ describe("splitMarkdownSegments", () => {
     ]);
   });
 
-  it("protects a list-item fence exactly like presentationPlan", () => {
-    // The same document as presentationPlan.test.ts's list-fence slide test:
-    // both scanners must shield the identical region.
-    const doc = "A\n\n- ```\n  ---\n  ```\n\n---\n\nB\n";
-    // No trailing newline: presentation blocks are trimmed, protected
-    // segments are not, and both must contain this region intact.
-    const fenceRegion = "- ```\n  ---\n  ```";
+  it.each(FENCE_FIXTURES)(
+    "protects a fence opened in $name exactly like presentationPlan and lezer",
+    (fixture) => {
+      // No trailing newline: presentation blocks are trimmed, protected
+      // segments are not, and both must contain this region intact.
+      const fenceRegion = `${fixture.open}\n${fixture.body}\n${fixture.close}`;
+      const doc = `A\n\n${fenceRegion}\n\n---\n\nB\n`;
 
-    const segments = splitMarkdownSegments(doc);
-    expect(
-      texts(segments, "protected").filter((text) => text.includes(fenceRegion)),
-    ).toHaveLength(1);
-    // The translator has no separator concept, so the top-level --- stays an
-    // ordinary translatable line; only the fenced region is shielded.
-    expect(texts(segments, "translatable")).toEqual(["A\n", "---\n", "B\n"]);
-    expect(joined(segments)).toBe(doc);
+      // Ground truth: the editor's parser reads the opener as a fence whose
+      // code covers the --- body and ends before the top-level separator.
+      const fenced = fencedCodeSources(doc);
+      expect(fenced).toHaveLength(1);
+      expect(fenced[0]).toContain(fixture.body);
+      expect(fenced[0]).not.toContain("B");
 
-    expect(
-      splitNaturalBlocks(doc).filter((block) => block.includes(fenceRegion)),
-    ).toHaveLength(1);
-    expect(splitManualSlides(doc)).toEqual([
-      "A\n\n- ```\n  ---\n  ```",
-      "B",
-    ]);
-  });
+      const segments = splitMarkdownSegments(doc);
+      expect(
+        texts(segments, "protected").filter((text) =>
+          text.includes(fenceRegion),
+        ),
+      ).toHaveLength(1);
+      // The translator has no separator concept, so the top-level --- stays an
+      // ordinary translatable line; only the fenced region is shielded.
+      expect(texts(segments, "translatable")).toEqual(["A\n", "---\n", "B\n"]);
+      expect(joined(segments)).toBe(doc);
+
+      // The same document through the slide scanner: one protected block, and
+      // the top-level --- still splits.
+      expect(
+        splitNaturalBlocks(doc).filter((block) =>
+          block.includes(fenceRegion),
+        ),
+      ).toHaveLength(1);
+      expect(splitManualSlides(doc)).toEqual([`A\n\n${fenceRegion}`, "B"]);
+    },
+  );
+
+  it.each(NON_FENCE_LINES)(
+    "leaves the info-string line %s as prose in both scanners",
+    (line) => {
+      const doc = `A\n\n${line}\n后续\n\n---\n\nB\n`;
+      expect(fencedCodeSources(doc)).toEqual([]);
+
+      const segments = splitMarkdownSegments(doc);
+      expect(texts(segments, "translatable")).toEqual([
+        "A\n",
+        `${line}\n后续\n`,
+        "---\n",
+        "B\n",
+      ]);
+      expect(joined(segments)).toBe(doc);
+
+      // The line stays prose in its own block, and the separator still splits.
+      expect(splitNaturalBlocks(doc)).toEqual([
+        "A",
+        `${line}\n后续`,
+        "---",
+        "B",
+      ]);
+      expect(splitManualSlides(doc)).toEqual([`A\n\n${line}\n后续`, "B"]);
+    },
+  );
 
   it("protects whole-block display math including the delimiters", () => {
     const doc = "$$\nE = mc^2\n$$\n\ntext\n";
