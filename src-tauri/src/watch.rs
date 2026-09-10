@@ -504,6 +504,12 @@ impl FsWatcher for NotifyWatcher {
 struct TargetState {
     refs: usize,
     recursive: bool,
+    /// Whether the platform watcher currently watches this path. A failed
+    /// recursive upgrade whose non-recursive rollback also failed leaves the
+    /// entry alive (so the refcounts stay accurate) but without any platform
+    /// watch; `false` makes the next acquire re-issue the watch instead of
+    /// trusting an entry that never reports anything again.
+    watched: bool,
 }
 
 fn probe_path(path: &Path) -> Option<ProbedFile> {
@@ -675,6 +681,19 @@ impl WatchService {
                 // is counted before the upgrade so `add_target`'s failure
                 // compensation decrements it back to the pre-acquire count.
                 state.refs += 1;
+                if !state.watched {
+                    // The platform watch was lost (a recursive upgrade and
+                    // its rollback both failed). Re-issue it before trusting
+                    // the entry again, so the path can never stay silently
+                    // deaf for the consumers that are still registered.
+                    let recursive = state.recursive || target.recursive;
+                    watcher
+                        .watch(&target.path, recursive)
+                        .map_err(|message| WatchError::Notify { message })?;
+                    state.watched = true;
+                    state.recursive = recursive;
+                    return Ok(());
+                }
                 if target.recursive && !state.recursive {
                     watcher
                         .unwatch(&target.path)
@@ -682,12 +701,17 @@ impl WatchService {
                     if let Err(message) = watcher.watch(&target.path, true) {
                         // Restore the original non-recursive watch before
                         // failing, so the platform watch survives the
-                        // upgrade for the existing consumers.
+                        // upgrade for the existing consumers. When even that
+                        // rollback fails nothing watches the path any more:
+                        // mark the entry so the next acquire re-issues the
+                        // platform watch.
                         if let Err(rollback) = watcher.watch(&target.path, false) {
                             log::warn!(
-                                "failed to restore non-recursive watch for {}: {rollback}",
+                                "failed to restore the non-recursive watch for {}: {rollback}; \
+                                 the platform watch is re-issued on the next acquire",
                                 target.path.display()
                             );
+                            state.watched = false;
                         }
                         return Err(WatchError::Notify { message });
                     }
@@ -703,6 +727,7 @@ impl WatchService {
                     TargetState {
                         refs: 1,
                         recursive: target.recursive,
+                        watched: true,
                     },
                 );
             }
@@ -716,13 +741,18 @@ impl WatchService {
         };
         state.refs -= 1;
         if state.refs == 0 {
+            let watched = state.watched;
             self.targets.remove(&target.path);
-            if let Some(watcher) = self.watcher.as_mut() {
-                if let Err(message) = watcher.unwatch(&target.path) {
-                    log::warn!(
-                        "failed to stop watching {}: {message}",
-                        target.path.display()
-                    );
+            // Only stop what was actually started: a target whose platform
+            // watch was already lost has nothing left to unwatch.
+            if watched {
+                if let Some(watcher) = self.watcher.as_mut() {
+                    if let Err(message) = watcher.unwatch(&target.path) {
+                        log::warn!(
+                            "failed to stop watching {}: {message}",
+                            target.path.display()
+                        );
+                    }
                 }
             }
         }
@@ -754,6 +784,7 @@ impl Drop for WatchService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex as StdMutex;
 
     fn key(path: PathBuf, recursive: bool) -> WatchKey {
@@ -1046,6 +1077,10 @@ mod tests {
         calls: Arc<StdMutex<Vec<(String, PathBuf, bool)>>>,
         fail_watch: bool,
         fail_recursive_watch: bool,
+        /// Shared switch the test flips while the platform watcher
+        /// "refuses" every call: one run can then fail a watch and its
+        /// rollback, and let the self-healing acquire succeed again.
+        failing: Arc<AtomicBool>,
     }
 
     impl FakeWatcher {
@@ -1058,6 +1093,9 @@ mod tests {
         fn watch(&mut self, path: &Path, recursive: bool) -> Result<(), String> {
             self.call_log()
                 .push(("watch".into(), path.to_path_buf(), recursive));
+            if self.failing.load(Ordering::SeqCst) {
+                return Err("simulated watch failure".into());
+            }
             if recursive && self.fail_recursive_watch {
                 return Err("simulated recursive watch failure".into());
             }
@@ -1159,6 +1197,109 @@ mod tests {
                 ("unwatch".into(), root.clone(), false),
                 ("watch".into(), root.clone(), true),
                 ("watch".into(), root.clone(), false),
+                ("unwatch".into(), root.clone(), false),
+            ]
+        );
+    }
+
+    /// A recursive upgrade whose non-recursive rollback fails too leaves the
+    /// target without any platform watch. The entry survives (so refcounts
+    /// stay accurate) but must not be trusted: the next acquire re-issues the
+    /// platform watch instead of leaving the path silently deaf.
+    #[test]
+    fn a_lost_platform_watch_is_reissued_by_the_next_acquire() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = resolve(dir.path());
+        let document = dir.path().join("a.md");
+        let failing = Arc::new(AtomicBool::new(false));
+        let fake = FakeWatcher {
+            failing: Arc::clone(&failing),
+            ..FakeWatcher::default()
+        };
+        let call_log = Arc::clone(&fake.calls);
+        let mut service = WatchService::with_watcher(Box::new(fake));
+
+        service.watch_document("tab-1", &document).unwrap();
+        // The platform watcher refuses everything: the recursive upgrade and
+        // its non-recursive rollback both fail, so nothing watches the parent
+        // any more while the document consumer stays registered.
+        failing.store(true, Ordering::SeqCst);
+        let error = service.watch_workspace("ws", dir.path()).unwrap_err();
+        assert_eq!(
+            error,
+            WatchError::Notify {
+                message: "simulated watch failure".into()
+            }
+        );
+        assert_eq!(service.watched_targets(), vec![(root.clone(), false)]);
+        assert_eq!(
+            service.unwatch("ws"),
+            Err(WatchError::UnknownConsumer {
+                consumer_id: "ws".into()
+            })
+        );
+
+        // The platform is back: the next acquire of the same target must
+        // re-issue the watch rather than trust the stale entry.
+        failing.store(false, Ordering::SeqCst);
+        service
+            .watch_document("tab-2", &dir.path().join("b.md"))
+            .unwrap();
+        assert_eq!(service.watched_targets(), vec![(root.clone(), false)]);
+
+        service.unwatch("tab-1").unwrap();
+        service.unwatch("tab-2").unwrap();
+        assert!(service.watched_targets().is_empty());
+        assert_eq!(
+            *call_log.lock().unwrap(),
+            vec![
+                ("watch".into(), root.clone(), false),
+                ("unwatch".into(), root.clone(), false),
+                ("watch".into(), root.clone(), true),
+                ("watch".into(), root.clone(), false),
+                // The self-healing acquire of the lost target, and the
+                // teardown of the watch it re-established.
+                ("watch".into(), root.clone(), false),
+                ("unwatch".into(), root.clone(), false),
+            ]
+        );
+    }
+
+    /// The self-healing acquire restores the mode its consumers need: a lost
+    /// target acquired by a workspace becomes recursive again.
+    #[test]
+    fn a_lost_platform_watch_is_reissued_recursively_for_a_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = resolve(dir.path());
+        let document = dir.path().join("a.md");
+        let failing = Arc::new(AtomicBool::new(false));
+        let fake = FakeWatcher {
+            failing: Arc::clone(&failing),
+            ..FakeWatcher::default()
+        };
+        let call_log = Arc::clone(&fake.calls);
+        let mut service = WatchService::with_watcher(Box::new(fake));
+
+        service.watch_document("tab-1", &document).unwrap();
+        failing.store(true, Ordering::SeqCst);
+        service.watch_workspace("ws", dir.path()).unwrap_err();
+        failing.store(false, Ordering::SeqCst);
+
+        service.watch_workspace("ws", dir.path()).unwrap();
+        assert_eq!(service.watched_targets(), vec![(root.clone(), true)]);
+
+        service.unwatch("tab-1").unwrap();
+        assert_eq!(service.watched_targets(), vec![(root.clone(), true)]);
+        service.unwatch("ws").unwrap();
+        assert!(service.watched_targets().is_empty());
+        assert_eq!(
+            *call_log.lock().unwrap(),
+            vec![
+                ("watch".into(), root.clone(), false),
+                ("unwatch".into(), root.clone(), false),
+                ("watch".into(), root.clone(), true),
+                ("watch".into(), root.clone(), false),
+                ("watch".into(), root.clone(), true),
                 ("unwatch".into(), root.clone(), false),
             ]
         );
