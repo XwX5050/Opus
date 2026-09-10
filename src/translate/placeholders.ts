@@ -54,6 +54,53 @@ const placeholderFor = (index: number): string =>
   `${PLACEHOLDER_OPEN}${index}${PLACEHOLDER_CLOSE}`;
 
 /**
+ * Index of the next backtick run whose length is exactly `length`, or -1.
+ * CommonMark closes a code span only on a backtick string of equal length, so
+ * a longer run is content: in `` `a```b` `` the three-backtick run never
+ * closes the one-backtick opener, and the span ends at the final backtick.
+ */
+const findCodeSpanCloser = (
+  text: string,
+  from: number,
+  length: number,
+): number => {
+  let cursor = from;
+  while (cursor < text.length) {
+    if (text[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+    let end = cursor + 1;
+    while (text[end] === "`") end += 1;
+    if (end - cursor === length) return cursor;
+    cursor = end;
+  }
+  return -1;
+};
+
+/**
+ * Index of the next lone `$` at or after `from`, or -1. Dollars inside a `$$`
+ * run are display-math material, never an inline-math closer, so the scan
+ * steps over the whole run: `$a$$b$` closes at the final dollar instead of
+ * splitting into the two spans `$a$` and `$b$`.
+ */
+const findInlineMathCloser = (text: string, from: number): number => {
+  let cursor = from;
+  while (cursor < text.length) {
+    if (text[cursor] !== "$") {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor + 1] === "$") {
+      while (text[cursor] === "$") cursor += 1;
+      continue;
+    }
+    return cursor;
+  }
+  return -1;
+};
+
+/**
  * Scans a translatable segment and swaps every well-formed inline code or
  * math span for an opaque ⟪n⟫ token. Unmatched backticks or dollars pass
  * through as literal text — protection only ever applies to complete pairs,
@@ -77,7 +124,7 @@ export function protectInlineSpans(text: string): ProtectedText {
       let run = index;
       while (run + 1 < text.length && text[run + 1] === "`") run += 1;
       const openerLength = run - index + 1;
-      const closer = text.indexOf("`".repeat(openerLength), run + 1);
+      const closer = findCodeSpanCloser(text, run + 1, openerLength);
       const content = closer === -1 ? "" : text.slice(run + 1, closer);
       if (closer !== -1 && !content.includes("\n")) {
         spans.push({
@@ -106,8 +153,10 @@ export function protectInlineSpans(text: string): ProtectedText {
         index += 2;
         continue;
       }
-      // A single dollar opens an inline-math pair closed by the next dollar.
-      const closer = text.indexOf("$", index + 1);
+      // A single dollar opens an inline-math pair closed by the next lone
+      // dollar; a `$$` run in between is display-math material, never a
+      // close.
+      const closer = findInlineMathCloser(text, index + 1);
       const content = closer === -1 ? "" : text.slice(index + 1, closer);
       if (closer !== -1 && !content.includes("\n")) {
         spans.push({
