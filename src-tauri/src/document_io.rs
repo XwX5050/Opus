@@ -241,8 +241,7 @@ where
     // xattrs, ownership, and hard-link topology are release-hardening work.
     let permissions = existing_mode_permissions(&destination)?;
     let output = output_bytes(text, bom, newline);
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| map_io_error(&destination, error))?;
+    let mut temporary = create_checked_temp(parent, &destination, permissions.as_ref())?;
     if let Some(permissions) = permissions {
         temporary
             .as_file()
@@ -583,6 +582,42 @@ fn create_sibling_temp(
         ),
     })
 }
+
+/// Sibling temp file for a checked write. An existing destination's mode is
+/// requested here and then copied over exactly by the caller; a **new**
+/// destination requests the default file mode instead of the private temp
+/// default.
+fn create_checked_temp(
+    parent: &Path,
+    destination: &Path,
+    existing: Option<&fs::Permissions>,
+) -> Result<tempfile::NamedTempFile, DocumentIoError> {
+    let mut builder = tempfile::Builder::new();
+    match existing {
+        Some(permissions) => {
+            builder.permissions(permissions.clone());
+        }
+        None => request_new_file_permissions(&mut builder),
+    }
+    builder
+        .tempfile_in(parent)
+        .map_err(|error| map_io_error(destination, error))
+}
+
+/// Requests `0666` for a brand-new destination: the kernel masks it with the
+/// umask, so the saved document lands on the mode a plain `create_new` (and
+/// `workspace::create_markdown_file`) produces. `NamedTempFile`'s private
+/// `0600` default would otherwise stick to every newly saved document.
+#[cfg(unix)]
+fn request_new_file_permissions(builder: &mut tempfile::Builder) {
+    use std::os::unix::fs::PermissionsExt;
+    builder.permissions(fs::Permissions::from_mode(0o666));
+}
+
+/// Windows carries no file modes: a created file already gets the platform's
+/// default permissions and access control.
+#[cfg(not(unix))]
+fn request_new_file_permissions(_builder: &mut tempfile::Builder) {}
 
 fn modified_unix_ms(metadata: &fs::Metadata, path: &Path) -> Result<u128, DocumentIoError> {
     metadata

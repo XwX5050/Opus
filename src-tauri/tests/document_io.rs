@@ -2,7 +2,9 @@
 use std::os::unix::{fs::symlink, fs::PermissionsExt};
 
 use markdown_edit_lib::document_io::write_document_checked_with_hook;
-use markdown_edit_lib::document_io::{read_document, write_document, DocumentIoError, Newline};
+use markdown_edit_lib::document_io::{
+    read_document, write_document, write_document_checked, DocumentIoError, Newline,
+};
 
 #[test]
 fn document_io_reads_utf8_bom_and_crlf_without_normalizing_text() {
@@ -222,6 +224,43 @@ fn document_io_write_to_read_only_target_reports_permission_denied() {
     let mut permissions = std::fs::metadata(&path).unwrap().permissions();
     permissions.set_readonly(false);
     std::fs::set_permissions(&path, permissions).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn document_io_checked_write_of_a_new_document_matches_plain_file_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fresh.md");
+    let (_, version) = write_document_checked(&path, "hello\n", false, Newline::Lf, None).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\n");
+
+    // A plain `create_new` — what `create_markdown_file` uses — lets the
+    // kernel apply the process umask to 0666. Saving a brand-new document
+    // must land on that same mode, not on the temp file's private 0600
+    // default.
+    let probe = dir.path().join("probe.md");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        std::fs::metadata(&probe).unwrap().permissions().mode() & 0o777
+    );
+
+    // An existing destination still keeps its own mode through a checked
+    // write, however restrictive it is.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    write_document_checked(&path, "again\n", false, Newline::Lf, Some(&version)).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(
+        directory_entry_names(dir.path()),
+        vec!["fresh.md", "probe.md"]
+    );
 }
 
 #[test]
