@@ -6,9 +6,9 @@
  * - "translatable": paragraph blocks (runs of non-blank lines).
  * - "protected": structure that must pass through untranslated — YAML
  *   frontmatter at the document start, fenced code blocks (``` and ~~~,
- *   plain or blockquote-quoted, including fences left open to EOF),
- *   whole-block display math ($$...$$, including unclosed), HTML comment
- *   blocks, and blank-line separators.
+ *   plain, blockquote-quoted, or opened on a list item's own marker line,
+ *   including fences left open to EOF), whole-block display math ($$...$$,
+ *   including unclosed), HTML comment blocks, and blank-line separators.
  *
  * The concatenation of every segment's text reproduces the input exactly, so
  * `reassembleTranslation` can swap translations back in losslessly.
@@ -26,16 +26,19 @@ type ScanState = "normal" | "frontmatter" | "fence" | "math" | "comment";
 /**
  * An opening Markdown code fence: optional indentation, an optional run of
  * CommonMark blockquote markers (`>` each followed by optional whitespace —
- * nested `> > ` quoted fences included), then three or more backticks or
+ * nested `> > ` quoted fences included), an optional list marker (`- `, `+ `,
+ * `* `, `1. `) whose item the fence opens in — `- ``` is a code block inside
+ * that list item, not a bullet with text — then three or more backticks or
  * tildes; the rest of the line is the info string, as in CommonMark. A
  * backtick fence's info string may not contain a backtick (CommonMark — the
- * rule exists precisely so inline code is not read as a fence opener), so
- * lines such as "``` ```" and "```ts`x`" are ordinary paragraph text, never
- * fence openers; tilde fences have no such restriction. Only the line's
+ * rule exists precisely so inline code is not read as a fence opener), so a
+ * line such as "``` ```" or "```ts`x`" is ordinary paragraph text, never a
+ * fence opener; tilde fences have no such restriction. Only the line's
  * classification is consumed — the original line stays attached to the
  * protected segment, so quoting never loses bytes.
  */
-const FENCE_RE = /^[ \t]*(?:>[ \t]*)*(?:(`{3,})(?![^\n]*`)|(~{3,}))/;
+const FENCE_RE =
+  /^[ \t]*(?:>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(?:(`{3,})(?![^\n]*`)|(~{3,}))/;
 
 /**
  * Blockquote marker depth of a fence line — how many `>` markers precede the

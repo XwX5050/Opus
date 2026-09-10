@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  splitManualSlides,
+  splitNaturalBlocks,
+} from "../present/presentationPlan";
+import {
   MAX_TRANSLATABLE_CHUNK_LENGTH,
   reassembleTranslation,
   splitMarkdownSegments,
@@ -265,6 +269,99 @@ describe("splitMarkdownSegments", () => {
     const segments = splitMarkdownSegments(doc);
     expect(segments).toEqual([{ kind: "protected", text: doc }]);
     expect(joined(segments)).toBe(doc);
+  });
+
+  // A fence opened on a list item's own marker line (`- ```) is a code block
+  // inside that list item (CommonMark), so its code must never be translated.
+  // presentationPlan.ts shields the same lines from slide splitting; the
+  // tests below pin the shared marker-prefix semantics of the two scanners.
+  it("protects a fence opened on a list item's marker line", () => {
+    const bullet = "- ```python\n  const x = 1\n  ```\n\n后续段落\n";
+    const bulletSegments = splitMarkdownSegments(bullet);
+    expect(bulletSegments).toEqual([
+      { kind: "protected", text: "- ```python\n  const x = 1\n  ```\n" },
+      { kind: "protected", text: "\n" },
+      { kind: "translatable", text: "后续段落\n" },
+    ]);
+    expect(joined(bulletSegments)).toBe(bullet);
+
+    const ordered = "1. ```\n   const y = 2\n   ```\n\n尾段\n";
+    expect(splitMarkdownSegments(ordered)).toEqual([
+      { kind: "protected", text: "1. ```\n   const y = 2\n   ```\n" },
+      { kind: "protected", text: "\n" },
+      { kind: "translatable", text: "尾段\n" },
+    ]);
+  });
+
+  it("protects a list-item fence opened under a blockquote prefix", () => {
+    const doc = "> - ```\n>   const x = 1\n>   ```\n\n> 后续\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments).toEqual([
+      { kind: "protected", text: "> - ```\n>   const x = 1\n>   ```\n" },
+      { kind: "protected", text: "\n" },
+      { kind: "translatable", text: "> 后续\n" },
+    ]);
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("keeps a list-item fence whole across blank lines and --- lines", () => {
+    // The --- is code inside the fence, not a paragraph to translate.
+    const doc = "A\n\n- ```\n\n  ---\n  ```\n\nB\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(texts(segments, "translatable")).toEqual(["A\n", "B\n"]);
+    expect(texts(segments, "protected")).toContain(
+      "- ```\n\n  ---\n  ```\n",
+    );
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("requires whitespace after a list marker before a fence opens", () => {
+    // Without a space the line is not a list item (CommonMark), so the text
+    // stays translatable; only the dangling fence line is protected.
+    const doc = "-```\n  x\n  ```\n";
+    expect(splitMarkdownSegments(doc)).toEqual([
+      { kind: "translatable", text: "-```\n  x\n" },
+      { kind: "protected", text: "  ```\n" },
+    ]);
+  });
+
+  it("does not open a list-item backtick fence whose info string contains a backtick", () => {
+    const spaced = "- ``` ```\n后续段落\n";
+    expect(splitMarkdownSegments(spaced)).toEqual([
+      { kind: "translatable", text: spaced },
+    ]);
+
+    // Tilde fences allow a backtick in the info string, list prefix included.
+    const tilde = "- ~~~ts`x`\n  x\n  ~~~\n";
+    expect(splitMarkdownSegments(tilde)).toEqual([
+      { kind: "protected", text: tilde },
+    ]);
+  });
+
+  it("protects a list-item fence exactly like presentationPlan", () => {
+    // The same document as presentationPlan.test.ts's list-fence slide test:
+    // both scanners must shield the identical region.
+    const doc = "A\n\n- ```\n  ---\n  ```\n\n---\n\nB\n";
+    // No trailing newline: presentation blocks are trimmed, protected
+    // segments are not, and both must contain this region intact.
+    const fenceRegion = "- ```\n  ---\n  ```";
+
+    const segments = splitMarkdownSegments(doc);
+    expect(
+      texts(segments, "protected").filter((text) => text.includes(fenceRegion)),
+    ).toHaveLength(1);
+    // The translator has no separator concept, so the top-level --- stays an
+    // ordinary translatable line; only the fenced region is shielded.
+    expect(texts(segments, "translatable")).toEqual(["A\n", "---\n", "B\n"]);
+    expect(joined(segments)).toBe(doc);
+
+    expect(
+      splitNaturalBlocks(doc).filter((block) => block.includes(fenceRegion)),
+    ).toHaveLength(1);
+    expect(splitManualSlides(doc)).toEqual([
+      "A\n\n- ```\n  ---\n  ```",
+      "B",
+    ]);
   });
 
   it("protects whole-block display math including the delimiters", () => {
