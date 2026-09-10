@@ -324,10 +324,12 @@ pub fn validate_entry_name(name: &str) -> Result<(), WorkspaceError> {
 /// be a plain entry name (see `validate_entry_name`); Markdown files keep a
 /// Markdown extension so they cannot be renamed out of the listing. Renaming
 /// to the current name succeeds as a no-op, and an existing target is
-/// rejected instead of being overwritten. Used by `rename_entry`, which
-/// resolves the source inside the workspace root, and by the
-/// `rename_document` command, which renames an individually opened file by
-/// its absolute path.
+/// rejected instead of being overwritten — unless that target is the entry
+/// itself under a different spelling (`names_the_same_entry`), which is what
+/// a case-only rename looks like on the case-insensitive filesystems of
+/// macOS and Windows. Used by `rename_entry`, which resolves the source
+/// inside the workspace root, and by the `rename_document` command, which
+/// renames an individually opened file by its absolute path.
 pub fn rename_to_name(source: &Path, to_name: &str) -> Result<DirectoryEntry, WorkspaceError> {
     validate_entry_name(to_name)?;
     let target = source
@@ -337,7 +339,7 @@ pub fn rename_to_name(source: &Path, to_name: &str) -> Result<DirectoryEntry, Wo
     if source.is_file() && !is_markdown(&target) {
         return Err(WorkspaceError::NotMarkdown { path: target });
     }
-    if target != source && target.exists() {
+    if target != source && target.exists() && !names_the_same_entry(source, &target) {
         return Err(WorkspaceError::AlreadyExists { path: target });
     }
     fs::rename(source, &target).map_err(|error| WorkspaceError::Io {
@@ -349,6 +351,25 @@ pub fn rename_to_name(source: &Path, to_name: &str) -> Result<DirectoryEntry, Wo
         is_directory: target.is_dir(),
         path: target,
     })
+}
+
+/// Whether `target` names the same entry as `source`. A case-insensitive
+/// filesystem answers `notes.md` and `Notes.md` with one entry, so a rename
+/// that only respells the entry's own name is not a conflict. Both sides must
+/// be the same kind of entry: canonicalizing follows symlinks, and renaming
+/// over a symlink would replace the link itself, so a link is never "the same
+/// entry" as a plain file (hard links keep their own names and never
+/// canonicalize to the same path either).
+fn names_the_same_entry(source: &Path, target: &Path) -> bool {
+    let is_symlink =
+        |path: &Path| fs::symlink_metadata(path).map(|metadata| metadata.file_type().is_symlink());
+    if is_symlink(source).ok() != is_symlink(target).ok() {
+        return false;
+    }
+    match (fs::canonicalize(source), fs::canonicalize(target)) {
+        (Ok(source), Ok(target)) => source == target,
+        _ => false,
+    }
 }
 
 /// Renames an entry within its own directory. `to_name` must be a plain
