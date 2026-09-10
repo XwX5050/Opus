@@ -34,6 +34,28 @@ describe("protectInlineSpans", () => {
     ]);
   });
 
+  it("skips $$ runs when closing a single-dollar math span", () => {
+    // The middle `$$` is display-math material, so it never closes the span
+    // opened by the first dollar: `$a$$b$` is one span, not the two that
+    // `$a$` + `$b$` would produce.
+    const text = "从 $a$$b$ 取值。\n";
+    const protectedText = protectInlineSpans(text);
+    expect(protectedText.text).toBe("从 ⟪1⟫ 取值。\n");
+    expect(protectedText.spans).toEqual([
+      { index: 1, placeholder: "⟪1⟫", original: "$a$$b$" },
+    ]);
+    expect(replaceInlineSpans(protectedText.text, protectedText.spans)).toBe(
+      text,
+    );
+  });
+
+  it("leaves a dollar opener literal when its only partner sits in a $$ run", () => {
+    const text = "价格 $a$$ 结束。\n";
+    const protectedText = protectInlineSpans(text);
+    expect(protectedText.text).toBe(text);
+    expect(protectedText.spans).toEqual([]);
+  });
+
   it("never nests: a code span containing dollars is one span", () => {
     const protectedText = protectInlineSpans("看 `$x$` 这段。\n");
     expect(protectedText.text).toBe("看 ⟪1⟫ 这段。\n");
@@ -47,6 +69,34 @@ describe("protectInlineSpans", () => {
     expect(protectedText.spans).toEqual([
       { index: 1, placeholder: "⟪1⟫", original: "`` `x` ``" },
     ]);
+  });
+
+  it("closes a code span only on a run of exactly equal length", () => {
+    // CommonMark: a longer run is code content, so the three backticks never
+    // close the one-backtick opener — the span runs to the final backtick.
+    const text = "看 `a```b` 这段。\n";
+    const protectedText = protectInlineSpans(text);
+    expect(protectedText.text).toBe("看 ⟪1⟫ 这段。\n");
+    expect(protectedText.spans).toEqual([
+      { index: 1, placeholder: "⟪1⟫", original: "`a```b`" },
+    ]);
+    expect(replaceInlineSpans(protectedText.text, protectedText.spans)).toBe(
+      text,
+    );
+  });
+
+  it("closes a multi-backtick span past a longer run", () => {
+    // The three-backtick run is a different backtick string, so the two-
+    // backtick opener closes on the final run instead of ending mid-run.
+    const text = "用 ``a```b`` 表示。\n";
+    const protectedText = protectInlineSpans(text);
+    expect(protectedText.text).toBe("用 ⟪1⟫ 表示。\n");
+    expect(protectedText.spans).toEqual([
+      { index: 1, placeholder: "⟪1⟫", original: "``a```b``" },
+    ]);
+    expect(replaceInlineSpans(protectedText.text, protectedText.spans)).toBe(
+      text,
+    );
   });
 
   it("leaves unmatched backticks and dollars as literal text", () => {

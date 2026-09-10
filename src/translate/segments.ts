@@ -27,11 +27,15 @@ type ScanState = "normal" | "frontmatter" | "fence" | "math" | "comment";
  * An opening Markdown code fence: optional indentation, an optional run of
  * CommonMark blockquote markers (`>` each followed by optional whitespace —
  * nested `> > ` quoted fences included), then three or more backticks or
- * tildes; the rest of the line is the info string, as in CommonMark. Only
- * the line's classification is consumed — the original line stays attached
- * to the protected segment, so quoting never loses bytes.
+ * tildes; the rest of the line is the info string, as in CommonMark. A
+ * backtick fence's info string may not contain a backtick (CommonMark — the
+ * rule exists precisely so inline code is not read as a fence opener), so
+ * lines such as "``` ```" and "```ts`x`" are ordinary paragraph text, never
+ * fence openers; tilde fences have no such restriction. Only the line's
+ * classification is consumed — the original line stays attached to the
+ * protected segment, so quoting never loses bytes.
  */
-const FENCE_RE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})/;
+const FENCE_RE = /^[ \t]*(?:>[ \t]*)*(?:(`{3,})(?![^\n]*`)|(~{3,}))/;
 
 /**
  * Blockquote marker depth of a fence line — how many `>` markers precede the
@@ -180,9 +184,10 @@ export function splitMarkdownSegments(text: string): Segment[] {
         }
         const fence = FENCE_RE.exec(line);
         if (fence) {
+          const run = fence[1] ?? fence[2];
           startProtectedBlock(line);
-          fenceChar = fence[1][0];
-          fenceLength = fence[1].length;
+          fenceChar = run[0];
+          fenceLength = run.length;
           fenceDepth = fenceMarkerDepth(line);
           state = "fence";
           break;

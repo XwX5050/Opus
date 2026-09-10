@@ -122,6 +122,53 @@ describe("splitMarkdownSegments", () => {
     });
   });
 
+  it("does not open a backtick fence whose info string contains a backtick", () => {
+    // CommonMark forbids backticks in a backtick fence's info string — the
+    // rule exists so inline code is not read as a fence opener. These lines
+    // are ordinary prose; treating them as fences would swallow (and never
+    // translate) the rest of the document.
+    const spaced = "``` ```\n后续段落\n";
+    expect(splitMarkdownSegments(spaced)).toEqual([
+      { kind: "translatable", text: spaced },
+    ]);
+
+    const tagged = "```ts`x`\n后续段落\n";
+    expect(splitMarkdownSegments(tagged)).toEqual([
+      { kind: "translatable", text: tagged },
+    ]);
+
+    const quoted = "> ```ts`x`\n> 后续段落\n";
+    expect(splitMarkdownSegments(quoted)).toEqual([
+      { kind: "translatable", text: quoted },
+    ]);
+  });
+
+  it("keeps translating after a backtick run with an invalid info string", () => {
+    const doc = "``` ```\n\n正文\n\n```ts\nconst x = 1;\n```\n\n尾段\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(texts(segments, "translatable")).toEqual([
+      "``` ```\n",
+      "正文\n",
+      "尾段\n",
+    ]);
+    // The genuine fence further down still protects its code.
+    expect(texts(segments, "protected")).toContain(
+      "```ts\nconst x = 1;\n```\n",
+    );
+    expect(joined(segments)).toBe(doc);
+  });
+
+  it("still opens tilde fences whose info string contains a backtick", () => {
+    const doc = "~~~ts`x`\ncode\n~~~\nafter\n";
+    const segments = splitMarkdownSegments(doc);
+    expect(segments[0]).toEqual({
+      kind: "protected",
+      text: "~~~ts`x`\ncode\n~~~\n",
+    });
+    expect(segments.at(-1)).toEqual({ kind: "translatable", text: "after\n" });
+    expect(joined(segments)).toBe(doc);
+  });
+
   it("accepts trailing spaces or tabs on a closing fence line", () => {
     const spaces = "```\ncode\n```  \nafter\n";
     const spaceSegments = splitMarkdownSegments(spaces);
