@@ -223,6 +223,39 @@ describe("mathWidgetsExtension", () => {
     expect(view.contentDOM.textContent).not.toContain("$first$");
     expect(view.dom.querySelectorAll(".md-math")).toHaveLength(2);
   });
+
+  it("freezes the decorations while composing and recomputes at compositionend", () => {
+    const doc = "$first$ and $second$ outside";
+    const view = createView(doc, 2);
+    expect(view.dom.querySelectorAll(".md-math")).toHaveLength(1);
+    const widget = view.dom.querySelector(".md-math");
+
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    // A selection change that would normally reveal $second$ must not rebuild
+    // the decorations mid-composition — the mounted widget node survives.
+    view.dispatch({ selection: { anchor: doc.indexOf("$second$") + 1 } });
+    expect(view.dom.querySelector(".md-math")).toBe(widget);
+    expect(view.contentDOM.textContent).toContain("$first$");
+
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    // End of composition recomputes: $second$ is revealed, $first$ is not.
+    expect(view.dom.querySelectorAll(".md-math")).toHaveLength(1);
+    expect(view.contentDOM.textContent).toContain("$second$");
+    expect(view.contentDOM.textContent).not.toContain("$first$");
+  });
+
+  it("maps document changes through the frozen decorations", () => {
+    const doc = "$first$ and $second$ outside";
+    const view = createView(doc, 4);
+    expect(atomicRanges(view)).toContainEqual({ from: 12, to: 20 });
+
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    view.dispatch({ changes: { from: 0, insert: "x" } });
+    expect(atomicRanges(view)).toContainEqual({ from: 13, to: 21 });
+
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(atomicRanges(view)).toContainEqual({ from: 13, to: 21 });
+  });
 });
 
 // A small non-empty RangeSet fixture for testing provider composition.

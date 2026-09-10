@@ -111,6 +111,36 @@ describe("splitManualSlides", () => {
     expect(splitManualSlides(doc)).toBeNull();
   });
 
+  it("does not split on --- inside a fence opened on a list item's line", () => {
+    // `- ``` opens a code block inside the list item (CommonMark), so the
+    // --- is code even when the blank line precedes it.
+    expect(splitManualSlides("- ```\n\n  ---\n  ```\n\nA\n")).toBeNull();
+    // Ordered markers open the same block.
+    expect(splitManualSlides("1. ```\n   ---\n   ```\n\nA\n")).toBeNull();
+  });
+
+  it("protects a list-item fence and still splits at the next separator", () => {
+    const doc = "A\n\n- ```\n  ---\n  ```\n\n---\n\nB\n";
+    expect(splitManualSlides(doc)).toEqual(["A\n\n- ```\n  ---\n  ```", "B"]);
+  });
+
+  it("does not treat an indented --- as a separator", () => {
+    // Four columns of indentation make the line an indented code block.
+    expect(splitManualSlides("Paragraph\n\n    ---\n\nMore\n")).toBeNull();
+    // A tab counts as four columns.
+    expect(splitManualSlides("Paragraph\n\n\t---\n\nMore\n")).toBeNull();
+    // The code line stays content while a real separator still splits.
+    expect(splitManualSlides("Paragraph\n\n    ---\n\n---\n\nMore\n")).toEqual([
+      "Paragraph\n\n    ---",
+      "More",
+    ]);
+    // Three columns are still a thematic break.
+    expect(splitManualSlides("Paragraph\n\n   ---\n\nMore\n")).toEqual([
+      "Paragraph",
+      "More",
+    ]);
+  });
+
   it("splits only after a fence closes at its own blockquote depth", () => {
     // A shallower marker run is code inside the depth-2 fence, so the ---
     // stays protected and never splits.
@@ -186,6 +216,12 @@ describe("splitNaturalBlocks", () => {
 
   it("keeps a tilde-fenced block as one block", () => {
     expect(splitNaturalBlocks("~~~\na\n\n~~~\n")).toEqual(["~~~\na\n\n~~~"]);
+  });
+
+  it("keeps a fence opened on a list item's line as one block", () => {
+    expect(splitNaturalBlocks("- ```\n\n  code\n  ```\n")).toEqual([
+      "- ```\n\n  code\n  ```",
+    ]);
   });
 
   it("runs an unclosed fence to EOF", () => {

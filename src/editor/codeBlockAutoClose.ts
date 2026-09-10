@@ -17,6 +17,12 @@ import type { SyntaxNode, Tree } from "@lezer/common";
 //
 // Everything is gated on the syntax tree so prose paragraphs, inline code,
 // and every other construct keep their exact current behavior.
+//
+// With more than one cursor both assists stand down: the input handler is
+// handed the main selection's insertion only, so taking the input over would
+// drop the keystroke at every other cursor, and the Backspace command would
+// do the same for the deletion. Multi-cursor editing keeps the default
+// behavior, which covers all of them.
 
 const FENCE_LENGTH = 3;
 const FENCE_CHARS = new Set(["`", "~"]);
@@ -167,6 +173,11 @@ export const codeBlockAutoCloseInput = (
   // composition is active, or the composing caret breaks (WebKitGTK).
   if (view.compositionStarted || view.state.readOnly) return false;
   if (text.length !== 1) return false;
+  // The facet reports the insertion of the main selection only. With several
+  // cursors a dispatch here would consume the input and leave every other
+  // cursor without its character, so multi-cursor input always takes the
+  // default path — which inserts at all of them.
+  if (view.state.selection.ranges.length > 1) return false;
   // The DOM-reported insertion and the main selection must agree; anything
   // else is a strange input state the assists should not second-guess.
   const main = view.state.selection.main;
@@ -180,6 +191,9 @@ export const codeBlockAutoCloseInput = (
 export const codeBlockAutoCloseBackspace = (view: EditorView): boolean => {
   if (view.compositionStarted || view.state.readOnly) return false;
   const state = view.state;
+  // Same rule as the input handler: deleting the pair at the main cursor
+  // would swallow Backspace at every other cursor.
+  if (state.selection.ranges.length > 1) return false;
   const range = state.selection.main;
   if (!range.empty) return false;
   const closer = PAIRS[state.sliceDoc(range.from - 1, range.from)];

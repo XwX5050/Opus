@@ -43,6 +43,9 @@ export interface PlannedImageWidget extends ImageWidgetRange {
 
 const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 const NETWORK_URL = /^https?:\/\//i;
+// Protocol-relative URL: `//host/path`. A non-empty host is required, so
+// `///a.png` stays an absolute path rather than `//` plus a host.
+const PROTOCOL_RELATIVE_URL = /^\/\/[^/\s]/;
 const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 const ANY_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
@@ -61,9 +64,12 @@ const parentDirectoryOf = (path: string): string | null => {
  * destination must not be rendered as an image. Only `http(s):` network
  * URLs and local paths with a known image extension are allowed; every
  * other scheme (`javascript:`, `data:`, `file:`, …) is rejected, so a
- * malicious destination never reaches an `<img>` element. A throwing
- * resolver (e.g. no Tauri runtime) yields null instead of breaking the
- * editor.
+ * malicious destination never reaches an `<img>` element. A protocol-relative
+ * destination (`//host/path.png`) is a network image on the page's own
+ * scheme — the webview page runs under a custom Tauri scheme, where a bare
+ * `//host` would resolve to an unloadable URL, so it is served over
+ * `https:`. A throwing resolver (e.g. no Tauri runtime) yields null instead
+ * of breaking the editor.
  */
 export const resolveImageSrc = (
   url: string,
@@ -79,6 +85,7 @@ export const resolveImageSrc = (
   };
   if (!url || !hasImageExtension(url)) return null;
   if (NETWORK_URL.test(url)) return url;
+  if (PROTOCOL_RELATIVE_URL.test(url)) return `https:${url}`;
   if (ANY_SCHEME.test(url) && !WINDOWS_ABSOLUTE.test(url)) return null;
   if (url.startsWith("/") || WINDOWS_ABSOLUTE.test(url)) return local(url);
   const directory = documentPath === null ? null : parentDirectoryOf(documentPath);

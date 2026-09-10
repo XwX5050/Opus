@@ -51,6 +51,27 @@ describe("resolveImageSrc", () => {
     );
   });
 
+  it("serves protocol-relative destinations over https instead of resolving them locally", () => {
+    const resolveLocalUrl = vi.fn(fakeResolve);
+    expect(resolveImageSrc("//cdn.example.com/cat.png", "/notes/a.md", resolveLocalUrl)).toBe(
+      "https://cdn.example.com/cat.png",
+    );
+    expect(resolveLocalUrl).not.toHaveBeenCalled();
+  });
+
+  it("keeps protocol-relative destinations for unsaved documents", () => {
+    expect(resolveImageSrc("//cdn.example.com/cat.png", null, fakeResolve)).toBe(
+      "https://cdn.example.com/cat.png",
+    );
+  });
+
+  it("keeps a host-less triple slash an absolute path", () => {
+    // A protocol-relative URL needs a host; `///a.png` is an absolute path.
+    expect(resolveImageSrc("///img/cat.png", "/notes/a.md", fakeResolve)).toBe(
+      "asset://resolved///img/cat.png",
+    );
+  });
+
   it("rejects relative paths for unsaved documents", () => {
     expect(resolveImageSrc("pics/cat.png", null, fakeResolve)).toBeNull();
   });
@@ -75,6 +96,14 @@ describe("planImageWidgets", () => {
       { alt: "cat", src: "asset://resolved/notes/pics/cat.png" },
       { alt: "abs", src: "asset://resolved/img/dog.jpg" },
       { alt: "net", src: "https://example.com/x.gif" },
+    ]);
+  });
+
+  it("plans protocol-relative destinations as network URLs", () => {
+    const doc = "![cdn](//cdn.example.com/x.png) rest";
+    const planned = planImageWidgets(createState(doc), environment());
+    expect(planned.map(({ alt, src }) => ({ alt, src }))).toEqual([
+      { alt: "cdn", src: "https://cdn.example.com/x.png" },
     ]);
   });
 

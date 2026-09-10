@@ -1,5 +1,6 @@
+import { deleteCharBackward } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,6 +45,44 @@ const type = (view: EditorView, text: string): boolean => {
       selection: { anchor: main.from + text.length },
       userEvent: "input.type",
     });
+  }
+  return handled;
+};
+
+const createMultiCursorView = (doc: string, cursors: readonly number[]) => {
+  const parent = document.createElement("div");
+  document.body.append(parent);
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      selection: EditorSelection.create(
+        cursors.map((cursor) => EditorSelection.cursor(cursor)),
+      ),
+      extensions: [
+        EditorState.allowMultipleSelections.of(true),
+        markdown({ extensions: [GFM] }),
+        codeBlockAutoClose(),
+      ],
+    }),
+  });
+  views.push(view);
+  return view;
+};
+
+// Models the facet contract with several cursors: the handler sees the main
+// selection's insertion, and a false return lets the default path insert the
+// character at every cursor.
+const typeWithCursors = (view: EditorView, text: string): boolean => {
+  const main = view.state.selection.main;
+  const handled = codeBlockAutoCloseInput(view, main.from, main.to, text);
+  if (!handled) {
+    view.dispatch(
+      view.state.changeByRange((range) => ({
+        changes: { from: range.from, to: range.to, insert: text },
+        range: EditorSelection.cursor(range.from + text.length),
+      })),
+    );
   }
   return handled;
 };
@@ -191,5 +230,40 @@ describe("pair auto-close stays outside fenced code", () => {
     const view = createView("hello world", 0, 5);
     expect(type(view, "(")).toBe(false);
     expect(view.state.doc.toString()).toBe("( world");
+  });
+});
+
+describe("multi-cursor editing", () => {
+  it("never takes a typed opener away from the other cursors", () => {
+    const doc = "```js\nfoo\nbar\n```";
+    // Contrast: the same keystroke is assisted with a single cursor.
+    expect(type(createView(doc, 9), "(")).toBe(true);
+
+    const view = createMultiCursorView(doc, [9, 13]);
+    expect(typeWithCursors(view, "(")).toBe(false);
+    // Every cursor got its character; no pair was inserted for the main one.
+    expect(view.state.doc.toString()).toBe("```js\nfoo(\nbar(\n```");
+    expect(view.state.selection.ranges.map((range) => range.from)).toEqual([10, 15]);
+  });
+
+  it("never auto-closes a fence while several cursors are active", () => {
+    const doc = "``\n\n``\n";
+    const view = createMultiCursorView(doc, [2, 6]);
+    expect(typeWithCursors(view, "`")).toBe(false);
+    // Each cursor only gets the backtick it typed; no closing fence is
+    // appended for the main cursor alone.
+    expect(view.state.doc.toString()).toBe("```\n\n```\n");
+  });
+
+  it("never takes Backspace away from the other cursors", () => {
+    const doc = "```js\n()\n()\n```";
+    const view = createMultiCursorView(doc, [7, 10]);
+    expect(codeBlockAutoCloseBackspace(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe(doc);
+    // The default command (deleteCharBackward, as defaultKeymap binds it)
+    // deletes one character per cursor instead of the main pair only.
+    expect(deleteCharBackward(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("```js\n)\n)\n```");
+    expect(view.state.selection.ranges.map((range) => range.from)).toEqual([6, 8]);
   });
 });

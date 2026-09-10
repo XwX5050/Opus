@@ -245,12 +245,14 @@ const refreshMathWidgets = StateEffect.define<null>();
 class MathWidgetsPlugin {
   decorations: DecorationSet;
   atomicRanges: DecorationSet;
+  private composing: boolean;
   private composingRanges: MathRange[];
 
   constructor(
     view: EditorView,
     private readonly options?: MathWidgetsOptions,
   ) {
+    this.composing = view.compositionStarted;
     this.composingRanges = view.compositionStarted
       ? selectedMathRanges(view.state)
       : [];
@@ -265,11 +267,24 @@ class MathWidgetsPlugin {
   }
 
   update(update: ViewUpdate) {
-    if (update.docChanged && this.composingRanges.length) {
-      this.composingRanges = this.composingRanges.map(({ from, to }) => ({
-        from: update.changes.mapPos(from, 1),
-        to: update.changes.mapPos(to, -1),
-      }));
+    if (this.composing) {
+      // While an IME composition is active the decorations are frozen:
+      // recomputing or clearing them rebuilds content DOM and forces a
+      // selection reset, which breaks the composing caret under WebKitGTK
+      // (fcitx5 pins it after the first letter). Mapping through the
+      // document changes keeps the frozen set at the right offsets without
+      // touching the DOM; compositionend recomputes.
+      if (update.docChanged) {
+        if (this.composingRanges.length) {
+          this.composingRanges = this.composingRanges.map(({ from, to }) => ({
+            from: update.changes.mapPos(from, 1),
+            to: update.changes.mapPos(to, -1),
+          }));
+        }
+        this.decorations = this.decorations.map(update.changes);
+        this.atomicRanges = this.atomicRanges.map(update.changes);
+      }
+      return;
     }
     const syntaxChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
     const explicitlyRefreshed = update.transactions.some((transaction) =>
@@ -294,18 +309,28 @@ class MathWidgetsPlugin {
   }
 
   startComposition(view: EditorView) {
+    this.composing = true;
     if (!this.composingRanges.length) {
       this.composingRanges = selectedMathRanges(view.state);
     }
     // Deliberately no refresh dispatch here: a synchronous update during
     // compositionstart rebuilds content DOM and resets the selection,
     // which breaks the composing caret under WebKitGTK (fcitx5). The
-    // formula under the caret is already revealed by the selection; the
-    // captured ranges are picked up by the next update.
+    // formula under the caret is already revealed by the selection, so the
+    // frozen decorations are safe to compose into.
   }
 
   endComposition(view: EditorView) {
+    this.composing = false;
     this.composingRanges = [];
+    const sets = decorationSetsFor(
+      view.state,
+      planningRanges(view),
+      this.composingRanges,
+      this.options,
+    );
+    this.decorations = sets.decorations;
+    this.atomicRanges = sets.atomicRanges;
     view.dispatch({ effects: refreshMathWidgets.of(null) });
   }
 }
@@ -325,6 +350,9 @@ const mathWidgetsPlugin = (options?: MathWidgetsOptions) =>
         ),
       eventHandlers: {
         compositionstart(_event, view) {
+          this.startComposition(view);
+        },
+        compositionupdate(_event, view) {
           this.startComposition(view);
         },
         compositionend(_event, view) {
