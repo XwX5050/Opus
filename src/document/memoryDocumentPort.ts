@@ -17,7 +17,10 @@ import type {
   RecoveryDraftInfo,
   SaveTarget,
 } from "./types";
-import type { TranslationSettings } from "../translate/types";
+import type {
+  TranslationKeyProtection,
+  TranslationSettings,
+} from "../translate/types";
 
 export interface MemoryDocumentPortOptions {
   readonly savePath?: string | null;
@@ -30,6 +33,14 @@ export interface MemoryDocumentPortOptions {
   readonly drafts?: ReadonlyArray<RecoveryDraft>;
   /** Pre-seeded session, as if persisted by a previous run. */
   readonly session?: PersistedSession | null;
+  /** Pre-seeded API keys by slot, as if stored in the OS credential store by
+   * an earlier run. The production port migrates a pre-slot session's
+   * plaintext keys into that store, so fixtures that need a configured
+   * provider seed a slot here instead of a session field. */
+  readonly translationKeys?: Readonly<Record<string, string>>;
+  /** Protection level `translationKeyProtection` reports; "system" unless a
+   * test or fixture wants to exercise the weak-file warning. */
+  readonly translationKeyProtection?: TranslationKeyProtection;
 }
 
 export type MemoryScopeCall =
@@ -112,7 +123,9 @@ export class MemoryDocumentPort implements DocumentPort {
   #translationCallCount = 0;
   #translationRequestedSegments = 0;
   /** Recorded listTranslationModels calls, in order. */
-  readonly #translationModelCalls: { endpoint: string; apiKey: string }[] = [];
+  readonly #translationModelCalls: { endpoint: string; keySlot: string }[] = [];
+  /** The in-memory stand-in for the OS credential store, keyed by slot. */
+  readonly #translationKeys = new Map<string, string>();
 
   /** When set, trashEntry rejects with this error instead of deleting. */
   trashFailure: DocumentPortError | null = null;
@@ -156,6 +169,9 @@ export class MemoryDocumentPort implements DocumentPort {
       });
     }
     this.#session = options.session ? cloneSession(options.session) : null;
+    for (const [slot, key] of Object.entries(options.translationKeys ?? {})) {
+      this.#translationKeys.set(slot, key);
+    }
   }
 
   #key(path: string): string {
@@ -195,9 +211,14 @@ export class MemoryDocumentPort implements DocumentPort {
     return this.#translationRequestedSegments;
   }
 
-  /** Recorded listTranslationModels calls (endpoint, api key), in order. */
-  get translationModelCalls(): ReadonlyArray<{ endpoint: string; apiKey: string }> {
+  /** Recorded listTranslationModels calls (endpoint, key slot), in order. */
+  get translationModelCalls(): ReadonlyArray<{ endpoint: string; keySlot: string }> {
     return this.#translationModelCalls.map((call) => ({ ...call }));
+  }
+
+  /** Test hook: the keys currently held by the in-memory credential store. */
+  get translationKeys(): Readonly<Record<string, string>> {
+    return Object.fromEntries(this.#translationKeys);
   }
 
   async chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>> {
@@ -293,10 +314,29 @@ export class MemoryDocumentPort implements DocumentPort {
 
   async listTranslationModels(
     endpoint: string,
-    apiKey: string,
+    keySlot: string,
   ): Promise<string[]> {
-    this.#translationModelCalls.push({ endpoint, apiKey });
+    this.#translationModelCalls.push({ endpoint, keySlot });
     return [...MEMORY_TRANSLATION_MODELS];
+  }
+
+  async storeTranslationKey(slot: string, key: string): Promise<void> {
+    this.#translationKeys.set(slot, key);
+  }
+
+  async deleteTranslationKey(slot: string): Promise<void> {
+    this.#translationKeys.delete(slot);
+  }
+
+  async hasTranslationKey(slot: string): Promise<boolean> {
+    const key = this.#translationKeys.get(slot);
+    return key !== undefined && key.length > 0;
+  }
+
+  async translationKeyProtection(): Promise<TranslationKeyProtection> {
+    // The in-memory store never touches the disk, so it always reports the
+    // strongest level; fixtures opt into "file" to exercise the warning.
+    return this.#options.translationKeyProtection ?? "system";
   }
 
   async acquireDocumentScope(consumerId: string, path: string): Promise<void> {

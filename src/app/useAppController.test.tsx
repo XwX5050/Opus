@@ -9,6 +9,7 @@ import {
 import type { DiskEvent, OpenedFile, PendingWriteRequest, PersistedSession, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import type { TranslationSettings } from "../translate/types";
 import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
+import { TRANSLATION_PRESETS } from "../translate/presets";
 import { translateDocument } from "../translate/translate";
 import { useAppController } from "./useAppController";
 
@@ -81,6 +82,13 @@ class InspectableControllerPort implements DocumentPort {
   async saveSession() {}
   async flushSession() {}
   async onCloseRequested() { return () => {}; }
+  // Stub credential store: translation tests need a key to exist, and none
+  // of them cares which slot or its value (the real lookup is exercised in
+  // the port and dialog tests).
+  async storeTranslationKey() {}
+  async deleteTranslationKey() {}
+  async hasTranslationKey() { return true; }
+  async translationKeyProtection() { return "system" as const; }
 }
 
 type ScopeCall =
@@ -138,7 +146,17 @@ class ScopeAwareControllerPort implements DocumentPort {
   async saveSession() {}
   async flushSession() {}
   async onCloseRequested() { return () => {}; }
+  async storeTranslationKey() {}
+  async deleteTranslationKey() {}
+  async hasTranslationKey() { return true; }
+  async translationKeyProtection() { return "system" as const; }
 }
+
+/**
+ * Credential-store fixture for the memory port: a key under the slot the
+ * default translation settings address ("custom" — no preset matches them).
+ */
+const keyedOptions = { translationKeys: { custom: "test-key" } } as const;
 
 const scopedFile = (path: string): OpenedFile => ({
   path,
@@ -275,6 +293,10 @@ describe("useAppController", () => {
       async saveSession() {},
       async flushSession() {},
       async onCloseRequested() { return () => {}; },
+      async storeTranslationKey() {},
+      async deleteTranslationKey() {},
+      async hasTranslationKey() { return false; },
+      async translationKeyProtection() { return "system" as const; },
     };
     const hook = renderHook(() => useAppController(port));
     const openingAction = hook.result.current.openFiles();
@@ -1901,11 +1923,6 @@ describe("useAppController translations", () => {
     version: `version:${path}`,
   });
 
-  const keyedSettings = (): TranslationSettings => ({
-    ...DEFAULT_TRANSLATION_SETTINGS,
-    apiKey: "test-key",
-  });
-
   /** Counts every translateSegments call, unlike the caching MemoryDocumentPort. */
   class CountingTranslatePort extends InspectableControllerPort {
     calls = 0;
@@ -1926,14 +1943,12 @@ describe("useAppController translations", () => {
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openFiles());
     const id = hook.result.current.state.activeId!;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
 
-    act(() => hook.result.current.toggleTranslation(id));
-    expect(hook.result.current.translationOf(id)).toEqual({
-      state: { phase: "translating" },
-      visible: true,
-    });
-
+    // The run starts only after the credential-store lookup answers; the
+    // in-memory port then translates within the same tick, so the transient
+    // translating phase is not asserted here (only that the run happened).
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() => expect(port.calls).toBe(1));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -1942,10 +1957,10 @@ describe("useAppController translations", () => {
       visible: true,
     });
 
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)).toMatchObject({ visible: false });
 
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)).toEqual({
       state: { phase: "ready", translatedText: "ｂａｓｅ" },
       visible: true,
@@ -1980,8 +1995,7 @@ describe("useAppController translations", () => {
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openFiles());
     const id = hook.result.current.state.activeId!;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)?.state).toEqual({
       phase: "translating",
     });
@@ -2044,13 +2058,12 @@ describe("useAppController translations", () => {
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openFiles());
     const id = hook.result.current.state.activeId!;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
 
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)?.state.phase).toBe("translating");
     expect(port.pending).toHaveLength(1);
 
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)).toBeUndefined();
 
     // The late resolution must not resurrect the entry.
@@ -2064,18 +2077,18 @@ describe("useAppController translations", () => {
   it("drops the entry when the hidden translation's text is edited", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
 
     // A hidden translation is invalidated by a live edit.
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     act(() => hook.result.current.changeText(id, "edited"));
     expect(hook.result.current.translationOf(id)).toBeUndefined();
     expect(hook.result.current.state.tabs[0].text).toBe("edited");
@@ -2085,12 +2098,12 @@ describe("useAppController translations", () => {
   it("drops the entry when a disk reload replaces the text", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2127,12 +2140,12 @@ describe("useAppController translations", () => {
     }
     const port = new DeferredTranslateMemoryPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)?.state.phase).toBe("translating");
 
     act(() => port.updateFile("/notes/a.md", "disk edit", "v2", 9));
@@ -2155,12 +2168,12 @@ describe("useAppController translations", () => {
   it("prunes a closed tab's translation state", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2174,13 +2187,13 @@ describe("useAppController translations", () => {
   it("makes save and changeText no-ops while a translation is visible", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
     act(() => hook.result.current.changeText(id, "edited"));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2194,7 +2207,7 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
-  it("restores and persists translation settings with the session", async () => {
+  it("restores and persists translation settings with the session (never a key)", async () => {
     const port = new MemoryDocumentPort(new Map(), {
       session: {
         recent: [],
@@ -2203,11 +2216,9 @@ describe("useAppController translations", () => {
         workspacePath: null,
         translationSettings: {
           endpoint: "https://example.com/v1",
-          apiKey: "secret-key",
           model: "gpt-4o",
           targetLanguage: "日本語",
           concurrency: 10,
-          presetApiKeys: {},
         },
       },
     });
@@ -2216,8 +2227,6 @@ describe("useAppController translations", () => {
     await waitFor(() =>
       expect(hook.result.current.translationSettings).toEqual({
         endpoint: "https://example.com/v1",
-        apiKey: "secret-key",
-        presetApiKeys: {},
         model: "gpt-4o",
         targetLanguage: "日本語",
         concurrency: 10,
@@ -2227,18 +2236,14 @@ describe("useAppController translations", () => {
     act(() => {
       hook.result.current.setTranslationSettings({
         endpoint: "https://other.example.com/v1",
-        apiKey: "other-key",
         model: "llama",
         targetLanguage: "English",
         concurrency: 10,
-        presetApiKeys: {},
       });
     });
     await waitFor(() =>
       expect(port.session?.translationSettings).toEqual({
         endpoint: "https://other.example.com/v1",
-        apiKey: "other-key",
-        presetApiKeys: {},
         model: "llama",
         targetLanguage: "English",
         concurrency: 10,
@@ -2262,8 +2267,6 @@ describe("useAppController translations", () => {
     await waitFor(() =>
       expect(hook.result.current.translationSettings).toEqual({
         endpoint: "https://api.openai.com/v1",
-        apiKey: "",
-        presetApiKeys: {},
         model: "gpt-4o-mini",
         targetLanguage: "中文",
         concurrency: 10,
@@ -2272,7 +2275,7 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
-  it("surfaces a settings hint instead of translating without an API key", async () => {
+  it("surfaces a settings hint instead of translating without a stored key", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
     );
@@ -2280,7 +2283,7 @@ describe("useAppController translations", () => {
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
 
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
 
     expect(hook.result.current.error).toContain("翻译 API");
     expect(hook.result.current.translationOf(id)).toBeUndefined();
@@ -2288,19 +2291,99 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
-  it("passes a live viewport-range provider that reflects setTranslationViewportProvider updates", async () => {
+  it("requires the key of the slot the settings address, not just any key", async () => {
     const port = new MemoryDocumentPort(
-      new Map([["/notes/a.md", translateFile("/notes/a.md", "hello world")]]),
+      new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+      // A key exists, but for another provider: the default settings address
+      // the "custom" slot, so translation must not start.
+      { translationKeys: { glm: "sk-glm" } },
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
+
+    await act(async () => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.error).toContain("翻译 API");
+    expect(port.translationCallCount).toBe(0);
+
+    // Switching to the provider whose slot holds the key clears the way.
+    const glm = TRANSLATION_PRESETS[0];
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...DEFAULT_TRANSLATION_SETTINGS,
+        endpoint: glm.endpoint,
+        model: glm.model,
+      }),
+    );
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    hook.unmount();
+  });
+
+  it("sees a key stored after mount, without a settings change", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+
+    // The settings dialog writes the key through the port while the
+    // controller is mounted; the next toggle must use it.
+    await act(() => port.storeTranslationKey("custom", "sk-late"));
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(hook.result.current.error).toBeNull();
+    hook.unmount();
+  });
+
+  it("treats a failed credential lookup as no key rather than starting a run", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md")]]),
+    );
+    port.hasTranslationKey = () => Promise.reject(new Error("keychain locked"));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+
+    await act(async () => hook.result.current.toggleTranslation(id));
+    expect(hook.result.current.error).toContain("翻译 API");
+    expect(port.translationCallCount).toBe(0);
+    hook.unmount();
+  });
+
+  /** A memory port whose translation calls stay pending until resolved. */
+  class PausedTranslateMemoryPort extends MemoryDocumentPort {
+    readonly pending: { segments: string[]; resolve: (value: string[]) => void }[] =
+      [];
+    override translateSegments(
+      _settings: TranslationSettings,
+      segments: string[],
+    ): Promise<string[]> {
+      return new Promise((resolve) => {
+        this.pending.push({ segments, resolve });
+      });
+    }
+  }
+
+  it("passes a live viewport-range provider that reflects setTranslationViewportProvider updates", async () => {
+    const port = new PausedTranslateMemoryPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "hello world")]]),
+      keyedOptions,
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
 
     act(() =>
       hook.result.current.setTranslationViewportProvider(() => ({ from: 5, to: 42 })),
     );
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() => expect(port.pending).toHaveLength(1));
 
     const priority = vi.mocked(translateDocument).mock.calls.at(-1)![3]!.priority;
     if (!priority) throw new Error("translateDocument must receive a priority");
@@ -2313,6 +2396,9 @@ describe("useAppController translations", () => {
     );
     expect(priority.visibleRange()).toEqual({ from: 10, to: 60 });
 
+    await act(async () => {
+      port.pending[0].resolve(port.pending[0].segments.map(pseudoTranslate));
+    });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2322,13 +2408,13 @@ describe("useAppController translations", () => {
   });
 
   it("clears the translation viewport provider when a run ends (dropped, errored, completed)", async () => {
-    const port = new MemoryDocumentPort(
+    const port = new PausedTranslateMemoryPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md", "hello world")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() => hook.result.current.setTranslationSettings(keyedSettings()));
     const priorityOfLatest = () => {
       const priority = vi.mocked(translateDocument).mock.calls.at(-1)![3]!.priority;
       if (!priority) throw new Error("translateDocument must receive a priority");
@@ -2339,10 +2425,11 @@ describe("useAppController translations", () => {
     act(() =>
       hook.result.current.setTranslationViewportProvider(() => ({ from: 1, to: 7 })),
     );
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() => expect(port.pending).toHaveLength(1));
     const droppedRun = priorityOfLatest();
     expect(droppedRun.visibleRange()).toEqual({ from: 1, to: 7 });
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(droppedRun.visibleRange()).toBeNull();
 
     // Errored clears the provider.
@@ -2350,7 +2437,7 @@ describe("useAppController translations", () => {
     act(() =>
       hook.result.current.setTranslationViewportProvider(() => ({ from: 2, to: 9 })),
     );
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     const erroredRun = priorityOfLatest();
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("error"),
@@ -2361,8 +2448,12 @@ describe("useAppController translations", () => {
     act(() =>
       hook.result.current.setTranslationViewportProvider(() => ({ from: 3, to: 10 })),
     );
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     const completedRun = priorityOfLatest();
+    await waitFor(() => expect(port.pending).toHaveLength(2));
+    await act(async () => {
+      port.pending[1].resolve(port.pending[1].segments.map(pseudoTranslate));
+    });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2502,19 +2593,14 @@ describe("useAppController translation failure and close flows", () => {
   it("accepts edits and saves again after a translation error, and retries from the toggle", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", flowFile("/notes/a.md")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() =>
-      hook.result.current.setTranslationSettings({
-        ...DEFAULT_TRANSLATION_SETTINGS,
-        apiKey: "test-key",
-      }),
-    );
 
     vi.mocked(translateDocument).mockRejectedValueOnce(new Error("Simulated HTTP 401"));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("error"),
     );
@@ -2533,7 +2619,7 @@ describe("useAppController translation failure and close flows", () => {
     expect(hook.result.current.state.tabs[0].status).toBe("clean");
 
     // The existing translate toggle restarts the failed run.
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2543,18 +2629,13 @@ describe("useAppController translation failure and close flows", () => {
   it("permits save-and-close of the original dirty text while a ready translation is visible", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", flowFile("/notes/a.md")]]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() =>
-      hook.result.current.setTranslationSettings({
-        ...DEFAULT_TRANSLATION_SETTINGS,
-        apiKey: "test-key",
-      }),
-    );
     act(() => hook.result.current.changeText(id, "New original English text"));
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2588,26 +2669,21 @@ describe("useAppController translation settings binding", () => {
           },
         ],
       ]),
+      keyedOptions,
     );
     const translate = vi.spyOn(port, "translateSegments");
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() =>
-      hook.result.current.setTranslationSettings({
-        ...DEFAULT_TRANSLATION_SETTINGS,
-        apiKey: "test-key",
-      }),
-    );
 
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
     expect(translate.mock.calls.at(-1)?.[0].targetLanguage).toBe("中文");
 
     // Hiding keeps the entry; changing the target language invalidates it.
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     expect(hook.result.current.translationOf(id)).toMatchObject({ visible: false });
     act(() =>
       hook.result.current.setTranslationSettings({
@@ -2619,7 +2695,7 @@ describe("useAppController translation settings binding", () => {
 
     // Showing again starts a fresh run under the new settings instead of
     // reusing the stale in-memory result.
-    act(() => hook.result.current.toggleTranslation(id));
+    await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
@@ -2653,19 +2729,18 @@ describe("useAppController translation settings binding", () => {
           },
         ],
       ]),
+      keyedOptions,
     );
     const hook = renderHook(() => useAppController(port));
     await act(() => hook.result.current.openPath("/notes/a.md"));
     const id = hook.result.current.state.tabs[0].id;
-    act(() =>
-      hook.result.current.setTranslationSettings({
-        ...DEFAULT_TRANSLATION_SETTINGS,
-        apiKey: "test-key",
-      }),
-    );
 
-    act(() => hook.result.current.toggleTranslation(id));
-    expect(hook.result.current.translationOf(id)?.state.phase).toBe("translating");
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe(
+        "translating",
+      ),
+    );
     act(() =>
       hook.result.current.setTranslationSettings({
         ...hook.result.current.translationSettings,

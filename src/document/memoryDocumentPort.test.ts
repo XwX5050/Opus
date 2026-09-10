@@ -171,11 +171,9 @@ describe("MemoryDocumentPort session and close requests", () => {
     const port = new MemoryDocumentPort(new Map());
     const settings = {
       endpoint: "https://api.openai.com/v1",
-      apiKey: "secret",
       model: "gpt-4o-mini",
       targetLanguage: "中文",
       concurrency: 10,
-      presetApiKeys: {},
     };
     const session = {
       recent: [],
@@ -229,11 +227,9 @@ describe("MemoryDocumentPort session and close requests", () => {
 describe("MemoryDocumentPort translation", () => {
   const settings = {
     endpoint: "https://api.openai.com/v1",
-    apiKey: "secret",
     model: "gpt-4o-mini",
     targetLanguage: "中文",
     concurrency: 10,
-    presetApiKeys: {},
   };
 
   it("fake-translates every requested segment in order", async () => {
@@ -282,26 +278,72 @@ describe("MemoryDocumentPort translation", () => {
     expect(port.translationCallCount).toBe(1);
   });
 
-  it("records listTranslationModels calls and serves the fixed model list", async () => {
+  it("records listTranslationModels calls by key slot and serves the fixed model list", async () => {
     const port = new MemoryDocumentPort(new Map());
     const models = await port.listTranslationModels(
       "https://api.openai.com/v1",
-      "secret-key",
+      "custom",
     );
     // Deliberately unsorted so dialogs that sort by display are exercised.
     expect(models).toEqual(["gpt-4o-mini", "gpt-4o"]);
     expect(port.translationModelCalls).toEqual([
-      { endpoint: "https://api.openai.com/v1", apiKey: "secret-key" },
+      { endpoint: "https://api.openai.com/v1", keySlot: "custom" },
     ]);
   });
 
   it("returns a clone of the model list so callers cannot mutate it", async () => {
     const port = new MemoryDocumentPort(new Map());
-    const first = await port.listTranslationModels("https://api.openai.com/v1", "k");
+    const first = await port.listTranslationModels("https://api.openai.com/v1", "custom");
     first[0] = "mutated";
-    const second = await port.listTranslationModels("https://api.openai.com/v1", "k");
+    const second = await port.listTranslationModels("https://api.openai.com/v1", "custom");
     expect(second).toEqual(["gpt-4o-mini", "gpt-4o"]);
     expect(port.translationModelCalls).toHaveLength(2);
+  });
+
+  it("stores, reports and deletes keys per slot", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    expect(await port.hasTranslationKey("custom")).toBe(false);
+
+    await port.storeTranslationKey("custom", "sk-a");
+    await port.storeTranslationKey("glm", "sk-b");
+    expect(await port.hasTranslationKey("custom")).toBe(true);
+    expect(await port.hasTranslationKey("glm")).toBe(true);
+    expect(await port.hasTranslationKey("deepseek")).toBe(false);
+    expect(port.translationKeys).toEqual({ custom: "sk-a", glm: "sk-b" });
+
+    await port.storeTranslationKey("custom", "sk-a2");
+    expect(port.translationKeys.custom).toBe("sk-a2");
+
+    await port.deleteTranslationKey("custom");
+    expect(await port.hasTranslationKey("custom")).toBe(false);
+    // Deleting a slot that holds nothing is a no-op, not an error.
+    await port.deleteTranslationKey("custom");
+    expect(port.translationKeys).toEqual({ glm: "sk-b" });
+  });
+
+  it("treats an emptied key as absent", async () => {
+    const port = new MemoryDocumentPort(new Map());
+    await port.storeTranslationKey("custom", "");
+    expect(await port.hasTranslationKey("custom")).toBe(false);
+  });
+
+  it("pre-seeds slots from the fixture option", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      translationKeys: { glm: "sk-glm" },
+    });
+    expect(await port.hasTranslationKey("glm")).toBe(true);
+    expect(await port.hasTranslationKey("custom")).toBe(false);
+  });
+
+  it("reports system protection unless a fixture asks for the file fallback", async () => {
+    expect(
+      await new MemoryDocumentPort(new Map()).translationKeyProtection(),
+    ).toBe("system");
+    expect(
+      await new MemoryDocumentPort(new Map(), {
+        translationKeyProtection: "file",
+      }).translationKeyProtection(),
+    ).toBe("file");
   });
 });
 

@@ -30,7 +30,7 @@ const seed = async (page: Page, fixture: E2eFixtureSpec) => {
   await page.goto("/");
 };
 
-/** Session with the translation settings preconfigured (apiKey present). */
+/** Session with the translation provider preconfigured (no key in it). */
 const sessionWithTranslation = (
   ...paths: string[]
 ): E2eFixtureSpec["session"] => ({
@@ -40,11 +40,25 @@ const sessionWithTranslation = (
   workspacePath: null,
   translationSettings: {
     endpoint: "https://api.openai.com/v1",
-    apiKey: "test-key",
     model: "gpt-4o-mini",
     targetLanguage: "中文",
+    concurrency: 10,
   },
 });
+
+/**
+ * Stores the provider key the way the settings dialog does: through the port,
+ * under the slot the configured endpoint+model address ("custom" here — the
+ * fixture's provider matches no preset). The key lives in the credential
+ * store only; a session can no longer carry one.
+ */
+const seedTranslationKey = async (page: Page, slot = "custom") => {
+  await page.waitForFunction(() => window.__E2E_PORT__ !== undefined);
+  await page.evaluate(
+    ([keySlot]) => window.__E2E_PORT__?.storeTranslationKey(keySlot, "test-key"),
+    [slot],
+  );
+};
 
 const editorHost = (page: Page) => page.locator(".markdown-editor");
 const editorContent = (page: Page) => page.locator(".cm-content");
@@ -75,6 +89,7 @@ test("translates a document, forces reading mode, and toggles back without new A
     files: [{ path: "/docs/translate.md", text: documentSource }],
     session: sessionWithTranslation("/docs/translate.md"),
   });
+  await seedTranslationKey(page);
 
   const content = editorContent(page);
   await content.waitFor();
@@ -127,4 +142,12 @@ test("translates a document, forces reading mode, and toggles back without new A
   await expect(content).toContainText("Ｈｅｌｌｏ Ｏｐｕｓ, 第一段文字。");
   expect(await translationCallCount(page)).toBe(1);
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+  // The key never entered the session: the frontend addresses it by slot and
+  // the secret stays in the credential store.
+  const persisted = await page.evaluate(() =>
+    JSON.stringify(window.__E2E_PORT__?.session ?? null),
+  );
+  expect(persisted).not.toContain("test-key");
+  expect(persisted).not.toContain("apiKey");
 });

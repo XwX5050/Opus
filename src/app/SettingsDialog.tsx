@@ -18,7 +18,8 @@ import {
 import { type DocumentPort } from "../document/DocumentPort";
 import {
   DEFAULT_TRANSLATION_SETTINGS,
-  stashApiKey,
+  translationKeySlot,
+  type TranslationKeyProtection,
   type TranslationSettings,
 } from "../translate/types";
 import { matchPreset, TRANSLATION_PRESETS } from "../translate/presets";
@@ -456,6 +457,26 @@ export default function SettingsDialog({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [connectionHint, setConnectionHint] = useState<string | null>(null);
   const [connectionTesting, setConnectionTesting] = useState(false);
+  // Whether the credential store holds a key for the slot the current
+  // endpoint+model address. The key itself is never readable from here: the
+  // field is write-only and this flag is all the dialog gets back.
+  const [keyPresent, setKeyPresent] = useState(false);
+  const [keyHint, setKeyHint] = useState<string | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+  // Protection level of the credential store; null while unknown (no
+  // warning is shown before the backend has answered).
+  const [keyProtection, setKeyProtection] =
+    useState<TranslationKeyProtection | null>(null);
+
+  // Preset the current endpoint+model correspond to; undefined means custom.
+  const matchedPreset = matchPreset(translationSettings);
+
+  // The slot the active provider addresses its API key by: the matched
+  // preset's id, or "custom" while the endpoint+model identify no preset.
+  // Computed from the settings on every render, so it can never go stale:
+  // switching preset (or editing endpoint/model) immediately addresses the
+  // other slot, whose own key in the credential store is what counts.
+  const currentKeySlot = translationKeySlot(translationSettings);
 
   useEffect(() => {
     firstControlRef.current?.focus();
@@ -477,6 +498,42 @@ export default function SettingsDialog({
       cancelled = true;
     };
   }, []);
+
+  // Re-check the key of whichever slot is now addressed. A failed lookup
+  // counts as "no key": the dialog never claims a key it could not confirm.
+  useEffect(() => {
+    if (!port) return;
+    let cancelled = false;
+    setKeyHint(null);
+    void port
+      .hasTranslationKey(currentKeySlot)
+      .then((present) => {
+        if (!cancelled) setKeyPresent(present);
+      })
+      .catch(() => {
+        if (!cancelled) setKeyPresent(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [port, currentKeySlot]);
+
+  // Protection level of the credential store, for the weak-protection note.
+  useEffect(() => {
+    if (!port) return;
+    let cancelled = false;
+    void port
+      .translationKeyProtection()
+      .then((protection) => {
+        if (!cancelled) setKeyProtection(protection);
+      })
+      .catch(() => {
+        // Unknown protection: the note stays hidden rather than guessing.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [port]);
 
   // Rows stagger in when the dialog opens (the overlay's own dialog intro is
   // handled by AppShell). Skipped under prefers-reduced-motion.
@@ -549,7 +606,7 @@ export default function SettingsDialog({
     try {
       const models = await port.listTranslationModels(
         translationSettings.endpoint,
-        translationSettings.apiKey,
+        currentKeySlot,
       );
       // Sorted like the installed-font list, so the picker order is stable
       // regardless of what the endpoint returns.
@@ -569,7 +626,7 @@ export default function SettingsDialog({
     try {
       const models = await port.listTranslationModels(
         translationSettings.endpoint,
-        translationSettings.apiKey,
+        currentKeySlot,
       );
       setConnectionHint(CONNECTION_HINTS.success(models.length));
     } catch (error) {
@@ -579,16 +636,46 @@ export default function SettingsDialog({
     }
   };
 
+  /**
+   * Hands a newly typed key to the credential store of the current slot. The
+   * field never echoes a stored key back, so an empty commit is a no-op —
+   * removing a key is what the 清除 button is for.
+   */
+  const saveTranslationKey = async (value: string) => {
+    if (!port) {
+      setKeyHint("当前环境不支持保存 API Key");
+      return;
+    }
+    if (keyBusy) return;
+    const key = value.trim();
+    if (key.length === 0) return;
+    setKeyBusy(true);
+    try {
+      await port.storeTranslationKey(currentKeySlot, key);
+      setKeyPresent(true);
+      setKeyHint("已保存");
+    } catch (error) {
+      setKeyHint(`保存失败：${translationFailureReason(error)}`);
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  const clearTranslationKey = async () => {
+    if (!port || keyBusy) return;
+    setKeyBusy(true);
+    try {
+      await port.deleteTranslationKey(currentKeySlot);
+      setKeyPresent(false);
+      setKeyHint("已清除");
+    } catch (error) {
+      setKeyHint(`清除失败：${translationFailureReason(error)}`);
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
   const limits = EDITOR_PREFERENCE_LIMITS;
-
-  // Preset the current endpoint+model correspond to; undefined means custom.
-  const matchedPreset = matchPreset(translationSettings);
-
-  // The key slot the active apiKey belongs to: the matched preset's id, or
-  // "custom" while the endpoint+model identify no preset. Switching slots
-  // stashes the key in use under the slot being left and restores the target
-  // slot's own key, so every provider remembers its own API key.
-  const currentKeySlot = matchedPreset?.id ?? CUSTOM_PRESET_VALUE;
 
   // Model names selectable in the model field: the fetched list plus, first,
   // the stored model when it is missing from it. The select is controlled by
@@ -747,39 +834,22 @@ export default function SettingsDialog({
               onChange={(event) => {
                 const id = event.target.value;
                 if (id === CUSTOM_PRESET_VALUE) {
-                  // Leaving a preset for 自定义: remember the key in use
-                  // under the preset slot being left, then restore the key
-                  // last stashed for the custom slot. Endpoint and model stay
-                  // as they are — editing them detaches from the preset.
-                  const stashed = stashApiKey(
-                    translationSettings,
-                    currentKeySlot,
-                    translationSettings.apiKey,
-                  );
-                  updateTranslation({
-                    apiKey: stashed.presetApiKeys[CUSTOM_PRESET_VALUE] ?? "",
-                    presetApiKeys: stashed.presetApiKeys,
-                  });
+                  // 自定义 is only the label for "matches no preset": the
+                  // endpoint and model stay as they are, so nothing to change.
                   return;
                 }
                 const preset = TRANSLATION_PRESETS.find(
                   (candidate) => candidate.id === id,
                 );
                 if (preset === undefined) return;
-                // Leaving the current slot: stash its key before the preset
-                // fills endpoint, model and concurrency and loads the key it
-                // remembered last time (empty the first time).
-                const stashed = stashApiKey(
-                  translationSettings,
-                  currentKeySlot,
-                  translationSettings.apiKey,
-                );
+                // Keys never move: each slot keeps its own key in the OS
+                // credential store, so switching provider only swaps the
+                // endpoint, model and concurrency and the key field simply
+                // reports whether the new slot already has one.
                 updateTranslation({
                   endpoint: preset.endpoint,
                   model: preset.model,
                   concurrency: preset.concurrency,
-                  apiKey: stashed.presetApiKeys[preset.id] ?? "",
-                  presetApiKeys: stashed.presetApiKeys,
                 });
               }}
             >
@@ -814,18 +884,41 @@ export default function SettingsDialog({
 
           <div className="settings-row" data-settings-row>
             <label htmlFor="settings-translation-api-key">API Key</label>
-            <TextField
-              id="settings-translation-api-key"
-              type="password"
-              placeholder="sk-..."
-              value={translationSettings.apiKey}
-              onCommit={(value) =>
-                updateTranslation(
-                  stashApiKey(translationSettings, currentKeySlot, value),
-                )
-              }
-            />
+            <div className="settings-update-controls">
+              {/* Write-only: a stored key is acknowledged by the placeholder,
+                  never read back into the field. */}
+              <TextField
+                id="settings-translation-api-key"
+                type="password"
+                placeholder={keyPresent ? "已保存" : "sk-..."}
+                value=""
+                onCommit={(value) => void saveTranslationKey(value)}
+              />
+              <button
+                type="button"
+                disabled={port === undefined || !keyPresent || keyBusy}
+                onClick={() => void clearTranslationKey()}
+              >
+                清除
+              </button>
+              {keyHint !== null && (
+                <span role="status" className="settings-update-hint">
+                  {keyHint}
+                </span>
+              )}
+            </div>
           </div>
+
+          {keyProtection === "file" && (
+            <div className="settings-row" data-settings-row>
+              <span className="settings-row-label" />
+              <div className="settings-update-controls">
+                <span className="settings-update-hint">
+                  系统凭据存储不可用：API Key 以文件形式保存在本机，保护较弱。
+                </span>
+              </div>
+            </div>
+          )}
 
           <div className="settings-row" data-settings-row>
             <label htmlFor="settings-translation-model">模型</label>
