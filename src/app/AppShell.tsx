@@ -2145,8 +2145,18 @@ export default function AppShell({
             >
               ×
             </button>
+          ) : controller.error ? (
+            // The controller's own message is dismissible too; a rename error
+            // and a host-supplied external error each own their own state.
+            <button
+              type="button"
+              aria-label="关闭错误提示"
+              onClick={controller.dismissError}
+            >
+              ×
+            </button>
           ) : (
-            !controller.error && externalError && onDismissExternalError && (
+            externalError && onDismissExternalError && (
               <button type="button" aria-label="关闭错误提示" onClick={onDismissExternalError}>×</button>
             )
           )}

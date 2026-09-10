@@ -437,7 +437,12 @@ describe("documentReducer", () => {
       pathPlatform: "macos",
     });
 
-    expect(blocked.tabs[0]).toMatchObject({ status: "conflict" });
+    // Nothing on disk changed, so the blocked request must not be turned into
+    // a conflict (that status raises the disk-conflict dialog): the document
+    // keeps its text and status and no save sequence is consumed. The caller
+    // reports the collision as a plain error instead.
+    expect(blocked).toBe(state);
+    expect(blocked.tabs[0]).toMatchObject({ text: "changed", status: "dirty" });
     expect(blocked.tabs[0].pendingSave).toBeUndefined();
     expect(blocked.nextSaveSequence).toBe(0);
   });
@@ -461,7 +466,10 @@ describe("documentReducer", () => {
       target: { path: "/notes/b.md", expectedVersion: "v1" },
     });
 
-    expect(blocked.tabs[0].status).toBe("conflict");
+    // The in-flight request survives untouched and the tab stays as it was:
+    // a target collision resolved synchronously leaves no state behind.
+    expect(blocked).toBe(targetOpened);
+    expect(blocked.tabs[0].status).toBe("dirty");
     expect(blocked.tabs[0].pendingSave).toBe(request);
     expect(blocked.nextSaveSequence).toBe(1);
   });
@@ -1039,8 +1047,11 @@ describe("normalizePathKey", () => {
       target: { path: "C:\\docs\\target.md", expectedVersion: null },
     });
 
-    expect(state.tabs.find((tab) => tab.id === "source")?.pendingSave).toBeUndefined();
-    expect(state.tabs.find((tab) => tab.id === "source")?.status).toBe("conflict");
+    const source = state.tabs.find((tab) => tab.id === "source");
+    expect(source?.pendingSave).toBeUndefined();
+    // The alias target still blocks the write, but nothing on disk changed:
+    // the source document keeps its text and stays out of the conflict state.
+    expect(source).toMatchObject({ text: "content", status: "dirty" });
   });
 });
 
@@ -1584,6 +1595,37 @@ describe("documentReducer disk events", () => {
     });
     expect(state.tabs[0].pendingSave).toBeUndefined();
     expect(state.activeId).toBe("doc-1");
+  });
+
+  it("leaves a refused draft's text out of every tab when its id names no tab", () => {
+    // A crashed session's draft id (draft-document-9) never matches the fresh
+    // session's regenerated tab ids, and when the target tab is dirty the
+    // merge is refused. No tab then holds the draft text — the signal the
+    // controller uses to keep the draft and its dialog entry instead of
+    // deleting the only copy of the recovered work.
+    const state = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "newer local edits" },
+      {
+        type: "documentRestored",
+        id: "doc-2",
+        draft: {
+          draftId: "draft-document-9",
+          originalPath: "/users/alice/notes/README.md",
+          title: "readme.md",
+          text: "unsaved crash work",
+          hasUtf8Bom: false,
+          newline: "lf",
+          savedTextHash: "hash",
+          savedVersion: "v1",
+        },
+      },
+    ]);
+
+    expect(state.tabs.map((tab) => tab.text)).toEqual(["newer local edits"]);
+    expect(
+      state.tabs.some((tab) => tab.text === "unsaved crash work"),
+    ).toBe(false);
   });
 
   it("keeps a pending save when a restored draft targets its path", () => {

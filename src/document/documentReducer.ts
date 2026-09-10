@@ -322,10 +322,12 @@ export const documentReducer = (
           normalizePathKey(tab.path, platform) === targetKey,
       );
       if (collision) {
-        return replaceTab(state, document.id, (tab) => ({
-          ...tab,
-          status: "conflict",
-        }));
+        // The target is already open in another tab. Nothing on disk changed,
+        // so this is not a conflict: no write is issued and the document
+        // keeps its text and status. The caller sees the missing request and
+        // reports a plain error; the tab must not enter the conflict state,
+        // which would raise the disk-conflict resolution dialog.
+        return state;
       }
 
       const nextSaveSequence = state.nextSaveSequence + 1;

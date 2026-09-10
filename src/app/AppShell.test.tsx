@@ -854,7 +854,7 @@ describe("AppShell", () => {
     expect(editor()).toHaveTextContent("local edit");
   });
 
-  it("blocks Save As to another open tab and retains both documents", async () => {
+  it("blocks Save As to another open tab as a plain error, without a conflict dialog", async () => {
     const user = userEvent.setup();
     const port = new InspectablePort(
       [file("/notes/a.md", "alpha"), file("/notes/b.md", "bravo")],
@@ -866,14 +866,33 @@ describe("AppShell", () => {
 
     await user.click(screen.getByRole("button", { name: "另存为…" }));
 
+    // Nothing on disk changed, so this is not a conflict: the write is
+    // refused with a message and neither tab is dragged into the conflict
+    // resolution dialog.
     expect(port.writes).toHaveLength(0);
     expect(await screen.findByRole("alert")).toHaveTextContent(/冲突/);
-    // Resolve the conflict dialog so both retained tabs are reachable again.
-    const conflictDialog = screen.getByRole("dialog", { name: "文件已在磁盘上更改" });
-    await user.click(within(conflictDialog).getByRole("button", { name: "保留当前版本" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
     expect(screen.getByRole("tab", { name: /a\.md/ })).toBeVisible();
     expect(screen.getByRole("tab", { name: /b\.md/ })).toBeVisible();
+  });
+
+  it("dismisses the controller error alert with its close button", async () => {
+    const user = userEvent.setup();
+    const port = new InspectablePort(
+      [file("/notes/a.md", "alpha"), file("/notes/b.md", "bravo")],
+      { path: "/NOTES/b.md", expectedVersion: "version:/notes/b.md" },
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("tab", { name: /a\.md/ }));
+
+    await user.click(screen.getByRole("button", { name: "另存为…" }));
+
+    const alert = await screen.findByRole("alert");
+    await user.click(within(alert).getByRole("button", { name: "关闭错误提示" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("waits for a close-save, closes on success, and retains dirty text after failure", async () => {
@@ -1549,6 +1568,63 @@ describe("AppShell recent items and recovery", () => {
       title: "a.md",
     });
     expect(port.drafts[0].draftId).not.toBe("draft-document-9");
+  });
+
+  it("keeps a refused draft listed when its document already holds recovered edits", async () => {
+    const user = userEvent.setup();
+    const crashDraft = (changes: Partial<RecoveryDraft>): RecoveryDraft => ({
+      draftId: "draft-a",
+      originalPath: "/notes/a.md",
+      title: "a.md",
+      text: "recovered first",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: "version:/notes/a.md",
+      ...changes,
+    });
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "alpha")]]),
+      {
+        // Two leftovers for one path: restoring the first turns the reopened
+        // tab dirty, so the second can no longer merge into it.
+        drafts: [
+          crashDraft({}),
+          crashDraft({ draftId: "draft-b", text: "older crash work" }),
+        ],
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+
+    const dialog = await screen.findByRole("dialog", { name: "恢复未保存的更改" });
+    const restoreButtons = within(dialog).getAllByRole("button", { name: "恢复" });
+    expect(restoreButtons).toHaveLength(2);
+
+    // The first draft lands in the clean tab reopened from disk.
+    await user.click(restoreButtons[0]);
+    await waitFor(() =>
+      expect(within(dialog).getAllByRole("button", { name: "恢复" })).toHaveLength(1),
+    );
+    expect(port.drafts.some((draft) => draft.draftId === "draft-a")).toBe(false);
+
+    // The second targets the same path, which is dirty now: the merge is
+    // refused, so its text lands nowhere and both the disk copy and the entry
+    // must survive instead of being silently discarded.
+    await user.click(within(dialog).getByRole("button", { name: "恢复" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/未合并/);
+    expect(port.drafts.some((draft) => draft.draftId === "draft-b")).toBe(true);
+    expect(within(dialog).getByRole("button", { name: "恢复" })).toBeVisible();
+    // One tab, still showing the first recovered text; the refused draft
+    // opened no second tab for itself.
+    expect(document.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(document.querySelector(".cm-content")).toHaveTextContent("recovered first");
   });
 });
 

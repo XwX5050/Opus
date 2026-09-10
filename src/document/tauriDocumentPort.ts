@@ -391,7 +391,18 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
       try {
         await invoke("save_clipboard_image", { path, bytes: input.bytes, mimeType: input.mimeType });
       } catch (error) { throw failure(error); }
-      if (directory && path.startsWith(`${directory}/`)) return path.slice(directory.length + 1);
+      // The dialog reports native separators (`\` on Windows) while the
+      // directory derived from the document path is `/`-separated on every
+      // platform: compare the normalized spellings, so a pick that stays
+      // inside the document's directory becomes the markdown-relative path
+      // instead of an absolute Windows path with backslashes. The slice is
+      // length-identical on both spellings, so the tail is the file name or
+      // subpath below the directory, always `/`-separated.
+      if (directory) {
+        const normalized = path.replaceAll("\\", "/");
+        const prefix = `${directory}/`;
+        if (normalized.startsWith(prefix)) return normalized.slice(prefix.length);
+      }
       return path;
     },
     async acquireDocumentScope(consumerId: string, path: string): Promise<void> {

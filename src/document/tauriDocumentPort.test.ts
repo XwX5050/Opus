@@ -241,6 +241,45 @@ describe("tauri document port clipboard images and asset scopes", () => {
     expect(result).toBe("/elsewhere/pic.jpg");
   });
 
+  it("returns a relative path for a Windows pick beside the document", async () => {
+    // The dialog reports native separators; the document directory is
+    // normalized to `/`. Comparing the raw strings would miss the match and
+    // write an absolute backslash path into the markdown instead.
+    mocks.save.mockResolvedValue("C:\\Notes\\image-20260723-090507.png");
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    const result = await port.saveClipboardImage({
+      bytes: new Uint8Array([1]),
+      mimeType: "image/png",
+      documentPath: "C:\\Notes\\a.md",
+    });
+    expect(result).toBe("image-20260723-090507.png");
+  });
+
+  it("keeps a Windows pick below the document directory relative with forward slashes", async () => {
+    mocks.save.mockResolvedValue("C:\\Notes\\img\\pic.jpg");
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    const result = await port.saveClipboardImage({
+      bytes: new Uint8Array([2]),
+      mimeType: "image/jpeg",
+      documentPath: "C:\\Notes\\a.md",
+    });
+    expect(result).toBe("img/pic.jpg");
+  });
+
+  it("keeps a Windows pick outside the document directory absolute", async () => {
+    mocks.save.mockResolvedValue("D:\\Other\\pic.jpg");
+    invoke.mockResolvedValue(undefined);
+    const port = createTauriDocumentPort();
+    const result = await port.saveClipboardImage({
+      bytes: new Uint8Array([3]),
+      mimeType: "image/jpeg",
+      documentPath: "C:\\Notes\\a.md",
+    });
+    expect(result).toBe("D:\\Other\\pic.jpg");
+  });
+
   it("still opens a dialog with a sensible default for an unsaved document", async () => {
     mocks.save.mockResolvedValue("/tmp/image-1.png");
     invoke.mockResolvedValue(undefined);
