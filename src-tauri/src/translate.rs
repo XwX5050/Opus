@@ -23,7 +23,12 @@
 //! The same endpoint also powers the settings dialog's model picker and
 //! connection check: `list_translation_models` fetches `GET {endpoint}/models`
 //! and returns the advertised model ids, sorted.
+//!
+//! API keys are not part of the settings: both commands receive a *slot* name
+//! and read the key from the OS credential store (`api_keys`), so key material
+//! never enters the frontend or any message this module produces.
 
+use crate::api_keys;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -37,12 +42,14 @@ use tauri::Manager;
 
 /// Provider settings persisted from the settings dialog. Field names are
 /// snake_case on the Rust side; serde maps them from the frontend's camelCase
-/// `TranslationSettings`.
+/// `TranslationSettings`. The API key itself is not part of the settings: the
+/// frontend holds only `key_slot` and the key is read from the credential
+/// store for each request (see `api_keys`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationSettings {
     pub endpoint: String,
-    pub api_key: String,
+    pub key_slot: String,
     pub model: String,
     pub target_language: String,
 }
@@ -440,16 +447,17 @@ fn retry_after_seconds(response: &reqwest::Response) -> Option<u64> {
 /// POSTs one chat completions body with the API key. The client is shared
 /// process-wide, so the command's budget lives on the request instead of the
 /// client; a long translation may stream for a while, hence the generous
-/// timeout.
+/// timeout. The key is passed in rather than read from the settings: it comes
+/// from the credential store and never lands anywhere else.
 async fn post_chat(
     client: &reqwest::Client,
     url: &str,
-    settings: &TranslationSettings,
+    api_key: &str,
     body: &serde_json::Value,
 ) -> Result<reqwest::Response, TranslateError> {
     client
         .post(url)
-        .bearer_auth(&settings.api_key)
+        .bearer_auth(api_key)
         .json(body)
         .timeout(Duration::from_secs(120))
         .send()
@@ -462,6 +470,7 @@ async fn post_chat(
 /// sleep yields the runtime thread; it happens at most once per request.
 async fn send_chat_request(
     client: &reqwest::Client,
+    api_key: &str,
     settings: &TranslationSettings,
     body: &serde_json::Value,
 ) -> Result<reqwest::Response, TranslateError> {
@@ -469,10 +478,10 @@ async fn send_chat_request(
         "{}/chat/completions",
         settings.endpoint.trim_end_matches('/')
     );
-    let response = post_chat(client, &url, settings, body).await?;
+    let response = post_chat(client, &url, api_key, body).await?;
     if let Some(seconds) = retry_after_seconds(&response) {
         tokio::time::sleep(Duration::from_secs(seconds)).await;
-        return post_chat(client, &url, settings, body).await;
+        return post_chat(client, &url, api_key, body).await;
     }
     Ok(response)
 }
@@ -509,6 +518,7 @@ async fn chat_completion_content(response: reqwest::Response) -> Result<String, 
 /// fallback path when a batched reply fails marker validation.
 async fn translate_segment(
     client: &reqwest::Client,
+    api_key: &str,
     settings: &TranslationSettings,
     segment: &str,
 ) -> Result<String, TranslateError> {
@@ -518,7 +528,7 @@ async fn translate_segment(
         &settings.target_language,
         segment,
     );
-    let response = send_chat_request(client, settings, &body).await?;
+    let response = send_chat_request(client, api_key, settings, &body).await?;
     Ok(chat_completion_content(response).await?.trim().to_string())
 }
 
@@ -573,6 +583,7 @@ fn parse_batch_reply(reply: &str, expected: usize) -> Option<Vec<String>> {
 /// protocol.
 async fn translate_batch_segments(
     client: &reqwest::Client,
+    api_key: &str,
     settings: &TranslationSettings,
     segments: &[String],
 ) -> Result<Vec<String>, TranslateError> {
@@ -582,14 +593,14 @@ async fn translate_batch_segments(
         &settings.target_language,
         segments,
     );
-    let response = send_chat_request(client, settings, &body).await?;
+    let response = send_chat_request(client, api_key, settings, &body).await?;
     let content = chat_completion_content(response).await?;
     if let Some(translations) = parse_batch_reply(&content, segments.len()) {
         return Ok(translations);
     }
     let mut translations = Vec::with_capacity(segments.len());
     for segment in segments {
-        translations.push(translate_segment(client, settings, segment).await?);
+        translations.push(translate_segment(client, api_key, settings, segment).await?);
     }
     Ok(translations)
 }
@@ -609,7 +620,8 @@ fn store_translation(
 }
 
 /// Core translation flow, separated from the Tauri command so integration
-/// tests can drive it with a real client against a mock server. Consults the
+/// tests can drive it with a real client against a mock server. `api_key` is
+/// the already-resolved key for the settings' slot. Consults the
 /// cache first; the uncached segments are sent as one batched chat completion
 /// (or as one plain request when only a single segment is missing, or when
 /// the batched reply fails marker validation), and each translation is cached
@@ -617,6 +629,7 @@ fn store_translation(
 /// write failures are logged and never fail a translation.
 pub async fn translate_segments_with_client(
     client: &reqwest::Client,
+    api_key: &str,
     settings: &TranslationSettings,
     segments: &[String],
     cache: &TranslationCache,
@@ -637,12 +650,12 @@ pub async fn translate_segments_with_client(
     }
     if uncached.len() == 1 {
         let (index, segment) = &uncached[0];
-        let value = translate_segment(client, settings, segment).await?;
+        let value = translate_segment(client, api_key, settings, segment).await?;
         results[*index] = Some(value.clone());
         store_translation(cache, settings, segment, &value);
     } else if uncached.len() > 1 {
         let texts: Vec<String> = uncached.iter().map(|(_, text)| text.clone()).collect();
-        let values = translate_batch_segments(client, settings, &texts).await?;
+        let values = translate_batch_segments(client, api_key, settings, &texts).await?;
         for ((index, segment), value) in uncached.iter().zip(values) {
             results[*index] = Some(value.clone());
             store_translation(cache, settings, segment, &value);
@@ -740,7 +753,9 @@ pub fn shared_client() -> Result<&'static reqwest::Client, String> {
 
 /// Translates a batch of markdown segments via an OpenAI-compatible chat
 /// completions endpoint, caching results per segment under the app data
-/// directory.
+/// directory. The API key belongs to `settings.key_slot` and is read from the
+/// credential store here, so it never reaches the frontend; a slot with no
+/// key fails with the structured `missing-key` error the UI matches on.
 #[tauri::command]
 pub async fn translate_segments(
     app: tauri::AppHandle,
@@ -752,7 +767,10 @@ pub async fn translate_segments(
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let cache = TranslationCache::new(data_dir.join("translation-cache"));
-    translate_segments_with_client(shared_client()?, &settings, &segments, &cache)
+    let store = api_keys::store_for_app(&app)?;
+    let slot = settings.key_slot.clone();
+    let api_key = api_keys::run_store(move || api_keys::key_for_slot(&store, &slot)).await?;
+    translate_segments_with_client(shared_client()?, &api_key, &settings, &segments, &cache)
         .await
         .map_err(|error| error.to_string())
 }
@@ -761,12 +779,16 @@ pub async fn translate_segments(
 /// {endpoint}/models, Bearer api_key), sorted by id. The settings dialog's
 /// model picker and connection check both call this; the WebView CSP forbids
 /// direct frontend calls to the provider, so the request goes through Rust
-/// like translation.
+/// like translation. The key is read from the credential store by slot and
+/// never travels through the frontend.
 #[tauri::command]
 pub async fn list_translation_models(
+    app: tauri::AppHandle,
     endpoint: String,
-    api_key: String,
+    key_slot: String,
 ) -> Result<Vec<String>, String> {
+    let store = api_keys::store_for_app(&app)?;
+    let api_key = api_keys::run_store(move || api_keys::key_for_slot(&store, &key_slot)).await?;
     list_translation_models_with_client(shared_client()?, &endpoint, &api_key)
         .await
         .map_err(|error| error.to_string())

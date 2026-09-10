@@ -51,11 +51,22 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # already locked in the tree via tauri, this only adds the `time` feature.
 tokio = { version = "1", features = ["time"] }
 
+# Translation API keys live in the OS credential store (see api_keys.rs), not
+# in session.json. keyring selects its backend by feature, so each target
+# enables exactly one and no unrelated store is linked. Version 3.x, not 4.x:
+# keyring 4 is edition-2024 and requires rustc 1.88, while this crate's MSRV
+# is 1.77.2. 3.x is the maintained line for that toolchain and is the last
+# one to select its backend at compile time — keyring 4 hands store
+# registration to the application at runtime.
+
 # macOS-only bindings for the WKWebView under-page background (see
 # window_background.rs) and installed-font enumeration (see fonts.rs).
 # Pinned to the exact versions wry already locks so the types line up with
 # the webview handles tauri hands over in `with_webview`.
 [target.'cfg(target_os = "macos")'.dependencies]
+# Login Keychain, through security-framework 3 (already locked in the tree by
+# tauri's own macOS dependencies).
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
 objc2-app-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation", "NSColor"] }
 # Direct dependency so the `CFArray`/`CFString` types used by fonts.rs can
 # enable their features here (objc2-core-text's `CTFontManager` only pulls in
@@ -74,6 +85,17 @@ objc2-web-kit = { version = "0.3.2", features = ["std", "objc2-core-foundation",
 tauri-plugin-single-instance = "2"
 winreg = "0.56"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+# Credential Manager (windows-sys 0.60, already locked in the tree).
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+
+# Linux: the Secret Service (org.freedesktop.secrets) over zbus. The
+# async-secret-service backend is the pure-Rust D-Bus route — it needs a
+# runtime and a cipher, and `tokio` reuses the runtime tauri already links
+# while `crypto-rust` uses RustCrypto (sha2 is already a dependency), so no
+# libdbus or OpenSSL C library is pulled in. The synchronous alternative,
+# sync-secret-service, links libdbus and is deliberately not used.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["async-secret-service", "crypto-rust", "tokio"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

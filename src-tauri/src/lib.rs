@@ -1,3 +1,4 @@
+pub mod api_keys;
 pub mod asset_scope;
 pub mod document_commands;
 pub mod document_io;
@@ -93,6 +94,10 @@ pub fn run() {
             document_commands::discard_recovery_draft,
             translate::translate_segments,
             translate::list_translation_models,
+            api_keys::store_translation_key,
+            api_keys::delete_translation_key,
+            api_keys::has_translation_key,
+            api_keys::translation_key_protection,
             perf_mark::perf_mark_editor_editable,
             #[cfg(any(target_os = "macos", windows))]
             fonts::list_installed_fonts,

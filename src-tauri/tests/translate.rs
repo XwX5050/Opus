@@ -1,7 +1,11 @@
+use markdown_edit_lib::api_keys::{
+    key_for_slot, ApiKeyStore, FileKeyBackend, KeyBackend, StoreError,
+};
 use markdown_edit_lib::translate::{
     list_translation_models_with_client, shared_client, translate_segments_with_client,
     TranslationCache, TranslationSettings,
 };
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -191,10 +195,15 @@ fn chat_text_response(content: &str) -> Vec<u8> {
     http_response(&payload.to_string())
 }
 
+/// The key every mock-server assertion expects in the Authorization header.
+/// The production path resolves it from the credential store by slot; the
+/// protocol tests hand it to `translate_segments_with_client` directly.
+const TEST_KEY: &str = "test-key";
+
 fn settings(endpoint: &str) -> TranslationSettings {
     TranslationSettings {
         endpoint: endpoint.into(),
-        api_key: "test-key".into(),
+        key_slot: "custom".into(),
         model: "test-model".into(),
         target_language: "中文".into(),
     }
@@ -274,9 +283,10 @@ async fn full_cache_hit_never_touches_the_network() {
     }
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&texts), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, translations);
     assert_eq!(server.request_count(), 0);
 }
@@ -291,9 +301,10 @@ async fn uncached_segments_are_batched_into_one_request_and_then_cached() {
     server.queue(chat_text_response("⟪1⟫\n一\n\n⟪2⟫\n二"));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&texts), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, ["一", "二"]);
     // The whole uncached remainder goes out as one batched chat completion.
     assert_eq!(server.request_count(), 1);
@@ -318,9 +329,10 @@ async fn uncached_segments_are_batched_into_one_request_and_then_cached() {
 
     // The per-segment cache means a second run touches the network not at
     // all, even though the first run answered both segments together.
-    let result = translate_segments_with_client(&client, &settings, &segments(&texts), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&texts), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, ["一", "二"]);
     assert_eq!(server.request_count(), 1);
 }
@@ -337,10 +349,15 @@ async fn loopback_requests_never_carry_the_zhipu_thinking_field() {
     server.queue(chat_text_response("⟪1⟫\n一\n\n⟪2⟫\n二"));
 
     let client = client();
-    let result =
-        translate_segments_with_client(&client, &settings, &segments(&["one", "two"]), &cache)
-            .await
-            .unwrap();
+    let result = translate_segments_with_client(
+        &client,
+        TEST_KEY,
+        &settings,
+        &segments(&["one", "two"]),
+        &cache,
+    )
+    .await
+    .unwrap();
     assert_eq!(result, ["一", "二"]);
     assert_eq!(server.request_count(), 1);
 
@@ -360,9 +377,10 @@ async fn single_uncached_segment_sends_a_plain_request_with_no_markers() {
     server.queue(chat_text_response("你好"));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&["hello"]), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&["hello"]), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, ["你好"]);
     assert_eq!(server.request_count(), 1);
 
@@ -407,10 +425,15 @@ async fn batched_reply_marker_mismatches_fall_back_to_one_request_per_segment() 
             server.queue(chat_text_response(reply));
         }
 
-        let result =
-            translate_segments_with_client(&client, &settings, &segments(&["one", "two"]), &cache)
-                .await
-                .unwrap();
+        let result = translate_segments_with_client(
+            &client,
+            TEST_KEY,
+            &settings,
+            &segments(&["one", "two"]),
+            &cache,
+        )
+        .await
+        .unwrap();
         assert_eq!(result, ["一", "二"]);
         // One batched request that failed validation, then one plain request
         // per segment.
@@ -437,9 +460,10 @@ async fn http_429_with_integer_retry_after_is_retried_once() {
     server.queue(chat_text_response("你好"));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&["hello"]), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&["hello"]), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, ["你好"]);
     assert_eq!(server.request_count(), 2);
     // The retry re-sends the same body.
@@ -461,9 +485,15 @@ async fn http_429_without_an_eligible_retry_after_is_not_retried() {
         let settings = settings(&server.endpoint());
         server.queue(http_429(*retry_after));
 
-        let error = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
-            .await
-            .unwrap_err();
+        let error = translate_segments_with_client(
+            &client,
+            TEST_KEY,
+            &settings,
+            &segments(&["one"]),
+            &cache,
+        )
+        .await
+        .unwrap_err();
         assert!(
             error.to_string().contains("429"),
             "unexpected error: {error}"
@@ -484,9 +514,10 @@ async fn multi_sentence_output_for_a_single_segment_is_accepted_as_is() {
     server.queue(chat_text_response("一、二、三"));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, ["一、二、三"]);
     assert_eq!(server.request_count(), 1);
 }
@@ -500,9 +531,10 @@ async fn response_content_is_trimmed_to_strip_stray_whitespace() {
     server.queue(chat_text_response("  \n你好，世界！\n  "));
 
     let client = client();
-    let result = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
-        .await
-        .unwrap();
+    let result =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap();
     assert_eq!(result, ["你好，世界！"]);
     assert_eq!(server.request_count(), 1);
 }
@@ -516,9 +548,10 @@ async fn missing_choices_content_is_reported_as_a_bad_response() {
     server.queue(http_response(r#"{"choices": []}"#));
 
     let client = client();
-    let error = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
-        .await
-        .unwrap_err();
+    let error =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
     assert!(
         error
             .to_string()
@@ -537,9 +570,10 @@ async fn provider_http_errors_are_reported_and_not_retried_per_segment() {
     server.queue(http_status(401, "Unauthorized"));
 
     let client = client();
-    let error = translate_segments_with_client(&client, &settings, &segments(&["one"]), &cache)
-        .await
-        .unwrap_err();
+    let error =
+        translate_segments_with_client(&client, TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
     assert!(error.to_string().contains("401"));
     assert_eq!(server.request_count(), 1);
 }
@@ -556,9 +590,10 @@ async fn invalid_endpoints_are_rejected_before_any_request() {
         endpoint: "http://example.com/v1".into(),
         ..settings.clone()
     };
-    let error = translate_segments_with_client(&client, &insecure, &segments(&["one"]), &cache)
-        .await
-        .unwrap_err();
+    let error =
+        translate_segments_with_client(&client, TEST_KEY, &insecure, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
     assert!(error.to_string().contains("not allowed"));
     assert_eq!(server.request_count(), 0);
 }
@@ -651,9 +686,10 @@ async fn redirects_are_never_followed_and_reported_as_errors() {
     )));
 
     let client = shared_client().unwrap();
-    let error = translate_segments_with_client(client, &settings, &segments(&["one"]), &cache)
-        .await
-        .unwrap_err();
+    let error =
+        translate_segments_with_client(client, TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
     assert!(
         error.to_string().contains("307"),
         "the 307 response itself must be reported, got: {error}"
@@ -707,4 +743,147 @@ fn prune_if_due_evicts_overflow_once_per_interval() {
     }
     cache.prune_if_due();
     assert_eq!(std::fs::read_dir(&cache_dir).unwrap().count(), 5002);
+}
+
+/// An in-memory credential store for the slot-resolution tests. The suite must
+/// never touch a real keychain: CI has no Secret Service, and a developer
+/// machine's login keychain must stay untouched by the tests.
+struct MemoryKeys(Mutex<BTreeMap<String, String>>);
+
+impl MemoryKeys {
+    fn new() -> Self {
+        Self(Mutex::new(BTreeMap::new()))
+    }
+
+    fn with(slot: &str, key: &str) -> Self {
+        let backend = Self::new();
+        backend
+            .0
+            .lock()
+            .unwrap()
+            .insert(slot.to_string(), key.to_string());
+        backend
+    }
+}
+
+impl KeyBackend for MemoryKeys {
+    fn describe(&self) -> String {
+        "the in-memory test store".to_string()
+    }
+
+    fn get(&self, slot: &str) -> Result<Option<String>, StoreError> {
+        Ok(self.0.lock().unwrap().get(slot).cloned())
+    }
+
+    fn store(&self, slot: &str, key: &str) -> Result<(), StoreError> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(slot.to_string(), key.to_string());
+        Ok(())
+    }
+
+    fn delete(&self, slot: &str) -> Result<(), StoreError> {
+        self.0.lock().unwrap().remove(slot);
+        Ok(())
+    }
+}
+
+/// A system store that cannot be reached, so every operation falls through to
+/// the file — the Linux-without-a-Secret-Service shape.
+struct UnreachableKeys;
+
+impl KeyBackend for UnreachableKeys {
+    fn describe(&self) -> String {
+        "the unreachable test store".to_string()
+    }
+
+    fn get(&self, _slot: &str) -> Result<Option<String>, StoreError> {
+        Err(StoreError::Unavailable("no store here".to_string()))
+    }
+
+    fn store(&self, _slot: &str, _key: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable("no store here".to_string()))
+    }
+
+    fn delete(&self, _slot: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable("no store here".to_string()))
+    }
+}
+
+fn key_file(dir: &std::path::Path) -> FileKeyBackend {
+    FileKeyBackend::new(dir.join("translation-keys.json"))
+}
+
+#[tokio::test]
+async fn the_key_of_the_settings_slot_reaches_the_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    server.queue(chat_text_response("你好"));
+    let settings = settings(&server.endpoint());
+    // Keyed by the settings' slot alone — exactly what the command does before
+    // it calls into the translation flow.
+    let store = ApiKeyStore::new(
+        Box::new(MemoryKeys::with(&settings.key_slot, TEST_KEY)),
+        Box::new(key_file(dir.path())),
+    );
+
+    let api_key = key_for_slot(&store, &settings.key_slot).unwrap();
+    let result = translate_segments_with_client(
+        &client(),
+        &api_key,
+        &settings,
+        &segments(&["hello"]),
+        &cache,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, vec!["你好".to_string()]);
+    assert_eq!(
+        server.request_header(0, "authorization"),
+        Some(format!("Bearer {TEST_KEY}"))
+    );
+}
+
+#[tokio::test]
+async fn a_key_written_to_the_file_fallback_still_reaches_the_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    server.queue(chat_text_response("你好"));
+    let settings = settings(&server.endpoint());
+    let store = ApiKeyStore::new(Box::new(UnreachableKeys), Box::new(key_file(dir.path())));
+    store.store(&settings.key_slot, TEST_KEY).unwrap();
+
+    let api_key = key_for_slot(&store, &settings.key_slot).unwrap();
+    let result = translate_segments_with_client(
+        &client(),
+        &api_key,
+        &settings,
+        &segments(&["hello"]),
+        &cache,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, vec!["你好".to_string()]);
+    assert_eq!(
+        server.request_header(0, "authorization"),
+        Some(format!("Bearer {TEST_KEY}"))
+    );
+}
+
+#[tokio::test]
+async fn a_slot_without_a_key_fails_before_any_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    let store = ApiKeyStore::new(Box::new(MemoryKeys::new()), Box::new(key_file(dir.path())));
+
+    let error = key_for_slot(&store, &settings.key_slot).unwrap_err();
+
+    assert_eq!(error, "missing-key: no API key stored for slot \"custom\"");
+    assert_eq!(server.request_count(), 0);
 }
