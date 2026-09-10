@@ -292,6 +292,35 @@ fn rename_entry_to_the_same_name_succeeds_as_a_no_op() {
     assert_eq!(std::fs::read(root.join("b.md")).unwrap(), b"b");
 }
 
+/// A case-only rename targets the renamed entry itself on the
+/// case-insensitive filesystems of macOS and Windows, so it must not read as
+/// an existing conflict; on case-sensitive filesystems it simply creates the
+/// requested spelling.
+#[test]
+fn rename_entry_allows_a_case_only_rename_of_the_same_entry() {
+    let (_dir, root) = populated_root();
+    std::fs::write(root.join("Notes.md"), b"notes").unwrap();
+
+    let renamed = rename_entry(&root, Path::new("Notes.md"), "notes.md").unwrap();
+
+    assert_eq!(renamed.name, "notes.md");
+    assert_eq!(std::fs::read(root.join("notes.md")).unwrap(), b"notes");
+    let entries = list_directory(&root, Path::new("")).unwrap();
+    let names = entry_names(&entries);
+    assert!(
+        names.contains(&"notes.md"),
+        "the entry carries the requested spelling: {names:?}"
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| name.eq_ignore_ascii_case("notes.md"))
+            .count(),
+        1,
+        "the entry exists exactly once: {names:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn create_markdown_file_never_writes_through_a_symlink() {
