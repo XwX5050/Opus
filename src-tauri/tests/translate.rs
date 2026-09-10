@@ -225,8 +225,13 @@ fn segments(texts: &[&str]) -> Vec<String> {
 fn cache_key_derivation_is_stable() {
     // Hardcoded value so an accidental change to the key derivation is caught.
     assert_eq!(
-        TranslationCache::cache_key("gpt-4o-mini", "中文", "Hello **world**"),
-        "196dd54dccac4334bb53b3925c9b8837c48ac17c5ce3b8e8cf30ebab7959a3f1"
+        TranslationCache::cache_key(
+            "https://api.example.test/v1",
+            "gpt-4o-mini",
+            "中文",
+            "Hello **world**"
+        ),
+        "2b8b9cac8789284971d91e6999fd1fd6563d77cadd1080fd549ce7b74d4d8d58"
     );
 }
 
@@ -234,7 +239,8 @@ fn cache_key_derivation_is_stable() {
 fn cached_entries_round_trip_and_survive_a_store_restart() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = dir.path().join("translation-cache");
-    let key = TranslationCache::cache_key("test-model", "中文", "Hello");
+    let key =
+        TranslationCache::cache_key("https://cache.example/v1", "test-model", "中文", "Hello");
     {
         let cache = TranslationCache::new(cache_dir.clone());
         assert_eq!(cache.get(&key), None);
@@ -256,7 +262,8 @@ fn cached_entries_round_trip_and_survive_a_store_restart() {
 fn missing_and_corrupt_entries_are_cache_misses() {
     let dir = tempfile::tempdir().unwrap();
     let cache = TranslationCache::new(dir.path().join("translation-cache"));
-    let key = TranslationCache::cache_key("test-model", "中文", "Hello");
+    let key =
+        TranslationCache::cache_key("https://cache.example/v1", "test-model", "中文", "Hello");
     assert_eq!(cache.get(&key), None);
     std::fs::create_dir_all(cache.dir()).unwrap();
     let entry = cache.dir().join(format!("{key}.json"));
@@ -276,7 +283,14 @@ async fn full_cache_hit_never_touches_the_network() {
     let translations = ["一", "二", "三"];
     let keys: Vec<String> = texts
         .iter()
-        .map(|text| TranslationCache::cache_key(&settings.model, &settings.target_language, text))
+        .map(|text| {
+            TranslationCache::cache_key(
+                &settings.endpoint,
+                &settings.model,
+                &settings.target_language,
+                text,
+            )
+        })
         .collect();
     for (key, translated) in keys.iter().zip(translations) {
         cache.store(key, translated).unwrap();
@@ -289,6 +303,48 @@ async fn full_cache_hit_never_touches_the_network() {
             .unwrap();
     assert_eq!(result, translations);
     assert_eq!(server.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_cached_translation_is_not_reused_across_endpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    // Two providers that offer the same model name.
+    let first = MockServer::spawn();
+    let second = MockServer::spawn();
+    let texts = ["one"];
+    let client = client();
+
+    first.queue(chat_text_response("甲"));
+    let first_settings = settings(&first.endpoint());
+    let translated = translate_segments_with_client(
+        &client,
+        TEST_KEY,
+        &first_settings,
+        &segments(&texts),
+        &cache,
+    )
+    .await
+    .unwrap();
+    assert_eq!(translated, ["甲"]);
+    assert_eq!(first.request_count(), 1);
+
+    // The same model, language, and segment behind a different endpoint must
+    // reach the second provider instead of being served the first one's
+    // cached translation.
+    second.queue(chat_text_response("乙"));
+    let second_settings = settings(&second.endpoint());
+    let translated = translate_segments_with_client(
+        &client,
+        TEST_KEY,
+        &second_settings,
+        &segments(&texts),
+        &cache,
+    )
+    .await
+    .unwrap();
+    assert_eq!(translated, ["乙"]);
+    assert_eq!(second.request_count(), 1);
 }
 
 #[tokio::test]
@@ -896,7 +952,12 @@ fn seed_cache(
     segment: &str,
     value: &str,
 ) {
-    let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+    let key = TranslationCache::cache_key(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        segment,
+    );
     cache.store(&key, value).unwrap();
 }
 

@@ -173,12 +173,19 @@ impl TranslationCache {
         &self.dir
     }
 
-    /// Derives the cache key for a segment: sha256 of model, target language,
-    /// and the segment itself, so switching any of them starts a fresh set of
-    /// entries. Keys are only ever produced here; callers must not hand
-    /// arbitrary strings to `get`/`store`.
-    pub fn cache_key(model: &str, target_language: &str, segment: &str) -> String {
+    /// Derives the cache key for a segment: sha256 of endpoint, model, target
+    /// language, and the segment itself, so switching any of them starts a
+    /// fresh set of entries. The endpoint belongs in the key because one
+    /// model id can mean different providers (or differently configured
+    /// proxies) behind different endpoints; its trailing slashes never change
+    /// which provider a request reaches, so they are ignored. Keys are only
+    /// ever produced here; callers must not hand arbitrary strings to
+    /// `get`/`store`. Entries written before the endpoint joined the key are
+    /// simply never read again; the ordinary entry-cap prune ages them out.
+    pub fn cache_key(endpoint: &str, model: &str, target_language: &str, segment: &str) -> String {
         let mut hasher = Sha256::new();
+        hasher.update(endpoint.trim_end_matches('/').as_bytes());
+        hasher.update(b"\n");
         hasher.update(model.as_bytes());
         hasher.update(b"\n");
         hasher.update(target_language.as_bytes());
@@ -613,7 +620,12 @@ fn store_translation(
     segment: &str,
     value: &str,
 ) {
-    let key = TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+    let key = TranslationCache::cache_key(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        segment,
+    );
     if let Err(error) = cache.store(&key, value) {
         log::warn!("failed to cache translation for segment {segment:?}: {error}");
     }
@@ -645,8 +657,12 @@ impl TranslationPlan {
         let mut results: Vec<Option<String>> = vec![None; segments.len()];
         let mut uncached: Vec<(usize, String)> = Vec::new();
         for (index, segment) in segments.iter().enumerate() {
-            let key =
-                TranslationCache::cache_key(&settings.model, &settings.target_language, segment);
+            let key = TranslationCache::cache_key(
+                &settings.endpoint,
+                &settings.model,
+                &settings.target_language,
+                segment,
+            );
             match cache.get(&key) {
                 Some(hit) => results[index] = Some(hit),
                 None => uncached.push((index, segment.clone())),
@@ -871,12 +887,35 @@ mod tests {
 
     #[test]
     fn cache_key_is_stable_and_distinguishes_inputs() {
-        let key = TranslationCache::cache_key("m", "中文", "hello");
-        assert_eq!(key, TranslationCache::cache_key("m", "中文", "hello"));
+        let key = TranslationCache::cache_key("https://a.example/v1", "m", "中文", "hello");
+        assert_eq!(
+            key,
+            TranslationCache::cache_key("https://a.example/v1", "m", "中文", "hello")
+        );
         assert_eq!(key.len(), 64);
-        assert_ne!(key, TranslationCache::cache_key("n", "中文", "hello"));
-        assert_ne!(key, TranslationCache::cache_key("m", "英文", "hello"));
-        assert_ne!(key, TranslationCache::cache_key("m", "中文", "world"));
+        // The endpoint participates: the same model id can mean a different
+        // provider (or proxy) behind a different endpoint.
+        assert_ne!(
+            key,
+            TranslationCache::cache_key("https://b.example/v1", "m", "中文", "hello")
+        );
+        assert_ne!(
+            key,
+            TranslationCache::cache_key("https://a.example/v1", "n", "中文", "hello")
+        );
+        assert_ne!(
+            key,
+            TranslationCache::cache_key("https://a.example/v1", "m", "英文", "hello")
+        );
+        assert_ne!(
+            key,
+            TranslationCache::cache_key("https://a.example/v1", "m", "中文", "world")
+        );
+        // Trailing slashes never change which provider a request reaches.
+        assert_eq!(
+            key,
+            TranslationCache::cache_key("https://a.example/v1/", "m", "中文", "hello")
+        );
     }
 
     #[test]
