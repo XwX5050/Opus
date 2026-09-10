@@ -82,6 +82,13 @@ const errorMessage = (error: unknown): string =>
 const DRAFT_DEBOUNCE_MS = 2000;
 const DRAFT_MAX_PENDING_MS = 5000;
 
+/**
+ * Reported when a restore is refused because the draft's document is already
+ * open with newer unsaved edits: the recovered text landed nowhere, so the
+ * draft is kept (both on disk and in the dialog) and the refusal is explained.
+ */
+const RESTORE_REFUSED_MESSAGE = "目标文档包含未保存的修改，草稿未合并（草稿已保留）";
+
 /** Path-key platform, resolved once from the webview user agent. */
 const PATH_PLATFORM = detectPathPlatform();
 
@@ -220,8 +227,12 @@ export function useAppController(
   const translationControllers = useRef(new Map<string, AbortController>());
   // Viewport-range provider of the active tab's editor (character offsets
   // into the displayed text), fed by AppShell for viewport-priority
-  // translation scheduling; null means no preference (document order). A
-  // plain ref on purpose: view/scroll changes must never re-render the shell.
+  // translation scheduling; null means no preference (document order). The
+  // shell owns the registration: it re-points the provider whenever the
+  // active tab changes and clears it when that editor's view goes away, so
+  // translation runs only read it (and must never clear it — that would
+  // starve every later run until the next tab change). A plain ref on
+  // purpose: view/scroll changes must never re-render the shell.
   const translationViewportProviderRef = useRef<
     (() => TranslationTextRange | null) | null
   >(null);
@@ -450,8 +461,6 @@ export function useAppController(
   const dropTranslation = useCallback((id: string) => {
     translationControllers.current.get(id)?.abort();
     translationControllers.current.delete(id);
-    // A dropped run can no longer reprioritize; its provider is cleared too.
-    translationViewportProviderRef.current = null;
     setTranslations((current) => {
       if (!current.has(id)) return current;
       const next = new Map(current);
@@ -532,12 +541,16 @@ export function useAppController(
         );
         if (!latest || latest.text !== text) {
           translationControllers.current.delete(id);
-          translationViewportProviderRef.current = null;
           return;
         }
         translationControllers.current.delete(id);
-        // The run is over; the provider is only read while it schedules.
-        translationViewportProviderRef.current = null;
+        // The provider stays registered: it is owned by the shell, which
+        // re-points it at the active tab's editor and clears it when that
+        // view goes away. A run that ended (or was dropped or errored) is no
+        // reason to unregister it — the getter is only read while a run
+        // schedules, and clearing it here would starve every later run of the
+        // same tab of viewport priority, since the shell's registration
+        // effect does not re-run without a tab change.
         setTranslations((current) => {
           const next = new Map(current);
           next.set(id, {
@@ -551,7 +564,6 @@ export function useAppController(
         if (!isCurrent(generation)) return;
         if (translationControllers.current.get(id) !== controller) return;
         translationControllers.current.delete(id);
-        translationViewportProviderRef.current = null;
         // An errored run never leaves the translation on screen: the error
         // banner surfaces through the entry's phase while `visible: false`
         // keeps the editor and the save path live, so a failed request can
@@ -1512,6 +1524,11 @@ export function useAppController(
 
   const dismissSaveError = useCallback(() => setSaveError(null), []);
 
+  // Clears the alert banner only. Every `setError` producer keeps its own
+  // state (a failed save still owns `saveError`, a conflict its tab status),
+  // so dismissing the message never hides the condition behind it.
+  const dismissError = useCallback(() => setError(null), []);
+
   // Returned so callers (and tests) can await the whole save chain.
   const retrySave = useCallback((): Promise<boolean> | undefined => {
     const failure = saveError;
@@ -1572,9 +1589,6 @@ export function useAppController(
         acquireDocumentScope(added);
         if (added.path) watchConsumer(added.id, added.path, "document");
       }
-      setRecoveryDrafts((current) =>
-        current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
-      );
       // The restored content lands either on the fresh tab (`added`) or, when
       // the reducer merged it into an already-open tab for the same path, on
       // that existing tab. Find the owner so the transaction below targets
@@ -1591,6 +1605,22 @@ export function useAppController(
                   normalizePathKey(ownerPath, PATH_PLATFORM) &&
                 tab.text === draft.text,
             ));
+      // No owner means the text landed nowhere: the reducer refuses to merge
+      // into a tab that is dirty or has a write in flight, and draft ids are
+      // regenerated per session (`draft-document-N` names no tab of this run),
+      // so an id-based match cannot save the copy either. Discarding the
+      // leftover would delete the only copy of the user's unsaved work, and
+      // dropping the dialog entry would hide that it still exists: both stay,
+      // and the refusal is reported instead of silently doing nothing.
+      if (!owner) {
+        setError(RESTORE_REFUSED_MESSAGE);
+        return;
+      }
+      // The recovered text is in a tab; its draft entry needs no further
+      // decision from the user.
+      setRecoveryDrafts((current) =>
+        current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
+      );
       // Transaction ordering: the owner's own draft must be persisted and its
       // write confirmed BEFORE the leftover draft is discarded — a crash in
       // the debounce window must never find the only recovery copy already
@@ -1601,7 +1631,7 @@ export function useAppController(
       // (nothing to recover) still discards the leftover, whose content was
       // fully superseded by the restore.
       let leftoverDiscardable = true;
-      if (owner && needsRecoveryDraft(owner)) {
+      if (needsRecoveryDraft(owner)) {
         persistedDraftIds.current.add(owner.id);
         try {
           await port.writeDraft(draftFromSnapshot(owner));
@@ -1620,7 +1650,18 @@ export function useAppController(
         void port.discardDraft(info.draftId).catch(() => {});
       }
     } catch (caught) {
-      if (isCurrent(generation)) setError(errorMessage(caught));
+      if (!isCurrent(generation)) return;
+      if (caught instanceof DocumentPortError && caught.code === "not_found") {
+        // The draft is gone from disk (another window restored or discarded
+        // it, or the store was cleaned up). A dead entry must not stay in the
+        // dialog erroring on every click: drop it exactly like an explicit
+        // discard, without a banner.
+        setRecoveryDrafts((current) =>
+          current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
+        );
+        return;
+      }
+      setError(errorMessage(caught));
     }
   }, [
     acquireDocumentScope,
@@ -1674,6 +1715,7 @@ export function useAppController(
     closeDocumentId,
     closeSaving,
     error,
+    dismissError,
     saveError,
     workspace,
     recent,

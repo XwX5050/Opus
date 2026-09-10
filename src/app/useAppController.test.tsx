@@ -2402,12 +2402,14 @@ describe("useAppController translations", () => {
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
-    // The completed run clears the provider for the next one.
-    expect(priority.visibleRange()).toBeNull();
+    // The end of a run leaves the registration alone: the shell owns it and
+    // only re-points it on a tab change, so the getter still answers for the
+    // next run of this tab.
+    expect(priority.visibleRange()).toEqual({ from: 10, to: 60 });
     hook.unmount();
   });
 
-  it("clears the translation viewport provider when a run ends (dropped, errored, completed)", async () => {
+  it("keeps the translation viewport provider registered when a run ends (dropped, errored, completed)", async () => {
     const port = new PausedTranslateMemoryPort(
       new Map([["/notes/a.md", translateFile("/notes/a.md", "hello world")]]),
       keyedOptions,
@@ -2421,43 +2423,44 @@ describe("useAppController translations", () => {
       return priority;
     };
 
-    // Dropped (cancelled mid-flight) clears the provider.
+    // Registered once, exactly like the shell does when the tab's editor
+    // mounts; nothing below re-registers it.
     act(() =>
       hook.result.current.setTranslationViewportProvider(() => ({ from: 1, to: 7 })),
     );
+
+    // Dropped (cancelled mid-flight) keeps the provider.
     await act(async () => hook.result.current.toggleTranslation(id));
     await waitFor(() => expect(port.pending).toHaveLength(1));
     const droppedRun = priorityOfLatest();
     expect(droppedRun.visibleRange()).toEqual({ from: 1, to: 7 });
     await act(async () => hook.result.current.toggleTranslation(id));
-    expect(droppedRun.visibleRange()).toBeNull();
+    expect(droppedRun.visibleRange()).toEqual({ from: 1, to: 7 });
 
-    // Errored clears the provider.
+    // Errored keeps it too.
     vi.mocked(translateDocument).mockRejectedValueOnce(new Error("boom"));
-    act(() =>
-      hook.result.current.setTranslationViewportProvider(() => ({ from: 2, to: 9 })),
-    );
     await act(async () => hook.result.current.toggleTranslation(id));
     const erroredRun = priorityOfLatest();
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("error"),
     );
-    expect(erroredRun.visibleRange()).toBeNull();
+    expect(erroredRun.visibleRange()).toEqual({ from: 1, to: 7 });
 
-    // Completed (retry from the error state) clears the provider too.
-    act(() =>
-      hook.result.current.setTranslationViewportProvider(() => ({ from: 3, to: 10 })),
-    );
+    // The retry started from the error state is the regression case: with no
+    // tab change in between, it must still receive viewport priority instead
+    // of the null a run-end once wrote into the shared ref.
     await act(async () => hook.result.current.toggleTranslation(id));
     const completedRun = priorityOfLatest();
     await waitFor(() => expect(port.pending).toHaveLength(2));
+    expect(completedRun.visibleRange()).toEqual({ from: 1, to: 7 });
     await act(async () => {
       port.pending[1].resolve(port.pending[1].segments.map(pseudoTranslate));
     });
     await waitFor(() =>
       expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
     );
-    expect(completedRun.visibleRange()).toBeNull();
+    // Completed keeps it as well.
+    expect(completedRun.visibleRange()).toEqual({ from: 1, to: 7 });
     hook.unmount();
   });
 });
@@ -2576,6 +2579,74 @@ describe("useAppController restore transaction order", () => {
       status: "dirty",
     });
     expect(port.drafts.some((item) => item.draftId === "draft-document-1")).toBe(true);
+    hook.unmount();
+  });
+
+  it("keeps the draft and its dialog entry when a dirty tab refuses the merge", async () => {
+    // The crash-session draft id (draft-document-9) names no tab of this run,
+    // and the file is already open with newer local edits: the reducer refuses
+    // the merge, so the recovered text lands nowhere. Discarding the leftover
+    // would silently destroy the only copy of the crashed work.
+    const opened: OpenedFile = {
+      path: "/notes/a.md",
+      text: "saved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 1,
+      version: "v1",
+    };
+    const port = new MemoryDocumentPort(new Map([[opened.path, opened]]), {
+      drafts: [
+        leftover({
+          draftId: "draft-document-9",
+          originalPath: opened.path,
+          title: "a.md",
+          text: "unsaved crash work",
+        }),
+      ],
+    });
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath(opened.path));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "newer local edits"));
+
+    await act(() =>
+      hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]),
+    );
+
+    // The only copy survives on disk...
+    expect(port.drafts.map((draft) => draft.draftId)).toEqual(["draft-document-9"]);
+    // ...and stays listed, so the user can still inspect or discard it.
+    expect(hook.result.current.recoveryDrafts).toHaveLength(1);
+    // The open tab keeps its buffer, no second tab is opened, and the refusal
+    // is reported instead of silently doing nothing.
+    expect(hook.result.current.state.tabs).toHaveLength(1);
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "newer local edits",
+      status: "dirty",
+    });
+    expect(hook.result.current.error).toMatch(/未合并/);
+    hook.unmount();
+  });
+
+  it("drops a recovery entry whose draft no longer exists on disk", async () => {
+    const port = new MemoryDocumentPort(new Map(), {
+      drafts: [leftover({ draftId: "draft-document-9" })],
+    });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+    // Another window restored (or discarded) the draft behind this list.
+    await act(() => port.discardDraft("draft-document-9"));
+
+    await act(() =>
+      hook.result.current.restoreDraft(hook.result.current.recoveryDrafts![0]),
+    );
+
+    // A dead entry must not linger and error on every click.
+    expect(hook.result.current.recoveryDrafts).toEqual([]);
+    expect(hook.result.current.error).toBeNull();
+    expect(hook.result.current.state.tabs).toHaveLength(0);
     hook.unmount();
   });
 });
