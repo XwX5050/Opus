@@ -124,6 +124,50 @@ describe("splitManualSlides", () => {
     expect(splitManualSlides(doc)).toEqual(["A\n\n- ```\n  ---\n  ```", "B"]);
   });
 
+  it("does not split on --- inside a fence behind interleaved list and quote markers", () => {
+    // The editor's GFM parser reads each opener as a fence inside its
+    // container, so the --- is code and only the top-level separator splits.
+    // segments.test.ts runs the same fixtures against the translation
+    // scanner and the parser.
+    expect(
+      splitManualSlides("A\n\n- > ```\n  > ---\n  > ```\n\n---\n\nB\n"),
+    ).toEqual(["A\n\n- > ```\n  > ---\n  > ```", "B"]);
+    expect(
+      splitManualSlides("A\n\n> - ```\n>   ---\n>   ```\n\n---\n\nB\n"),
+    ).toEqual(["A\n\n> - ```\n>   ---\n>   ```", "B"]);
+    expect(
+      splitManualSlides(
+        "A\n\n- > - ```\n  >   ---\n  >   ```\n\n---\n\nB\n",
+      ),
+    ).toEqual(["A\n\n- > - ```\n  >   ---\n  >   ```", "B"]);
+  });
+
+  it("does not open a fence on a backtick line whose info string contains a backtick", () => {
+    // CommonMark forbids backticks in a backtick fence's info string (so
+    // inline code is not read as a fence opener). Before the rule these lines
+    // opened a fence that swallowed the rest of the document — shielding the
+    // separator and every paragraph below it.
+    expect(splitManualSlides("A\n\n``` ```\n后续\n\n---\n\nB\n")).toEqual([
+      "A\n\n``` ```\n后续",
+      "B",
+    ]);
+    expect(splitManualSlides("A\n\n```ts`x`\n后续\n\n---\n\nB\n")).toEqual([
+      "A\n\n```ts`x`\n后续",
+      "B",
+    ]);
+    // A list or quote prefix does not change the info-string rule.
+    expect(splitManualSlides("A\n\n- > ``` ```\n后续\n\n---\n\nB\n")).toEqual([
+      "A\n\n- > ``` ```\n后续",
+      "B",
+    ]);
+  });
+
+  it("still opens tilde fences whose info string contains a backtick", () => {
+    expect(
+      splitManualSlides("A\n\n~~~ts`x`\n---\n~~~\n\n---\n\nB\n"),
+    ).toEqual(["A\n\n~~~ts`x`\n---\n~~~", "B"]);
+  });
+
   it("does not treat an indented --- as a separator", () => {
     // Four columns of indentation make the line an indented code block.
     expect(splitManualSlides("Paragraph\n\n    ---\n\nMore\n")).toBeNull();
@@ -221,6 +265,25 @@ describe("splitNaturalBlocks", () => {
   it("keeps a fence opened on a list item's line as one block", () => {
     expect(splitNaturalBlocks("- ```\n\n  code\n  ```\n")).toEqual([
       "- ```\n\n  code\n  ```",
+    ]);
+  });
+
+  it("keeps a fence behind interleaved list and quote markers as one block", () => {
+    expect(splitNaturalBlocks("> - ```\n\n>   code\n>   ```\n")).toEqual([
+      "> - ```\n\n>   code\n>   ```",
+    ]);
+    expect(splitNaturalBlocks("- > ```\n\n  > code\n  > ```\n")).toEqual([
+      "- > ```\n\n  > code\n  > ```",
+    ]);
+  });
+
+  it("does not treat a line with a backtick in the info string as a fence opener", () => {
+    // Before the info-string rule the line opened a fence that swallowed
+    // everything below it, including the genuine fence.
+    expect(splitNaturalBlocks("``` ```\n\ntext\n\n```ts\nx\n```\n")).toEqual([
+      "``` ```",
+      "text",
+      "```ts\nx\n```",
     ]);
   });
 
