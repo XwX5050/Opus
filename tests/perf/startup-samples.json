@@ -3,29 +3,29 @@
   "provenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
   "hot": [
     {
-      "spawnToEditableMs": 495,
-      "wallMs": 510,
-      "startedAt": "2026-09-05T02:31:59.821Z"
+      "spawnToEditableMs": 570,
+      "wallMs": 578,
+      "startedAt": "2026-09-12T02:53:17.825Z"
     },
     {
-      "spawnToEditableMs": 522,
-      "wallMs": 526,
-      "startedAt": "2026-09-05T02:32:00.522Z"
+      "spawnToEditableMs": 498,
+      "wallMs": 499,
+      "startedAt": "2026-09-12T02:53:18.573Z"
+    },
+    {
+      "spawnToEditableMs": 504,
+      "wallMs": 517,
+      "startedAt": "2026-09-12T02:53:19.234Z"
     },
     {
       "spawnToEditableMs": 510,
       "wallMs": 513,
-      "startedAt": "2026-09-05T02:32:01.227Z"
+      "startedAt": "2026-09-12T02:53:19.920Z"
     },
     {
-      "spawnToEditableMs": 529,
-      "wallMs": 531,
-      "startedAt": "2026-09-05T02:32:01.915Z"
-    },
-    {
-      "spawnToEditableMs": 517,
-      "wallMs": 530,
-      "startedAt": "2026-09-05T02:32:02.627Z"
+      "spawnToEditableMs": 501,
+      "wallMs": 512,
+      "startedAt": "2026-09-12T02:53:20.601Z"
     }
   ],
   "cold": [],
