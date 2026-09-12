@@ -475,19 +475,24 @@ Release procedures are documented in `docs/releasing.md`. High-level steps:
 2. Sign, notarize, staple, and verify the `.app` and `.dmg`.
 3. Publish the stapled DMG to GitHub Releases.
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which has one
-job per platform, all uploading into the same GitHub Release (same
-`tagName`): the macOS job runs `npm run check` and builds the `app,dmg`
-bundles via `tauri-action` (it also generates the release notes), the Linux
-job builds the `appimage` bundle with `NO_STRIP=1`, and the Windows job
-builds the `nsis` installer. Because `createUpdaterArtifacts` is enabled, the
-merged release also carries the updater artifacts (`latest.json`,
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs five
+jobs. `prepare-release` creates the tag's release once, as a draft, and
+generates its release notes. The three platform jobs `need` it and build into
+that draft in parallel: macOS runs `npm run check` and builds the `app,dmg`
+bundles, Linux builds the `appimage` bundle with `NO_STRIP=1`, and Windows
+builds the `nsis` installer — each uploading via `tauri-action` with
+`releaseDraft: true`, so the action reuses the existing draft instead of
+racing to create the release. `publish-release` runs only after all three
+succeeded and publishes it (`gh release edit --draft=false`), so the updater
+never sees a half-uploaded release. Because `createUpdaterArtifacts` is
+enabled, the release also carries the updater artifacts (`latest.json`,
 `Opus.app.tar.gz`, `.sig`); the app checks
 `https://github.com/XwX5050/Opus/releases/latest/download/latest.json`
 silently on startup and from a manual check in the settings dialog
 (`src/app/updates.ts`). The workflow reads the minisign private key from the
 `TAURI_SIGNING_PRIVATE_KEY` secret and Apple signing/notarization credentials
-from the `APPLE_*` secrets; without them it produces unsigned local builds.
+from the `APPLE_*` secrets — all of them or none: with none set it produces
+unsigned local builds, and a partial set fails the macOS job before it builds.
 
 ## Useful references
 

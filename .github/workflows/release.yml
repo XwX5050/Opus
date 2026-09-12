@@ -9,9 +9,85 @@ permissions:
   contents: write
 
 jobs:
+  # Creates the tag's release up front — as a draft — so the three platform
+  # jobs below all upload into a release that already exists. tauri-action's
+  # own release handling ("look up the release by tag, create it when
+  # missing") is not atomic, and two jobs that observe "no release" in the
+  # same window make the loser fail with
+  # `Validation Failed: {"code":"already_exists","field":"tag_name"}`.
+  # That is exactly how v0.1.16 failed (run 34672533046): the macOS job's
+  # lookup came back empty at 04:24:33.18, the release was created in that
+  # same second, and the macOS job's create collided 0.6s later.
+  #
+  # Keeping the release a draft until publish-release runs means a run that
+  # dies part-way leaves no half-filled release behind: the Releases page and
+  # the updater URL /releases/latest/download/latest.json keep serving the
+  # previous, complete release until every platform has uploaded.
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure the release exists as a draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists (draft or published); reusing it."
+          elif ! gh release create "$tag" \
+            --title "Opus $tag" \
+            --draft \
+            --generate-notes \
+            --verify-tag; then
+            # A concurrent run (or anything else) may have created the release
+            # between the lookup and the create; that is a reuse, not a failure.
+            gh release view "$tag" >/dev/null 2>&1 || exit 1
+            echo "Release $tag was created concurrently; reusing it."
+          fi
+
   release:
+    needs: prepare-release
     runs-on: macos-latest
     steps:
+      - name: Validate Apple signing secrets
+        env:
+          OPUS_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          OPUS_APPLE_ID: ${{ secrets.APPLE_ID }}
+          OPUS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          OPUS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "$OPUS_APPLE_ID" ]] || missing+=("APPLE_ID")
+          [[ -n "$OPUS_APPLE_PASSWORD" ]] || missing+=("APPLE_PASSWORD")
+          [[ -n "$OPUS_APPLE_TEAM_ID" ]] || missing+=("APPLE_TEAM_ID")
+
+          if [[ -z "$OPUS_APPLE_SIGNING_IDENTITY$OPUS_APPLE_ID$OPUS_APPLE_PASSWORD$OPUS_APPLE_TEAM_ID" ]]; then
+            echo "No Apple secrets configured: building unsigned artifacts (internal testing only)."
+            exit 0
+          fi
+
+          # An identity alone signs but never notarizes, and the Apple ID trio
+          # alone would notarize an unsigned bundle. Both leave the job with
+          # empty credential variables that Tauri hands to codesign/notarytool,
+          # so fail fast instead of producing a broken or unnotarized release.
+          if [[ -z "$OPUS_APPLE_SIGNING_IDENTITY" ]]; then
+            echo "::error::APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are set but APPLE_SIGNING_IDENTITY is not; notarization would run against an unsigned bundle. Configure all four APPLE_* secrets, or none of them for an unsigned build."
+            exit 1
+          fi
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::APPLE_SIGNING_IDENTITY is set but these notarization secrets are missing: ${missing[*]}. Tauri would export empty credentials to notarytool and fail. Configure all four APPLE_* secrets, or none of them for an unsigned build."
+            exit 1
+          fi
+
+          {
+            printf 'APPLE_SIGNING_IDENTITY=%s\n' "$OPUS_APPLE_SIGNING_IDENTITY"
+            printf 'APPLE_ID=%s\n' "$OPUS_APPLE_ID"
+            printf 'APPLE_PASSWORD=%s\n' "$OPUS_APPLE_PASSWORD"
+            printf 'APPLE_TEAM_ID=%s\n' "$OPUS_APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+          echo "Apple signing and notarization configured (identity: $OPUS_APPLE_SIGNING_IDENTITY)."
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -25,19 +101,6 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - run: npm run check
-      - name: Configure optional Apple signing
-        env:
-          OPUS_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          OPUS_APPLE_ID: ${{ secrets.APPLE_ID }}
-          OPUS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          OPUS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [[ -n "$OPUS_APPLE_SIGNING_IDENTITY" ]]; then
-            printf 'APPLE_SIGNING_IDENTITY=%s\n' "$OPUS_APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
-            printf 'APPLE_ID=%s\n' "$OPUS_APPLE_ID" >> "$GITHUB_ENV"
-            printf 'APPLE_PASSWORD=%s\n' "$OPUS_APPLE_PASSWORD" >> "$GITHUB_ENV"
-            printf 'APPLE_TEAM_ID=%s\n' "$OPUS_APPLE_TEAM_ID" >> "$GITHUB_ENV"
-          fi
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,19 +110,29 @@ jobs:
           # must still be defined for the bundler.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple signing/notarization. When the APPLE_* secrets are not
-          # configured the artifacts are unsigned local builds; when set,
-          # the step above exports them for Developer ID signing and notarization.
+          # APPLE_* come from the validate step above (see docs/releasing.md).
+          # When they are not configured the artifacts are unsigned local
+          # builds; when set, the step exports them for Developer ID signing
+          # and notarization.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Opus ${{ github.ref_name }}"
           generateReleaseNotes: true
+          # Upload into the draft created by prepare-release. This input is
+          # required for that: with releaseDraft=false the action looks the
+          # release up with "get release by tag", which only ever returns
+          # *published* releases, so it would try to create one and fail with
+          # already_exists. In draft mode the action scans the release list
+          # (drafts included) for the tag and reuses it, and it never publishes
+          # the release itself.
+          releaseDraft: true
           args: --bundles app,dmg
 
   # Linux AppImage. Uploads into the same release as the macOS job (same
   # tagName); tauri-action merges both platforms into the updater's
-  # latest.json. Release notes are generated by the macOS job only.
+  # latest.json. Release notes are generated by prepare-release only.
   release-linux:
+    needs: prepare-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,12 +164,14 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Opus ${{ github.ref_name }}"
+          releaseDraft: true
           args: --bundles appimage
 
   # Windows NSIS installer. Uploads into the same release as the macOS and
   # Linux jobs (same tagName); tauri-action merges all platforms into the
-  # updater's latest.json. Release notes are generated by the macOS job only.
+  # updater's latest.json. Release notes are generated by prepare-release only.
   release-windows:
+    needs: prepare-release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,4 +196,46 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Opus ${{ github.ref_name }}"
+          releaseDraft: true
           args: --bundles nsis
+
+  # Publishes the release once every platform job uploaded its artifacts, so
+  # nothing users can see (Releases page, /releases/latest/download) ever
+  # points at an incomplete release. If a platform job fails this job is
+  # skipped and the release stays a draft; see docs/releasing.md for the
+  # recovery steps.
+  publish-release:
+    needs: [release, release-linux, release-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          # A failed lookup (missing release, API hiccup) must not read as
+          # "already published" and let the run go green without publishing.
+          if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"; then
+            echo "::error::No release found for $tag; prepare-release should have created it."
+            exit 1
+          fi
+          case "$draft" in
+            true) gh release edit "$tag" --draft=false ;;
+            false) echo "Release $tag is already published; nothing to publish." ;;
+            *)
+              echo "::error::Unexpected release state for $tag: isDraft=$draft"
+              exit 1
+              ;;
+          esac
+
+          # Publishing defaults make_latest to true; if that did not happen the
+          # updater keeps serving the previous release, which is worth a warning.
+          latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+          if [[ "$latest" != "$tag" ]]; then
+            echo "::warning::/releases/latest still resolves to $latest, not $tag; existing installs keep updating from $latest."
+          fi
+
+          gh release view "$tag" --json tagName,isDraft,assets \
+            --jq '"published \(.tagName) draft=\(.isDraft) assets=\([.assets[].name] | join(", "))"'

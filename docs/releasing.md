@@ -182,20 +182,41 @@ tags) reads two groups of secrets:
 | `APPLE_SIGNING_IDENTITY` | Developer ID identity name; with it, tauri-action signs the bundle. |
 | `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Apple ID, app-specific password, and team ID for notarization. |
 
-When the `APPLE_*` secrets are missing, the workflow still runs but
-produces unsigned local builds (fine for internal testing, not for
-distribution). When they are configured, artifacts are Developer ID signed
-and notarized automatically.
+The `APPLE_*` secrets are all-or-nothing. With **none** of them set the
+workflow still runs and produces unsigned local builds (fine for internal
+testing, not for distribution). With **all four** set, artifacts are
+Developer ID signed and notarized automatically. A **partial** set fails the
+job in its first step, before anything is built: an identity without the
+notarization trio signs but never notarizes, the trio without an identity
+notarizes an unsigned bundle, and in both cases the workflow would otherwise
+export empty `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` variables that Tauri
+hands straight to `codesign`/`notarytool`. The `Validate Apple signing
+secrets` step in `.github/workflows/release.yml` names the missing secrets
+and the error tells you which side is absent.
 
 ### Publishing a release
 
-Push a `v*` tag. The workflow runs the release gate (`npm run check`), then
-`tauri-action` builds the `app,dmg` bundles and creates a GitHub Release
-for the tag; the `release-linux` and `release-windows` jobs upload their
-AppImage and NSIS artifacts into the same release. Because
-`createUpdaterArtifacts` is enabled in `tauri.conf.json`, the release also
-carries the updater artifacts: `Opus.app.tar.gz` and `Opus_*_x64-setup.exe`,
-each with its `.sig` signature, and a fresh `latest.json`.
+Push a `v*` tag. Five jobs run in a fixed order, and only the last one makes
+the release public:
+
+1. `prepare-release` creates the tag's release **once**, as a draft, with
+   auto-generated release notes. It is the only writer of the release object
+   itself, which is what keeps the platform jobs from racing each other (see
+   the tag-push checklist below).
+2. `release` (macOS), `release-linux` and `release-windows` then build in
+   parallel, each starting only after step 1, and upload their artifacts into
+   that draft: the Darwin `app,dmg` bundles after `npm run check`, the Linux
+   AppImage (with `NO_STRIP=1`), the Windows NSIS installer. Because
+   `createUpdaterArtifacts` is enabled in `tauri.conf.json`, they also upload
+   the updater artifacts (`Opus_aarch64.app.tar.gz`, `Opus_*_amd64.AppImage`,
+   `Opus_*_x64-setup.exe`, each with its `.sig` signature) and merge their
+   platform entries into `latest.json`.
+3. `publish-release` runs only after all three platform jobs succeeded, and
+   publishes the draft.
+
+Until step 3 finishes, `/releases/latest` still resolves to the previous
+release, so the Releases page never shows an empty or half-uploaded release
+and the updater never polls a `latest.json` that is missing a platform.
 
 ```sh
 git tag v0.2.0
@@ -229,8 +250,36 @@ actually happened:
   `gh run view <id> --log-failed` before retrying — never re-push a tag
   blind. A re-tag moves the tag: `git tag -d vX && git push origin
   :refs/tags/vX && git tag vX && git push origin vX` (check first with
-  `gh release view vX` whether a release was already created; if the
-  workflow failed before the release step there is nothing to clean up).
+  `gh release view vX`, which finds drafts too, whether a release was
+  already created; a rerun reuses an existing release and overwrites its
+  assets, so a leftover draft needs no cleanup unless you want it gone —
+  `gh release delete vX`).
+- **Never let two jobs create the release** (v0.1.16, run 34672533046):
+  `tauri-action` resolves the release as "look the release up by `tagName`,
+  create one when the lookup 404s", and that pair is not atomic. Two
+  platform jobs that both observe "no release yet" cost the loser its whole
+  job with
+  `##[error]Validation Failed: {"resource":"Release","code":"already_exists","field":"tag_name"}` —
+  in that run the macOS job's lookup came back empty at 04:24:33.18, the
+  release was created in the same second by another platform job, and the
+  macOS job's create collided 0.6 s later;
+  `gh run rerun 34672533046 --failed` was the only way out. The workflow now
+  creates the release once in `prepare-release`, before any build starts, and
+  every `tauri-action` step runs with `releaseDraft: true`, because with
+  `releaseDraft: false` the action looks the release up with
+  `GET /repos/{owner}/{repo}/releases/tags/{tag}`, which only ever returns
+  *published* releases (drafts come back from the release list, which is what
+  the action scans in draft mode). Keep that pairing when you add another
+  platform job: `needs: prepare-release` plus `releaseDraft: true`.
+- **A failed platform job leaves the release a draft** — by design, so that
+  the updater keeps serving the previous, complete release. Fix the failure
+  and re-run; if `gh run rerun <run-id> --failed` does not bring
+  `publish-release` back (skipped jobs are not always part of a partial
+  re-run), either re-run all jobs or publish by hand once every platform's
+  assets are there: check with `gh release view vX --json assets`, then
+  `gh release edit vX --draft=false`. Publishing makes the release the
+  updater's `latest` target, and the publish step warns if it does not, so
+  never publish before the macOS, Linux and Windows assets have all landed.
 - **GitHub API hiccups are not build failures**: an `EOF`/5xx from
   `gh run watch` means the network call broke, not the build — re-check the
   run status before assuming anything.
