@@ -1,8 +1,21 @@
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { DocumentSnapshot } from "../document/types";
 
+/**
+ * The fields a sidebar tab row renders. The props deliberately carry no
+ * document text: a whole `DocumentSnapshot` would route every open document's
+ * body through this component's props on each keystroke — and React's
+ * development build stringifies changed string props during its per-commit
+ * component-performance track, which measures as an O(document size) cost per
+ * keystroke (see docs/performance.md).
+ */
+export type TabListItem = Pick<
+  DocumentSnapshot,
+  "id" | "title" | "status" | "pendingSave"
+>;
+
 export interface TabListProps {
-  tabs: ReadonlyArray<DocumentSnapshot>;
+  tabs: ReadonlyArray<TabListItem>;
   activeId: string | null;
   onActivate(id: string): void;
   onClose(id: string): void;
