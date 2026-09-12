@@ -145,26 +145,27 @@ against the Vite dev server):
 
 | Metric | Median | p95 | Budget | Result |
 | --- | ---: | ---: | ---: | --- |
-| Hot start (unsigned dev bundle) | 517 ms | 528 ms | 1000 ms | PASS |
+| Hot start (unsigned dev bundle) | 381 ms | 415.4 ms | 1000 ms | PASS (median) |
 | Cold start | — (0/5 samples) | — | 2000 ms | skipped (needs reboot cycles) |
-| Open regular (1 MiB) | 169.2 ms | 209 ms | 1000 ms | PASS |
-| Open pressure (10 MiB) | 234.4 ms | 285.9 ms | 3000 ms | PASS |
-| Input latency, regular | 11.1 ms | 16.4 ms | 32 ms p95 | PASS |
-| Input latency, pressure | 59.2 ms | 78.4 ms | 50 ms p95 | FAIL (dev-build instrumentation, see note) |
-| Pressure save | 96 ms | 117 ms | 1000 ms | PASS |
-| Sidebar interactive | 21 ms | 267 ms | — | info |
+| Open regular (1 MiB) | 150.4 ms | 154.8 ms | 1000 ms | PASS |
+| Open pressure (10 MiB) | 203.5 ms | 204.8 ms | 3000 ms | PASS |
+| Input latency, regular | 9.1 ms | 16.4 ms | 32 ms p95 | PASS |
+| Input latency, pressure | 28.5 ms | 43.9 ms | 50 ms p95 | PASS |
+| Pressure save | 36 ms | 41 ms | 1000 ms | PASS |
+| Sidebar interactive | 21 ms | 249 ms | — | info |
 | Gatekeeper first launch | — | — | — | skipped (needs signed build) |
 
-Pressure-input note (2026-09-12): that failure is not machine drift. The
-browser-shell harness drives the app through the Vite dev server, where React
-19's development-only component-performance track
-(`logComponentRender` → `addObjectDiffToProperties` → `addValueToProperties`,
-gated only on `console.timeStamp` and `performance.measure` existing — no
-DevTools required) diffs every changed prop of every committed component and
-JSON-stringifies changed string values. Two props carry the document itself:
-`MarkdownEditor`'s controlled `value` and `TabList`'s `tabs` (whole
+Pressure-input note (2026-09-12): the pressure failure recorded in the
+2026-09-05 refresh was not machine drift. The browser-shell harness drives the
+app through the Vite dev server, where React 19's development-only
+component-performance track (`logComponentRender` →
+`addObjectDiffToProperties` → `addValueToProperties`, gated only on
+`console.timeStamp` and `performance.measure` existing — no DevTools
+required) diffs every changed prop of every committed component and
+JSON-stringifies changed string values. Two props carried the document
+itself: `MarkdownEditor`'s controlled `value` and `TabList`'s `tabs` (whole
 `DocumentSnapshot[]`, `.text` included). On the 10 MiB pressure fixture that
-is four document copies stringified per keystroke — measured at 179 M
+was four document copies stringified per keystroke — measured at 179 M
 characters per 5 keystrokes — plus multi-megabyte
 `performance.measure` `detail.devtools.properties` payloads.
 
@@ -173,21 +174,26 @@ end):
 
 | Condition | Median | p95 |
 | --- | ---: | ---: |
-| Run recorded above | 59.8 ms | 66.0 ms |
+| Pre-fix tree (2026-09-05 refresh) | 59.8 ms | 66.0 ms |
 | Same page, dev performance track disabled | 5.4 ms | 8.0 ms |
 
-So ~90 % of the measured pressure input latency is dev-build instrumentation
+So ~90 % of the measured pressure input latency was dev-build instrumentation
 proportional to document size; the app's own per-keystroke work — CodeMirror
 update, live-preview planning, React render — is ~5 ms, of which `src/editor`
 is ~0.1 ms. Re-running the 2026-07-25 source (`7875613`) in the same
 environment reproduces its passing baseline (median 28.6–30.4 ms, p95
-32.9–42.5 ms), so the regression arrived with code, not the machine: the
+32.9–42.5 ms), so the failure arrived with code, not the machine: the
 sidebar tab list (`src/app/TabList.tsx`, 2026-07-26) added the second
-document-size per-keystroke prop and doubled the instrumentation cost.
-Passing the tab list only the fields it renders (`id`, `title`, `status`,
-`pendingSave`) — measured on a patched copy of the same tree — brings the
-harness back to `overall: pass` (pressure input median 28.2 ms / p95 42.6 ms
-in the same environment); the change itself belongs to `src/app`.
+document-size per-keystroke prop and roughly doubled the instrumentation cost.
+
+Fixed on 2026-09-12: the sidebar now takes `TabListItem` — only the fields a
+row renders (`id`, `title`, `status`, `pendingSave`) — as a signature-memoized
+summary built in `AppShell`, so no document text reaches a commit path from
+the sidebar (`src/app/TabList.tsx`, `src/app/AppShell.tsx`), and the pressure
+row above is back inside budget. The 40-keystroke series is bimodal: the
+first dozen-odd keystrokes run before a document-size commit is queued
+(0–9 ms) and the steady state carries one (~25–45 ms); the budget judges p95
+across the whole series, so the steady state dominates.
 
 Budget consequence: the 50 ms p95 pressure budget is calibrated against a
 dev-build measurement whose dominant term is React's dev-only instrumentation,
@@ -198,12 +204,19 @@ build) before raising this row's budget.
 
 Hot start is a real process-spawn → editor-editable measurement of the
 locally built (ad-hoc, unnotarized) bundle; the budget officially applies
-to the signed/notarized release build on the M1/8 GB baseline.
+to the signed/notarized release build on the M1/8 GB baseline. The first
+launch after a full build is much the slowest (1952 ms in the 2026-09-12
+post-build run, against 370–420 ms for every later launch) — macOS caches
+the new binary on first execution; the harness keeps every sample and judges
+the median of five.
 
 Reaching the input budgets required removing two per-keystroke
 O(document-size) string copies: the controlled-value sync in
 `MarkdownEditor` now compares by string identity, and recovery-draft
 signatures in `useAppController` hold `{status, text}` references instead of
 a concatenated copy. A third O(document-size) term sits in React's own
-development instrumentation, not in app code — see the pressure-input note
-above.
+development instrumentation: the dev component-performance track stringifies
+a changed document-size prop once per commit, which `MarkdownEditor`'s
+controlled `value` prop still pays in dev builds — that is why the pressure
+row's margin is a few milliseconds rather than an order of magnitude. The
+sidebar stopped paying it with the 2026-09-12 fix above.
