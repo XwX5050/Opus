@@ -486,7 +486,7 @@ racing to create the release. `publish-release` runs only after all three
 succeeded and publishes it (`gh release edit --draft=false`), so the updater
 never sees a half-uploaded release. Because `createUpdaterArtifacts` is
 enabled, the release also carries the updater artifacts (`latest.json`,
-`Opus.app.tar.gz`, `.sig`); the app checks
+`Opus_aarch64.app.tar.gz`, `.sig`); the app checks
 `https://github.com/XwX5050/Opus/releases/latest/download/latest.json`
 silently on startup and from a manual check in the settings dialog
 (`src/app/updates.ts`). The workflow reads the minisign private key from the

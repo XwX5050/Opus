@@ -229,9 +229,12 @@ existing installs.
 
 ## Tag-push checklist (learned from past CI failures)
 
-A failed release run means deleting and re-pushing the tag, so verify these
-**before** pushing any `v*` tag — every item below is a failure that has
-actually happened:
+A failed release run no longer means deleting and re-pushing the tag:
+`prepare-release` creates the release as a draft, so re-running the failed
+jobs (`gh run rerun <id> --failed`) resumes into that same draft — re-tag
+only when `prepare-release` itself failed (nothing was built yet). Still,
+verify these **before** pushing any `v*` tag — every item below is a failure
+that has actually happened:
 
 - **Run the exact CI gate, not pieces of it**: `npm run check` (vitest +
   `tsc -b` + vite build + cargo test). Vitest uses esbuild and never
