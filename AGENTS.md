@@ -13,8 +13,9 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.15` (kept in sync across `package.json`,
-  `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`)
+- Version: `0.1.16` (kept in sync across `package.json`,
+  `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
+  `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first), Windows 10/11 (WebView2),
   and Linux (WebKitGTK)
 - UI language: Chinese (`zh-CN`); code, comments, and docs are in English
