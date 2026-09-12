@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useGSAP } from "@gsap/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Text } from "@codemirror/state";
@@ -252,6 +252,30 @@ export default function AppShell({
   // both expanded; the tabpanel drops its label reference otherwise.
   const activeTabVisible =
     sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
+  // Sidebar tab rows render titles and status flags only. Handing them whole
+  // document snapshots would push every open document's text through a React
+  // prop on each keystroke, and React's development build then stringifies
+  // changed string props in its per-commit component-performance track — an
+  // O(document size) cost per keystroke (see docs/performance.md). The
+  // signature covers every field the rows render, so the summary keeps a
+  // stable identity while nothing visible changes.
+  const tabItemsKey = controller.state.tabs
+    .map(
+      (tab) =>
+        `${tab.id}\u0000${tab.title}\u0000${tab.status}\u0000${tab.pendingSave?.requestId ?? ""}`,
+    )
+    .join("\u0001");
+  const tabItems = useMemo(
+    () =>
+      controller.state.tabs.map(({ id, title, status, pendingSave }) => ({
+        id,
+        title,
+        status,
+        pendingSave,
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tabItemsKey],
+  );
   const [settingsRequested, setSettingsRequested] = useState(false);
   // The shared right-click context menu; at most one open at a time. Items
   // carry their own handlers, so the state only needs the position and the
@@ -1797,7 +1821,7 @@ export default function AppShell({
                 <div id="sidebar-tabs-content">
                   {!sidebar.tabsSectionCollapsed && (
                     <TabList
-                      tabs={controller.state.tabs}
+                      tabs={tabItems}
                       activeId={controller.state.activeId}
                       onActivate={controller.activate}
                       onClose={closeTab}
