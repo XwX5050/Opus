@@ -8,10 +8,11 @@
 #   2. codesign --verify --deep --strict passes;
 #   3. entitlements are printed, and com.apple.security.app-sandbox is not
 #      true (releases ship without the App Sandbox — docs/releasing.md);
-#   4. release builds (Developer ID Application authority) pass Gatekeeper
+#   4. signed builds (Developer ID Application authority) pass Gatekeeper
 #      assessment (spctl --assess --type execute), which also proves
-#      notarization; ad-hoc/local signatures are labeled NON-RELEASE and
-#      skip Gatekeeper; any other signing authority fails the check.
+#      notarization; ad-hoc signatures are labeled UNSIGNED — the default
+#      macOS release form for this project (docs/releasing.md) — and skip
+#      Gatekeeper; any other signing authority fails the check.
 set -euo pipefail
 
 fail() {
@@ -56,11 +57,13 @@ if printf '%s\n' "$SIGNATURE_INFO" | grep -q '^Authority=Developer ID Applicatio
     || fail "Gatekeeper assessment failed — notarize and staple the build first (docs/releasing.md)"
   echo "RELEASE: valid Developer ID signature; Gatekeeper assessment accepted (notarized)."
 elif printf '%s\n' "$SIGNATURE_INFO" | grep -q '^Signature=adhoc'; then
-  echo "NON-RELEASE: ad-hoc (local unsigned) build."
-  echo "NON-RELEASE: skipping Gatekeeper assessment; do not distribute this build."
+  echo "UNSIGNED: ad-hoc build — no Developer ID signature."
+  echo "UNSIGNED: skipping Gatekeeper assessment. This is the default macOS release"
+  echo "UNSIGNED: form (docs/releasing.md); users bypass Gatekeeper on first launch"
+  echo "UNSIGNED: per the install note in the release notes."
 else
   # A signed-but-mis-signed bundle (self-signed, Apple Development, …) must
-  # never slip through as NON-RELEASE — that path is only for ad-hoc builds.
+  # never slip through as UNSIGNED — that path is only for ad-hoc builds.
   fail "signature is neither Developer ID Application nor ad-hoc; cannot classify this build"
 fi
 

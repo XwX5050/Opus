@@ -1,21 +1,27 @@
 # Releasing
 
-How to build, sign, and verify an Opus release. macOS releases are
-Developer ID signed with the Hardened Runtime, notarized by Apple, and
-distributed as a DMG — **without the App Sandbox** (design spec §5.4; see
-`src-tauri/entitlements.plist`, which must stay free of
+How to build, sign, and verify an Opus release. macOS releases ship
+**unsigned** (ad-hoc signature) by default — the project does not carry a
+paid Apple Developer Program membership, so Gatekeeper blocks the first
+launch and the release notes carry an install note telling users how to
+bypass it (System Settings → Privacy & Security → "Open Anyway", or
+`xattr -cr /Applications/Opus.app`). If Developer ID credentials are ever
+configured, the same pipeline signs with the Hardened Runtime, notarizes,
+and staples instead — **without the App Sandbox** either way (design spec
+§5.4; see `src-tauri/entitlements.plist`, which must stay free of
 `com.apple.security.app-sandbox`). Windows releases are NSIS installers
 (see §Windows builds below).
 
 ## Prerequisites
 
-- Apple Developer Program membership and a **Developer ID Application**
-  certificate (with its private key) in the release machine's keychain:
-  `security find-identity -v -p codesigning` should list
-  `Developer ID Application: <Name> (<TeamID>)`.
-- Xcode Command Line Tools (`xcode-select --install`) for `codesign`,
-  `notarytool`, `stapler`, and `spctl`.
 - Rust stable + Node 22, then `npm ci`.
+- Optional, only for a signed macOS release: Apple Developer Program
+  membership and a **Developer ID Application** certificate (with its
+  private key) in the release machine's keychain:
+  `security find-identity -v -p codesigning` should list
+  `Developer ID Application: <Name> (<TeamID>)`, plus Xcode Command Line
+  Tools (`xcode-select --install`) for `codesign`, `notarytool`, `stapler`,
+  and `spctl`.
 
 ## Environment variables
 
@@ -37,7 +43,11 @@ xcrun notarytool store-credentials "markdown-edit-notary" \
 # prompts for the app-specific password and stores it in the keychain
 ```
 
-## Build, sign, notarize, staple
+## Build, sign, notarize, staple (signed releases only)
+
+This section applies only when a Developer ID identity is available. For
+the default unsigned release, `npm run tauri build -- --bundles app,dmg`
+is the whole build step — skip straight to publishing.
 
 ```sh
 # 1. Build the .app and .dmg (signs with APPLE_SIGNING_IDENTITY when set;
@@ -68,9 +78,12 @@ xcrun stapler staple "$DMG"
 spctl --assess --type execute --verbose "$APP"   # expect: accepted
 ```
 
-Publish the stapled DMG to GitHub Releases. Never distribute unsigned or
-ad-hoc-signed builds to users; they are for local development only and the
-verification script labels them **non-release**.
+Publish the DMG to GitHub Releases. Unsigned (ad-hoc) builds are the
+project's default macOS release form: distribute them with the install
+note from `.github/workflows/release.yml` (Gatekeeper bypass on first
+launch). The verification script labels them **UNSIGNED** and skips the
+Gatekeeper assessment, which only a notarized Developer ID build can
+pass.
 
 ## Windows builds
 
@@ -121,10 +134,10 @@ npm run tauri build -- --bundles app,dmg
 ```
 
 Expected (macOS): all automated tests and budgets PASS; the `.app` and
-`.dmg` exist; the verification script reports a valid Developer ID
-signature and passes Gatekeeper assessment (with credentials configured).
-Ad-hoc local builds are labeled `NON-RELEASE` and skip Gatekeeper
-assessment — everything else is still verified. Then run the manual macOS
+`.dmg` exist; with Developer ID credentials configured the verification
+script reports a valid signature and passes Gatekeeper assessment, and
+without them it labels the ad-hoc build `UNSIGNED` and skips Gatekeeper —
+everything else is still verified. Then run the manual macOS
 acceptance checklist in `docs/testing.md`.
 
 Windows: the same gate with `npm run tauri build -- --bundles nsis` and no
@@ -177,10 +190,10 @@ tags) reads two groups of secrets:
 
 | Secret | Purpose |
 | --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/opus-updater.key` (the whole minisign secret key file). |
+| `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/opus-updater.key` (the whole minisign secret key file). Required — without it the updater channel breaks. |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Empty for the password-less key; the workflow passes through an empty value when this secret is unset. |
-| `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | Base64-encoded Developer ID `.p12` certificate and its export password. Both are required for a public release from GitHub's hosted macOS runner. |
-| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Apple ID, app-specific password, and team ID for notarization. |
+| `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | Optional. Base64-encoded Developer ID `.p12` certificate and its export password. Only needed for a signed macOS release from GitHub's hosted macOS runner. |
+| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Optional. Apple ID, app-specific password, and team ID for notarization. |
 
 Export a **Developer ID Application** certificate together with its private
 key from Keychain Access as a password-protected `.p12`, then base64-encode it
@@ -189,13 +202,14 @@ Apple values as repository Actions secrets, never as committed files or chat
 messages. See the [Tauri macOS signing guide](https://v2.tauri.app/distribute/sign/macos/)
 for certificate export and notarization setup.
 
-The release workflow requires the updater key, the Developer ID certificate
-and its password, and all three notarization credentials. Its first macOS
-step names any missing secrets and stops before building. A hosted runner
-does not have the release machine's keychain certificate, so an identity
-name alone cannot sign its app. Tauri infers the identity from the supplied
-certificate. Unsigned local builds remain available for
-internal testing, but a `v*` tag never publishes one as a public release.
+The release workflow requires only the updater key. Its first macOS step
+counts the Apple secrets: with all five configured the build is Developer ID
+signed and notarized; with none it ships unsigned and the job appends the
+unsigned-build install note to the release notes; a partially configured set
+fails the job before building, because a signed-but-unnotarized app is still
+blocked by Gatekeeper. A hosted runner does not have the release machine's
+keychain certificate, so an identity name alone cannot sign its app — Tauri
+infers the identity from the supplied certificate.
 
 ### Publishing a release
 

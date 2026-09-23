@@ -50,7 +50,15 @@ jobs:
     needs: prepare-release
     runs-on: macos-latest
     steps:
-      - name: Validate release signing secrets
+      # Apple signing is optional: with all five APPLE_* secrets the build is
+      # Developer ID signed and notarized; with none it ships unsigned (the
+      # project's default — no paid Apple Developer Program) and the release
+      # notes get a first-launch install note below. A partial set would
+      # produce a signed-but-unnotarized build that Gatekeeper still blocks,
+      # so that is a hard error. Updater signing stays mandatory: without it
+      # the minisign-signed updater channel breaks for every install.
+      - name: Check release signing secrets
+        id: signing
         env:
           OPUS_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           OPUS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -60,18 +68,24 @@ jobs:
           OPUS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          missing=()
-          [[ -n "$OPUS_TAURI_SIGNING_PRIVATE_KEY" ]] || missing+=("TAURI_SIGNING_PRIVATE_KEY")
-          [[ -n "$OPUS_APPLE_CERTIFICATE" ]] || missing+=("APPLE_CERTIFICATE")
-          [[ -n "$OPUS_APPLE_CERTIFICATE_PASSWORD" ]] || missing+=("APPLE_CERTIFICATE_PASSWORD")
-          [[ -n "$OPUS_APPLE_ID" ]] || missing+=("APPLE_ID")
-          [[ -n "$OPUS_APPLE_PASSWORD" ]] || missing+=("APPLE_PASSWORD")
-          [[ -n "$OPUS_APPLE_TEAM_ID" ]] || missing+=("APPLE_TEAM_ID")
-          if (( ${#missing[@]} > 0 )); then
-            echo "::error::A public release requires updater signing, a Developer ID certificate, and Apple notarization. Missing GitHub Secrets: ${missing[*]}."
+          if [[ -z "$OPUS_TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "::error::A public release requires updater signing. Missing GitHub Secret: TAURI_SIGNING_PRIVATE_KEY."
             exit 1
           fi
-          echo "Updater signing, Developer ID signing, and notarization credentials are configured."
+          present=0
+          for v in "$OPUS_APPLE_CERTIFICATE" "$OPUS_APPLE_CERTIFICATE_PASSWORD" "$OPUS_APPLE_ID" "$OPUS_APPLE_PASSWORD" "$OPUS_APPLE_TEAM_ID"; do
+            [[ -n "$v" ]] && present=$((present + 1))
+          done
+          if (( present == 5 )); then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Updater signing, Developer ID signing, and notarization credentials are configured."
+          elif (( present == 0 )); then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No APPLE_* secrets configured — building an UNSIGNED macOS release (no Developer ID signature, no notarization). Users bypass Gatekeeper on first launch; the release notes get an install note."
+          else
+            echo "::error::APPLE_* secrets are partially configured ($present/5). Set all five for a signed and notarized release, or unset them all for an unsigned one — a signed-but-unnotarized build is still blocked by Gatekeeper."
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -113,6 +127,34 @@ jobs:
           # the release itself.
           releaseDraft: true
           args: --bundles app,dmg
+      # Unsigned builds are blocked by Gatekeeper on first launch, so the
+      # release notes must tell users how to install. Appended once (marker
+      # guard) after tauri-action, which may regenerate the notes body.
+      - name: Append unsigned-build install note to the release notes
+        if: steps.signing.outputs.signed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          marker="<!-- unsigned-macos-note -->"
+          body="$(gh release view "$tag" --json body --jq .body)"
+          if [[ "$body" == *"$marker"* ]]; then
+            echo "Install note already present; leaving the release notes unchanged."
+            exit 0
+          fi
+          note_file="$(mktemp -t opus-release-note)"
+          trap 'rm -f "$note_file"' EXIT
+          {
+            printf '%s\n' "$body"
+            printf '\n---\n\n'
+            printf '%s\n' '<!-- unsigned-macos-note -->'
+            printf '%s\n' '**macOS 安装说明（未签名版本）**：本版本未经 Apple 签名与公证，首次打开会被 Gatekeeper 拦截（提示“无法验证开发者”或“已损坏”）。请打开「系统设置 → 隐私与安全性」，在“安全性”一栏点击 Opus 旁的「仍要打开」；若不行，在终端执行 `xattr -cr /Applications/Opus.app` 后重新打开。只需操作一次，之后升级走应用内自动更新。'
+            printf '\n'
+            printf '%s\n' '**macOS installation (unsigned build)**: this build is not Developer ID signed or notarized, so Gatekeeper blocks the first launch. Open System Settings → Privacy & Security and click “Open Anyway” next to Opus; if that is not offered, run `xattr -cr /Applications/Opus.app` in Terminal and open it again. You only need to do this once — later versions arrive through the in-app updater.'
+          } > "$note_file"
+          gh release edit "$tag" --notes-file "$note_file"
 
   # Linux AppImage. Uploads into the same release as the macOS job (same
   # tagName); tauri-action merges both platforms into the updater's

@@ -419,8 +419,12 @@ CI:
   data:`; styles allow `'unsafe-inline'`; fonts allow `data:`); the asset
   protocol is enabled with an empty static scope—scopes are granted only at
   runtime.
-- **Release signing**: Distributable builds require Developer ID signing,
-  Hardened Runtime, notarization, and stapling. See `docs/releasing.md`.
+- **Release signing**: macOS releases ship unsigned (ad-hoc) by default —
+  the project does not carry a paid Apple Developer Program membership, so
+  the release notes carry a first-launch Gatekeeper-bypass install note.
+  If Developer ID credentials are ever configured (`APPLE_*` secrets), the
+  same pipeline signs with the Hardened Runtime, notarizes, and staples.
+  Releases never enable the App Sandbox. See `docs/releasing.md`.
 - **Update key**: the updater signing key (`~/.tauri/opus-updater.key`, a
   password-less minisign key) must never be committed; losing it permanently
   breaks the automatic update channel because clients verify every
@@ -472,8 +476,9 @@ Release procedures are documented in `docs/releasing.md`. High-level steps:
    ./scripts/verify-macos-bundle.sh "src-tauri/target/release/bundle/macos/Opus.app"
    ```
 
-2. Sign, notarize, staple, and verify the `.app` and `.dmg`.
-3. Publish the stapled DMG to GitHub Releases.
+2. Signed releases only: sign, notarize, staple, and verify the `.app` and
+   `.dmg`. The default unsigned release skips this step.
+3. Publish the DMG to GitHub Releases.
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs five
 jobs. `prepare-release` creates the tag's release once, as a draft, and
@@ -489,11 +494,14 @@ enabled, the release also carries the updater artifacts (`latest.json`,
 `Opus_aarch64.app.tar.gz`, `.sig`); the app checks
 `https://github.com/XwX5050/Opus/releases/latest/download/latest.json`
 silently on startup and from a manual check in the settings dialog
-(`src/app/updates.ts`). The workflow reads the minisign private key from the
-`TAURI_SIGNING_PRIVATE_KEY` secret and a Developer ID `.p12` certificate plus
-notarization credentials from the `APPLE_*` secrets. Missing credentials fail
-the macOS job before it builds, so the workflow cannot publish an unsigned
-macOS release. Tauri infers the signing identity from the certificate.
+(`src/app/updates.ts`). The workflow requires only the minisign private key
+from the `TAURI_SIGNING_PRIVATE_KEY` secret. The `APPLE_*` secrets
+(Developer ID `.p12` certificate plus notarization credentials) are
+optional: with all five configured the macOS job signs and notarizes
+(Tauri infers the signing identity from the certificate); with none it
+publishes an unsigned build and appends the unsigned-build install note to
+the release notes; a partially configured set fails the job before it
+builds.
 
 ## Useful references
 

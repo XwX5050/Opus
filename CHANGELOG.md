@@ -15,9 +15,11 @@ All notable changes to Opus are documented in this file.
 - Release jobs now upload into one draft created before the macOS, Linux, and
   Windows builds start. The draft is published only after all three finish,
   so the updater cannot see incomplete platform artifacts.
-- The macOS release job now requires a Developer ID certificate and
-  notarization credentials before building, so an unsigned macOS app cannot
-  become a public release.
+- The macOS release job no longer blocks on Apple credentials: with no
+  Developer ID certificate configured it builds and publishes an unsigned
+  (ad-hoc) app and appends a first-launch Gatekeeper-bypass install note to
+  the release notes; a partially configured credential set still fails the
+  job. With all credentials configured it signs and notarizes as before.
 
 ## [0.1.16] - 2026-09-12
 
