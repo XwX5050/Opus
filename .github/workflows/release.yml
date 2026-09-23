@@ -92,7 +92,14 @@ jobs:
             echo "Updater signing, Developer ID signing, and notarization credentials are configured."
           elif (( present == 0 )); then
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No APPLE_* secrets configured — building an UNSIGNED macOS release (no Developer ID signature, no notarization). Users bypass Gatekeeper on first launch; the release notes get an install note."
+            # Force a proper ad-hoc re-sign during bundling. Without an
+            # identity the bundle keeps the linker's ad-hoc signature, which
+            # `codesign --verify` rejects ("code has no resources but
+            # signature indicates they must be present") — the app still runs
+            # after the Gatekeeper bypass, but the release artifact should
+            # pass the project's own verification script.
+            printf 'APPLE_SIGNING_IDENTITY=-\n' >> "$GITHUB_ENV"
+            echo "::warning::No APPLE_* secrets configured — building an UNSIGNED macOS release (ad-hoc signature, no notarization). Users bypass Gatekeeper on first launch; the release notes get an install note."
           else
             echo "::error::APPLE_* secrets are partially configured ($present/5). Set all five for a signed and notarized release, or unset them all for an unsigned one — a signed-but-unnotarized build is still blocked by Gatekeeper."
             exit 1

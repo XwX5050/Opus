@@ -149,7 +149,10 @@ checklist in `docs/testing.md`.
 **Local ad-hoc note:** without `APPLE_SIGNING_IDENTITY` or `APPLE_CERTIFICATE`, Tauri skips
 re-signing and the bundle keeps the linker's ad-hoc signature, which current
 macOS `codesign --verify` rejects ("code has no resources but signature
-indicates they must be present"). Re-sign ad-hoc before local verification:
+indicates they must be present"). The release workflow's unsigned mode
+sidesteps this by exporting `APPLE_SIGNING_IDENTITY=-`, which makes the
+bundler re-sign ad-hoc before the DMG is created. For local builds, re-sign
+ad-hoc by hand before verification:
 
 ```sh
 codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist \
@@ -205,7 +208,8 @@ for certificate export and notarization setup.
 The release workflow requires only the updater key. Its first macOS step
 counts the Apple secrets: with all five configured it exports them to
 `$GITHUB_ENV` and the build is Developer ID signed and notarized; with none
-it ships unsigned and the job appends the unsigned-build install note to the
+it exports `APPLE_SIGNING_IDENTITY=-` so the bundler re-signs ad-hoc, ships
+the unsigned build, and appends the unsigned-build install note to the
 release notes; a partially configured set fails the job before building,
 because a signed-but-unnotarized app is still blocked by Gatekeeper. The
 variables must be **absent**, not empty, in unsigned mode — an
