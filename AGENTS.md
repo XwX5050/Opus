@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.1.16` (kept in sync across `package.json`,
+- Version: `0.1.17` (kept in sync across `package.json`,
   `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
   `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first), Windows 10/11 (WebView2),
@@ -490,9 +490,10 @@ enabled, the release also carries the updater artifacts (`latest.json`,
 `https://github.com/XwX5050/Opus/releases/latest/download/latest.json`
 silently on startup and from a manual check in the settings dialog
 (`src/app/updates.ts`). The workflow reads the minisign private key from the
-`TAURI_SIGNING_PRIVATE_KEY` secret and Apple signing/notarization credentials
-from the `APPLE_*` secrets — all of them or none: with none set it produces
-unsigned local builds, and a partial set fails the macOS job before it builds.
+`TAURI_SIGNING_PRIVATE_KEY` secret and a Developer ID `.p12` certificate plus
+notarization credentials from the `APPLE_*` secrets. Missing credentials fail
+the macOS job before it builds, so the workflow cannot publish an unsigned
+macOS release. Tauri infers the signing identity from the certificate.
 
 ## Useful references
 

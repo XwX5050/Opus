@@ -24,7 +24,7 @@ Tauri's bundler picks up signing configuration from the environment:
 | Variable | Purpose |
 | --- | --- |
 | `APPLE_SIGNING_IDENTITY` | Full identity name, e.g. `Developer ID Application: Your Name (TEAMID)`. With this set, `tauri build` signs every executable in the bundle (app binary + embedded helpers) with this identity and the Hardened Runtime. |
-| `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | Alternative: base64-encoded `.p12` certificate and its password (CI-style setup without a keychain import). |
+| `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | Base64-encoded Developer ID `.p12` certificate and its export password for CI. Tauri imports it and can infer the signing identity. |
 | `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Apple ID + app-specific password + team ID, used by Tauri for notarization. |
 | `APPLE_API_KEY` / `APPLE_API_ISSUER` / `APPLE_API_KEY_PATH` | Alternative: App Store Connect API key credentials for notarization. |
 
@@ -133,7 +133,7 @@ bundle-verification script; the installer must exist in
 warning on first run is expected. Then run the manual Windows acceptance
 checklist in `docs/testing.md`.
 
-**Local ad-hoc note:** without `APPLE_SIGNING_IDENTITY`, Tauri skips
+**Local ad-hoc note:** without `APPLE_SIGNING_IDENTITY` or `APPLE_CERTIFICATE`, Tauri skips
 re-signing and the bundle keeps the linker's ad-hoc signature, which current
 macOS `codesign --verify` rejects ("code has no resources but signature
 indicates they must be present"). Re-sign ad-hoc before local verification:
@@ -178,21 +178,24 @@ tags) reads two groups of secrets:
 | Secret | Purpose |
 | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/opus-updater.key` (the whole minisign secret key file). |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Empty for the password-less key; the secret must still be defined so the workflow passes it through. |
-| `APPLE_SIGNING_IDENTITY` | Developer ID identity name; with it, tauri-action signs the bundle. |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Empty for the password-less key; the workflow passes through an empty value when this secret is unset. |
+| `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` | Base64-encoded Developer ID `.p12` certificate and its export password. Both are required for a public release from GitHub's hosted macOS runner. |
 | `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Apple ID, app-specific password, and team ID for notarization. |
 
-The `APPLE_*` secrets are all-or-nothing. With **none** of them set the
-workflow still runs and produces unsigned local builds (fine for internal
-testing, not for distribution). With **all four** set, artifacts are
-Developer ID signed and notarized automatically. A **partial** set fails the
-job in its first step, before anything is built: an identity without the
-notarization trio signs but never notarizes, the trio without an identity
-notarizes an unsigned bundle, and in both cases the workflow would otherwise
-export empty `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` variables that Tauri
-hands straight to `codesign`/`notarytool`. The `Validate Apple signing
-secrets` step in `.github/workflows/release.yml` names the missing secrets
-and the error tells you which side is absent.
+Export a **Developer ID Application** certificate together with its private
+key from Keychain Access as a password-protected `.p12`, then base64-encode it
+for `APPLE_CERTIFICATE` (`openssl base64 -A -in certificate.p12`). Add the five
+Apple values as repository Actions secrets, never as committed files or chat
+messages. See the [Tauri macOS signing guide](https://v2.tauri.app/distribute/sign/macos/)
+for certificate export and notarization setup.
+
+The release workflow requires the updater key, the Developer ID certificate
+and its password, and all three notarization credentials. Its first macOS
+step names any missing secrets and stops before building. A hosted runner
+does not have the release machine's keychain certificate, so an identity
+name alone cannot sign its app. Tauri infers the identity from the supplied
+certificate. Unsigned local builds remain available for
+internal testing, but a `v*` tag never publishes one as a public release.
 
 ### Publishing a release
 

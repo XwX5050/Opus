@@ -50,44 +50,28 @@ jobs:
     needs: prepare-release
     runs-on: macos-latest
     steps:
-      - name: Validate Apple signing secrets
+      - name: Validate release signing secrets
         env:
-          OPUS_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          OPUS_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          OPUS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          OPUS_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           OPUS_APPLE_ID: ${{ secrets.APPLE_ID }}
           OPUS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           OPUS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           missing=()
+          [[ -n "$OPUS_TAURI_SIGNING_PRIVATE_KEY" ]] || missing+=("TAURI_SIGNING_PRIVATE_KEY")
+          [[ -n "$OPUS_APPLE_CERTIFICATE" ]] || missing+=("APPLE_CERTIFICATE")
+          [[ -n "$OPUS_APPLE_CERTIFICATE_PASSWORD" ]] || missing+=("APPLE_CERTIFICATE_PASSWORD")
           [[ -n "$OPUS_APPLE_ID" ]] || missing+=("APPLE_ID")
           [[ -n "$OPUS_APPLE_PASSWORD" ]] || missing+=("APPLE_PASSWORD")
           [[ -n "$OPUS_APPLE_TEAM_ID" ]] || missing+=("APPLE_TEAM_ID")
-
-          if [[ -z "$OPUS_APPLE_SIGNING_IDENTITY$OPUS_APPLE_ID$OPUS_APPLE_PASSWORD$OPUS_APPLE_TEAM_ID" ]]; then
-            echo "No Apple secrets configured: building unsigned artifacts (internal testing only)."
-            exit 0
-          fi
-
-          # An identity alone signs but never notarizes, and the Apple ID trio
-          # alone would notarize an unsigned bundle. Both leave the job with
-          # empty credential variables that Tauri hands to codesign/notarytool,
-          # so fail fast instead of producing a broken or unnotarized release.
-          if [[ -z "$OPUS_APPLE_SIGNING_IDENTITY" ]]; then
-            echo "::error::APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are set but APPLE_SIGNING_IDENTITY is not; notarization would run against an unsigned bundle. Configure all four APPLE_* secrets, or none of them for an unsigned build."
-            exit 1
-          fi
           if (( ${#missing[@]} > 0 )); then
-            echo "::error::APPLE_SIGNING_IDENTITY is set but these notarization secrets are missing: ${missing[*]}. Tauri would export empty credentials to notarytool and fail. Configure all four APPLE_* secrets, or none of them for an unsigned build."
+            echo "::error::A public release requires updater signing, a Developer ID certificate, and Apple notarization. Missing GitHub Secrets: ${missing[*]}."
             exit 1
           fi
-
-          {
-            printf 'APPLE_SIGNING_IDENTITY=%s\n' "$OPUS_APPLE_SIGNING_IDENTITY"
-            printf 'APPLE_ID=%s\n' "$OPUS_APPLE_ID"
-            printf 'APPLE_PASSWORD=%s\n' "$OPUS_APPLE_PASSWORD"
-            printf 'APPLE_TEAM_ID=%s\n' "$OPUS_APPLE_TEAM_ID"
-          } >> "$GITHUB_ENV"
-          echo "Apple signing and notarization configured (identity: $OPUS_APPLE_SIGNING_IDENTITY)."
+          echo "Updater signing, Developer ID signing, and notarization credentials are configured."
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -110,10 +94,12 @@ jobs:
           # must still be defined for the bundler.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # APPLE_* come from the validate step above (see docs/releasing.md).
-          # When they are not configured the artifacts are unsigned local
-          # builds; when set, the step exports them for Developer ID signing
-          # and notarization.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Tauri infers the Developer ID identity from APPLE_CERTIFICATE.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Opus ${{ github.ref_name }}"

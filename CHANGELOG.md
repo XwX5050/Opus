@@ -2,6 +2,23 @@
 
 All notable changes to Opus are documented in this file.
 
+## [0.1.17] - 2026-09-23
+
+### Fixed
+
+- Task-list checkboxes now show the checkmark as soon as a click completes,
+  in sync with the checked task's strikethrough. The strikethrough appears
+  immediately, and the checkbox's scale feedback finishes in 100 ms.
+
+### Release
+
+- Release jobs now upload into one draft created before the macOS, Linux, and
+  Windows builds start. The draft is published only after all three finish,
+  so the updater cannot see incomplete platform artifacts.
+- The macOS release job now requires a Developer ID certificate and
+  notarization credentials before building, so an unsigned macOS app cannot
+  become a public release.
+
 ## [0.1.16] - 2026-09-12
 
 Bug-fix release: the findings of the 0.1.15 bug and security audit, the
