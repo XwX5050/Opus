@@ -602,6 +602,39 @@ test("switches between editing and reading modes", async ({
   await expect(content).not.toContainText("**");
 });
 
+test("checks task boxes and shows done text in the first click frame", async ({ page }) => {
+  await seed(page, {
+    files: [{ path: "/docs/tasks.md", text: "outside\n\n- [ ] todo\n\nend" }],
+    session: sessionWith("/docs/tasks.md"),
+  });
+
+  const checkbox = page.locator(".cm-live-preview-task-checkbox");
+  await checkbox.waitFor();
+  const content = editorContent(page);
+  await content.evaluate((element) => {
+    element.addEventListener("click", (event) => {
+      const input = event.target as HTMLInputElement;
+      const done = input.closest(".cm-line")?.querySelector<HTMLElement>(
+        ".cm-live-preview-task-done",
+      );
+      element.setAttribute("data-task-click-opacity", done ? getComputedStyle(done).opacity : "missing");
+      requestAnimationFrame(() => {
+        element.setAttribute("data-task-frame-checked", String(input.checked));
+      });
+    }, { once: true });
+  });
+  await checkbox.click();
+  await expect(content).toHaveAttribute("data-task-frame-checked", "true");
+  await expect(content).toHaveAttribute("data-task-click-opacity", "1");
+  await expect(checkbox).toBeChecked();
+  await expect(checkbox).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator(".cm-live-preview-task-done")).toHaveText("todo");
+
+  await checkbox.click();
+  await expect(checkbox).not.toBeChecked();
+  await expect(page.locator(".cm-live-preview-task-done")).toHaveCount(0);
+});
+
 test("opens, navigates, collapses, and resizes the document outline", async ({
   page,
 }) => {

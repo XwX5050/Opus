@@ -544,63 +544,20 @@ const syncTaskCheckboxDom = (dom: HTMLElement, checked: boolean): void => {
   dom.setAttribute("aria-label", checked ? "已完成任务" : "未完成任务");
 };
 
-// A crisp pop on the checkbox itself when a click toggles it, reusing the
-// shared motion tokens. Skipped when the user prefers reduced motion.
+// Keep the checkbox response small and quick; the native checkmark is already
+// visible when this runs. Skipped when the user prefers reduced motion.
 const animateTaskCheckboxPop = (checkbox: HTMLInputElement): void => {
   if (prefersReducedMotion()) return;
   gsap.fromTo(
     checkbox,
-    { scale: 0.8 },
+    { scale: 0.94 },
     {
       scale: 1,
-      duration: MOTION.hover.enter.duration,
-      ease: MOTION.hover.enter.ease,
+      duration: 0.1,
+      ease: MOTION.easing,
       overwrite: "auto",
     },
   );
-};
-
-// One-shot opacity settle for the strike-through text that just appeared;
-// the tween runs on the element regardless of its decoration lifetime.
-const animateTaskDoneReveal = (checkbox: HTMLInputElement): void => {
-  if (prefersReducedMotion()) return;
-  const done = checkbox
-    .closest(".cm-line")
-    ?.querySelector<HTMLElement>(".cm-live-preview-task-done");
-  if (!done) return;
-  gsap.fromTo(
-    done,
-    { opacity: 0 },
-    {
-      opacity: 1,
-      duration: 0.2,
-      ease: MOTION.easing,
-      clearProps: "opacity",
-    },
-  );
-};
-
-// Browsers flip a checkbox before click listeners run and revert it after
-// dispatch when the click is canceled (as this handler does), so the
-// updateDOM sync inside the dispatch is undone before the event finishes.
-// Re-sync from the document once the current event has fully completed.
-const resyncTaskCheckboxAfterToggle = (
-  view: EditorView,
-  checkbox: HTMLInputElement,
-  from: number,
-  to: number,
-): void => {
-  queueMicrotask(() => {
-    // The widget may have been rebuilt — and this node removed — before
-    // the microtask runs; never re-sync a detached checkbox.
-    if (!checkbox.isConnected) return;
-    const source = view.state.sliceDoc(from, to);
-    if (source === "[x]" || source === "[X]") {
-      syncTaskCheckboxDom(checkbox, true);
-    } else if (source === "[ ]") {
-      syncTaskCheckboxDom(checkbox, false);
-    }
-  });
 };
 
 class TaskCheckboxWidget extends WidgetType {
@@ -640,15 +597,23 @@ class TaskCheckboxWidget extends WidgetType {
     checkbox.setAttribute("role", "checkbox");
     syncTaskCheckboxDom(checkbox, this.checked);
     const toggle = (event: Event) => {
-      event.preventDefault();
       // Widget handlers bypass CodeMirror's editing pipeline, so the toggle
       // must honor read-only views (reading mode, translation preview) itself.
-      if (view.state.readOnly) return;
+      if (view.state.readOnly) {
+        event.preventDefault();
+        return;
+      }
       // A double-click fires two clicks; ignore the second one so the
       // checkbox does not toggle back in place.
-      if ((event as MouseEvent).detail > 1) return;
+      if ((event as MouseEvent).detail > 1) {
+        event.preventDefault();
+        return;
+      }
       const source = view.state.sliceDoc(this.from, this.to);
-      if (source !== "[ ]" && source !== "[x]" && source !== "[X]") return;
+      if (source !== "[ ]" && source !== "[x]" && source !== "[X]") {
+        event.preventDefault();
+        return;
+      }
       const checked = source === "[x]" || source === "[X]";
       view.dispatch({
         changes: {
@@ -657,12 +622,11 @@ class TaskCheckboxWidget extends WidgetType {
           insert: checked ? "[ ]" : "[x]",
         },
       });
-      // The dispatch may rebuild the widget and detach this node; the resync
-      // and the animations must not run against stale DOM.
+      // The browser's native click has already flipped the checkbox. Keep
+      // that immediate feedback; canceling this click would flip it back.
+      // The dispatch may rebuild the widget and detach this node.
       if (!checkbox.isConnected) return;
-      resyncTaskCheckboxAfterToggle(view, checkbox, this.from, this.to);
       animateTaskCheckboxPop(checkbox);
-      animateTaskDoneReveal(checkbox);
     };
     // Keep focus and the cursor where they are; the click still fires.
     checkbox.addEventListener("mousedown", (event) => event.preventDefault());

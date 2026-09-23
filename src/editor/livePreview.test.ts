@@ -705,16 +705,15 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
-  it("reuses the checkbox DOM across toggles instead of rebuilding it", async () => {
+  it("reuses the checkbox DOM and checks it as soon as the click completes", () => {
     const view = createView("- [ ] todo\n\noutside");
     const checkbox = view.dom.querySelector<HTMLInputElement>(
       ".cm-live-preview-task-checkbox",
     )!;
     checkbox.click();
     expect(view.state.doc.toString()).toBe("- [x] todo\n\noutside");
-    // The widget was updated in place: same node, synced state. The DOM
-    // sync completes on a microtask after the click's native activation.
-    await Promise.resolve();
+    // The native checkbox and the Markdown-backed decoration agree before
+    // another event or animation frame can show an empty box beside done text.
     expect(view.dom.querySelector(".cm-live-preview-task-checkbox")).toBe(checkbox);
     expect(checkbox.checked).toBe(true);
     expect(checkbox).toHaveAttribute("aria-checked", "true");
@@ -742,17 +741,15 @@ describe("livePreviewExtension", () => {
     view.destroy();
   });
 
-  it("does not re-sync a checkbox detached before the post-click resync runs", async () => {
+  it("rebinds a checkbox after its task moves in the document", () => {
     const view = createView("- [ ] todo\n\noutside");
     const checkbox = view.dom.querySelector<HTMLInputElement>(
       ".cm-live-preview-task-checkbox",
     )!;
     checkbox.click();
     expect(view.state.doc.toString()).toBe("- [x] todo\n\noutside");
-    // A change elsewhere shifts the task and rebuilds its widget, detaching
-    // the node the click handler captured before the resync microtask runs.
-    // The stale range then reads as "[x]", which would flip the detached
-    // node if the guard did not stop the microtask first.
+    // A change elsewhere shifts the task and rebuilds its widget with a
+    // click listener for the new document range.
     view.dispatch({ changes: { from: 0, insert: "xx[x]\n" } });
     const rebuilt = view.dom.querySelector<HTMLInputElement>(
       ".cm-live-preview-task-checkbox",
@@ -760,8 +757,9 @@ describe("livePreviewExtension", () => {
     expect(checkbox.isConnected).toBe(false);
     expect(rebuilt).not.toBe(checkbox);
     expect(rebuilt!.checked).toBe(true);
-    await Promise.resolve();
-    expect(checkbox.checked).toBe(false);
+    rebuilt!.click();
+    expect(view.state.doc.toString()).toBe("xx[x]\n- [ ] todo\n\noutside");
+    expect(rebuilt!.checked).toBe(false);
     view.destroy();
   });
 
