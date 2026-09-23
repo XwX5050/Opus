@@ -51,7 +51,8 @@ jobs:
     runs-on: macos-latest
     steps:
       # Apple signing is optional: with all five APPLE_* secrets the build is
-      # Developer ID signed and notarized; with none it ships unsigned (the
+      # Developer ID signed and notarized (the step exports them to
+      # $GITHUB_ENV for tauri-action); with none it ships unsigned (the
       # project's default — no paid Apple Developer Program) and the release
       # notes get a first-launch install note below. A partial set would
       # produce a signed-but-unnotarized build that Gatekeeper still blocks,
@@ -78,6 +79,16 @@ jobs:
           done
           if (( present == 5 )); then
             echo "signed=true" >> "$GITHUB_OUTPUT"
+            # Export only in signed mode: an empty-but-present
+            # APPLE_CERTIFICATE makes the bundler attempt a keychain import
+            # and fail, so unsigned mode must leave the variables ABSENT.
+            {
+              printf 'APPLE_CERTIFICATE=%s\n' "$OPUS_APPLE_CERTIFICATE"
+              printf 'APPLE_CERTIFICATE_PASSWORD=%s\n' "$OPUS_APPLE_CERTIFICATE_PASSWORD"
+              printf 'APPLE_ID=%s\n' "$OPUS_APPLE_ID"
+              printf 'APPLE_PASSWORD=%s\n' "$OPUS_APPLE_PASSWORD"
+              printf 'APPLE_TEAM_ID=%s\n' "$OPUS_APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
             echo "Updater signing, Developer ID signing, and notarization credentials are configured."
           elif (( present == 0 )); then
             echo "signed=false" >> "$GITHUB_OUTPUT"
@@ -108,12 +119,12 @@ jobs:
           # must still be defined for the bundler.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Apple signing/notarization: the check step above exports the five
+          # APPLE_* variables via $GITHUB_ENV only when all are configured.
+          # They must NOT be declared here — an empty-but-present
+          # APPLE_CERTIFICATE makes tauri's bundler run `security import` and
+          # fail; absent variables are what produce the unsigned build.
           # Tauri infers the Developer ID identity from APPLE_CERTIFICATE.
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Opus ${{ github.ref_name }}"

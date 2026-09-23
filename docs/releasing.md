@@ -203,13 +203,16 @@ messages. See the [Tauri macOS signing guide](https://v2.tauri.app/distribute/si
 for certificate export and notarization setup.
 
 The release workflow requires only the updater key. Its first macOS step
-counts the Apple secrets: with all five configured the build is Developer ID
-signed and notarized; with none it ships unsigned and the job appends the
-unsigned-build install note to the release notes; a partially configured set
-fails the job before building, because a signed-but-unnotarized app is still
-blocked by Gatekeeper. A hosted runner does not have the release machine's
-keychain certificate, so an identity name alone cannot sign its app — Tauri
-infers the identity from the supplied certificate.
+counts the Apple secrets: with all five configured it exports them to
+`$GITHUB_ENV` and the build is Developer ID signed and notarized; with none
+it ships unsigned and the job appends the unsigned-build install note to the
+release notes; a partially configured set fails the job before building,
+because a signed-but-unnotarized app is still blocked by Gatekeeper. The
+variables must be **absent**, not empty, in unsigned mode — an
+empty-but-present `APPLE_CERTIFICATE` makes the bundler attempt a keychain
+import (`security import`) and fail. A hosted runner does not have the
+release machine's keychain certificate, so an identity name alone cannot
+sign its app — Tauri infers the identity from the supplied certificate.
 
 ### Publishing a release
 
