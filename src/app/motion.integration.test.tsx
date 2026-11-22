@@ -8,7 +8,11 @@ import AppShell from "./AppShell";
 
 vi.mock("../motion/motionRuntime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../motion/motionRuntime")>();
-  return { ...actual, animatePanelIntro: vi.fn(actual.animatePanelIntro) };
+  return {
+    ...actual,
+    animatePanelIntro: vi.fn(actual.animatePanelIntro),
+    animateListIntro: vi.fn(actual.animateListIntro),
+  };
 });
 
 const file: OpenedFile = {
@@ -28,6 +32,7 @@ const panel = (selector: string): HTMLElement => {
 
 const panelIntroMock = () => vi.mocked(motionRuntime.animatePanelIntro);
 const panelIntroTargets = () => panelIntroMock().mock.calls.map(([target]) => target);
+const listIntroMock = () => vi.mocked(motionRuntime.animateListIntro);
 
 describe("AppShell motion contracts", () => {
   it("exposes scoped motion targets without changing sidebar ARIA state", async () => {
@@ -52,7 +57,7 @@ describe("AppShell motion contracts", () => {
     expect(sidebar).toHaveAttribute("inert", "");
   });
 
-  it("animates only the outline when the right sidebar expands", async () => {
+  it("keeps the right expansion on CSS transitions without GSAP entrance timelines", async () => {
     const user = userEvent.setup();
     render(
       <AppShell port={new MemoryDocumentPort(new Map([[file.path, file]]))} />,
@@ -61,14 +66,16 @@ describe("AppShell motion contracts", () => {
     const sidebar = panel(".sidebar-rail");
     const outline = panel(".outline-rail");
     panelIntroMock().mockClear();
+    listIntroMock().mockClear();
 
     await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
 
-    expect(panelIntroTargets()).toContain(outline);
+    expect(panelIntroTargets()).not.toContain(outline);
     expect(panelIntroTargets()).not.toContain(sidebar);
+    expect(listIntroMock()).not.toHaveBeenCalled();
   });
 
-  it("animates only the explorer when the left sidebar expands", async () => {
+  it("keeps the left expansion on CSS transitions without GSAP entrance timelines", async () => {
     const user = userEvent.setup();
     render(
       <AppShell port={new MemoryDocumentPort(new Map([[file.path, file]]))} />,
@@ -79,10 +86,12 @@ describe("AppShell motion contracts", () => {
     const sidebar = panel(".sidebar-rail");
     const outline = panel(".outline-rail");
     panelIntroMock().mockClear();
+    listIntroMock().mockClear();
 
     await user.click(screen.getByRole("button", { name: "展开侧栏" }));
 
-    expect(panelIntroTargets()).toContain(sidebar);
+    expect(panelIntroTargets()).not.toContain(sidebar);
     expect(panelIntroTargets()).not.toContain(outline);
+    expect(listIntroMock()).not.toHaveBeenCalled();
   });
 });

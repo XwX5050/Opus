@@ -19,6 +19,8 @@ const SEARCH_DEBOUNCE_MS = 250;
 interface WorkspaceSearchProps {
   readonly port: DocumentPort;
   readonly workspace: WorkspaceRoot | null;
+  readonly dedicated?: boolean;
+  readonly autoFocus?: boolean;
   onOpenResult(match: WorkspaceSearchMatch): void;
 }
 
@@ -53,6 +55,8 @@ function MatchingLine({ match }: { readonly match: WorkspaceSearchMatch }) {
 export default function WorkspaceSearch({
   port,
   workspace,
+  dedicated = false,
+  autoFocus = false,
   onOpenResult,
 }: WorkspaceSearchProps) {
   const root = workspace?.path ?? null;
@@ -105,13 +109,13 @@ export default function WorkspaceSearch({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || dedicated) return;
     const closeOutside = (event: PointerEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
-  }, [open]);
+  }, [open, dedicated]);
 
   const matches = state.phase === "ready" ? state.result.matches : [];
   const groups = useMemo(() => {
@@ -168,7 +172,11 @@ export default function WorkspaceSearch({
   };
 
   return (
-    <search className="workspace-search" ref={containerRef}>
+    <search
+      className={`workspace-search${dedicated ? " workspace-search-dedicated" : ""}`}
+      ref={containerRef}
+    >
+      {dedicated && <div className="workspace-search-title"><h2>搜索</h2></div>}
       <form onSubmit={onSubmit} className="workspace-search-form">
         <label className="visually-hidden" htmlFor={inputId}>工作区全文搜索</label>
         <input
@@ -180,8 +188,9 @@ export default function WorkspaceSearch({
           autoCapitalize="none"
           spellCheck={false}
           enterKeyHint="search"
+          autoFocus={autoFocus}
           disabled={!root}
-          placeholder={root ? "搜索文件夹中的 Markdown…" : "打开文件夹后搜索全文"}
+          placeholder={root ? (dedicated ? "搜索 Markdown 文件…" : "搜索文件夹中的 Markdown…") : "打开文件夹后搜索全文"}
           value={query}
           role="combobox"
           aria-expanded={open && Boolean(query.trim())}

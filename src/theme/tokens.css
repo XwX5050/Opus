@@ -22,13 +22,14 @@
   --font-ui-size-large: 14px;
 
   /* Density: one spacing scale for the whole shell. */
+  --activity-rail-width: 36px;
   --space-0-5: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
-  /* Quote callout card padding: generous so the accent bar floats inside. */
+  /* Quote callout card padding. */
   --space-quote-block: 20px;
   --space-quote-inline: 24px;
 
@@ -37,6 +38,7 @@
   --radius-medium: 8px;
   --radius-large: 12px;
   --radius-panel: 32px;
+  --radius-pill: 999px;
 
   /* Editor reading column; overridden per preference by useTheme. */
   --editor-content-width: 760px;
@@ -64,8 +66,8 @@
      (window_background.rs) must stay exactly this hex. */
   --canvas: #0b0b0e;
   /* Surfaces sit close to the near-black canvas; depth comes from the solid
-     values, not gradients. Dialogs, menus and the reading column's inline
-     code share --surface, the deepest lifted tone. */
+     values, not gradients. Dialogs and menus share --surface, the deepest
+     lifted tone. */
   --surface: #121318;
   /* Panels (sidebars): a flat tone one step above the near-black canvas —
      depth comes from the solid value, not gradients. */
@@ -77,14 +79,16 @@
   --surface-hover: #1a1b22;
   --surface-active: #22232a;
   --surface-inset: #060608;
-  /* Quote callout card: just perceptibly lifted from the canvas so block
-     quotes read as quiet note cards; the accent bar is a soft neutral gray. */
+  /* Quote callout card: just perceptibly lifted from the canvas. */
   --surface-quote: #131419;
-  --quote-accent: #46474e;
   --text-primary: #e8e8ec;
   --text-secondary: #aaacb5;
   --text-muted: #757680;
   --divider: rgba(255, 255, 255, 0.08);
+  --resize-indicator-core: #d0d0d4;
+  --resize-indicator-glow:
+    0 0 6px rgba(208, 208, 212, 0.45),
+    0 0 16px rgba(208, 208, 212, 0.18);
   --accent: #7f6df2;
   --accent-soft: rgba(127, 109, 242, 0.18);
   --text-on-accent: #ffffff;
@@ -93,7 +97,7 @@
   --window-close-hover: #e81123;
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.45);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.6);
-  --shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-hover: 0 6px 16px -4px rgba(0, 0, 0, 0.4);
   --backdrop: rgba(0, 0, 0, 0.6);
   --focus-ring: rgba(127, 109, 242, 0.45);
   --selection: rgba(127, 109, 242, 0.3);
@@ -126,11 +130,14 @@
   --surface-active: #e2e2e8;
   --surface-inset: #ececf0;
   --surface-quote: #f1f1f5;
-  --quote-accent: #9a9ca4;
   --text-primary: #26262c;
   --text-secondary: #55575f;
   --text-muted: #8a8c94;
   --divider: rgba(0, 0, 0, 0.08);
+  --resize-indicator-core: #b8b8be;
+  --resize-indicator-glow:
+    0 0 6px rgba(184, 184, 190, 0.5),
+    0 0 16px rgba(184, 184, 190, 0.2);
   --accent: #6c56d9;
   --accent-soft: rgba(108, 86, 217, 0.12);
   --text-on-accent: #ffffff;
@@ -138,7 +145,7 @@
   --window-close-hover: #e81123;
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.1);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
-  --shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-hover: 0 6px 16px -4px rgba(0, 0, 0, 0.18);
   --backdrop: rgba(0, 0, 0, 0.3);
   --focus-ring: rgba(108, 86, 217, 0.4);
   --selection: rgba(108, 86, 217, 0.15);

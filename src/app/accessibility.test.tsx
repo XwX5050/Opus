@@ -27,8 +27,8 @@ const replaceEditorText = (text: string) => {
 // whether or not the explorer is open or collapsed.
 const activityRail = () =>
   screen.getByRole("navigation", { name: "活动栏" });
-const activityRailSettingsButton = () =>
-  within(activityRail()).getByRole("button", { name: "设置" });
+const sidebarSettingsButton = () =>
+  within(screen.getByRole("complementary", { name: "侧栏" })).getByRole("button", { name: "设置" });
 
 // Opening a file, folder, or dialog — click -> async port call -> controller
 // state -> render — spans several React commits plus CodeMirror construction
@@ -54,14 +54,14 @@ describe("accessibility: roles and names", () => {
     expect(
       within(titlebar).queryByRole("button", { name: "设置" }),
     ).not.toBeInTheDocument();
-    expect(activityRailSettingsButton()).toBeVisible();
+    expect(sidebarSettingsButton()).toBeVisible();
     expect(screen.getAllByRole("button", { name: "设置" })).toHaveLength(1);
     for (const button of within(titlebar).queryAllByRole("button")) {
       expect(button).not.toHaveAttribute("data-tauri-drag-region");
     }
   });
 
-  it("exposes the activity rail as a navigation landmark with one explorer toggle", async () => {
+  it("places file and search actions in the activity rail and the explorer toggle in the titlebar", async () => {
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", file("/notes/a.md")]]),
@@ -71,17 +71,16 @@ describe("accessibility: roles and names", () => {
     await user.click(screen.getByRole("button", { name: "打开文件夹" }));
 
     const rail = activityRail();
-    expect(within(rail).getByRole("button", { name: "收起侧栏" })).toHaveAttribute(
+    expect(within(rail).getByRole("button", { name: "文件" })).toBeVisible();
+    expect(within(rail).getByRole("button", { name: "搜索" })).toBeVisible();
+    expect(within(rail).queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+    expect(within(rail).queryByRole("button", { name: "收起侧栏" })).not.toBeInTheDocument();
+    const titlebar = screen.getByRole("banner", { name: "应用标题栏" });
+    expect(within(titlebar).getByRole("button", { name: "收起侧栏" })).toHaveAttribute(
       "aria-controls",
       "app-sidebar",
     );
     expect(screen.getAllByRole("button", { name: "收起侧栏" })).toHaveLength(1);
-    expect(
-      within(screen.getByRole("banner", { name: "应用标题栏" })).queryByRole(
-        "button",
-        { name: "收起侧栏" },
-      ),
-    ).not.toBeInTheDocument();
   });
 
   it("tracks the explorer collapse state on the activity rail", async () => {
@@ -204,7 +203,7 @@ describe("accessibility: roles and names", () => {
     const user = userEvent.setup();
     render(<AppShell port={new MemoryDocumentPort(new Map())} />);
 
-    await user.click(activityRailSettingsButton());
+    await user.click(sidebarSettingsButton());
     // The role query's name comes from the dialog's visible heading:
     // aria-labelledby -> settings-dialog-title (h2 "设置").
     const dialog = screen.getByRole("dialog", { name: "设置" });
@@ -396,7 +395,7 @@ describe("accessibility: keyboard-only flows", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    activityRailSettingsButton().focus();
+    sidebarSettingsButton().focus();
     await user.keyboard("{Enter}");
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const themeSelect = within(dialog).getByLabelText("主题");
@@ -415,7 +414,7 @@ describe("accessibility: keyboard-only flows", () => {
     await waitFor(
       () => {
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-        expect(activityRailSettingsButton()).toHaveFocus();
+        expect(sidebarSettingsButton()).toHaveFocus();
       },
       { timeout: APP_ASYNC_TIMEOUT_MS },
     );
@@ -468,16 +467,14 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
-  it("styles blockquote lines as continuous surface cards", () => {
+  it("styles blockquote lines as continuous surface cards without an accent bar", () => {
     expect(appCss).toMatch(
       /\.cm-live-preview-quote\s*\{[^}]*color:\s*var\(--text-primary\);/s,
     );
     expect(appCss).toMatch(
       /\.markdown-editor \.cm-line\.cm-live-preview-quote-line\s*\{[^}]*background:\s*var\(--surface-quote\);[^}]*padding-inline:\s*var\(--space-quote-inline\);/s,
     );
-    expect(appCss).toMatch(
-      /\.markdown-editor \.cm-line\.cm-live-preview-quote-line::before\s*\{[^}]*position:\s*absolute;[^}]*width:\s*var\(--space-1\);[^}]*background:\s*var\(--quote-accent\);/s,
-    );
+    expect(appCss).not.toMatch(/\.cm-line\.cm-live-preview-quote-line::before/);
     expect(appCss).toMatch(
       /\.markdown-editor \.cm-line\.cm-live-preview-quote-line-single\s*\{[^}]*border-radius:\s*var\(--radius-medium\);[^}]*padding-block:\s*var\(--space-quote-block\);/s,
     );
@@ -489,9 +486,12 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
-  it("keeps inline code inside a highlight on the highlight background", () => {
+  it("uses math-like inline code typography without a chip background", () => {
     expect(appCss).toMatch(
-      /\.cm-live-preview-highlight \.cm-live-preview-inline-code,\s*\.cm-live-preview-inline-code\.cm-live-preview-highlight\s*\{[^}]*background:\s*var\(--highlight\);[^}]*border-color:\s*var\(--divider\);/s,
+      /\.cm-live-preview-inline-code\s*\{[^}]*font-family:\s*"KaTeX_Math"[^;}]*;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;/s,
+    );
+    expect(appCss).toMatch(
+      /\.cm-live-preview-highlight \.cm-live-preview-inline-code,\s*\.cm-live-preview-inline-code\.cm-live-preview-highlight\s*\{[^}]*background:\s*var\(--highlight\);/s,
     );
   });
 
@@ -510,14 +510,17 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(appCss).toMatch(/\.sidebar-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
   });
 
-  it("keeps a fixed 44px activity rail outside the collapsing sidebar", () => {
+  it("keeps a fixed 36px activity rail outside the collapsing sidebar", () => {
     expect(appCss).toMatch(
-      /\.activity-rail\s*\{[^}]*width:\s*44px;[^}]*height:\s*100%;/s,
+      /\.activity-rail\s*\{[^}]*width:\s*var\(--activity-rail-width\);[^}]*height:\s*100%;/s,
+    );
+    expect(tokensCss).toMatch(/--activity-rail-width:\s*36px;/);
+    expect(appCss).toMatch(
+      /\.sidebar-settings-row\s*\{[^}]*margin-top:\s*auto;/s,
     );
     expect(appCss).toMatch(
-      /\.activity-rail-bottom\s*\{[^}]*margin-top:\s*auto;/s,
+      /\.activity-rail-button\[aria-pressed="true"\]\s*\{[^}]*background:\s*transparent;/s,
     );
-    // The old competing entry surfaces are gone with the rail in place.
     expect(appCss).not.toMatch(/\.sidebar-footer\s*\{/);
     expect(appCss).not.toMatch(/\.settings-fab\s*\{/);
   });
@@ -537,6 +540,26 @@ describe("accessibility: stylesheet guarantees", () => {
       /\.outline-rail\[data-collapsed="false"\]\s*\{[^}]*box-shadow:/s,
     );
   });
+
+  it.each(["sidebar", "outline"])(
+    "shows a localized neutral glow for the %s resize indicator",
+    (panel) => {
+      expect(tokensCss).toMatch(/--resize-indicator-core:/);
+      expect(tokensCss).toMatch(/--resize-indicator-glow:/);
+      expect(appCss).toMatch(
+        new RegExp(
+          `\\.${panel}-resizer::after\\s*\\{[^}]*top:\\s*16%;[^}]*bottom:\\s*16%;`,
+          "s",
+        ),
+      );
+      expect(appCss).toMatch(
+        new RegExp(
+          `\\.${panel}-resizer:hover::after,\\s*body\\.${panel}-resizing \\.${panel}-resizer::after\\s*\\{[^}]*background:\\s*var\\(--resize-indicator-core\\);[^}]*box-shadow:\\s*var\\(--resize-indicator-glow\\);`,
+          "s",
+        ),
+      );
+    },
+  );
 
   it("joins the first tab shoulder to the left connector without a gap", () => {
     expect(tokensCss).toMatch(/--radius-panel:\s*32px;/);
@@ -573,7 +596,7 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
-  it("animates the sidebar rail and honors reduced-motion preferences", () => {
+  it("uses one synchronized layout transition for expanding sidebars", () => {
     expect(tokensCss).toMatch(
       /--transition-sidebar:\s*160ms cubic-bezier\(0\.2,\s*0,\s*0,\s*1\);/,
     );
@@ -582,6 +605,16 @@ describe("accessibility: stylesheet guarantees", () => {
     );
     expect(appCss).toMatch(
       /\.sidebar-rail\[data-collapsed="true"\]\s*\{[^}]*opacity:\s*0;/s,
+    );
+    expect(appCss).toMatch(
+      /\.app-header\s*\{[^}]*transition:\s*grid-template-columns var\(--transition-sidebar\);/s,
+    );
+    expect(appCss).toMatch(
+      /body\.sidebar-resizing \.app-header\s*\{[^}]*transition:\s*none;/s,
+    );
+    expect(appCss).not.toMatch(/@keyframes panelIn/);
+    expect(appCss).not.toMatch(
+      /\.sidebar-rail:not\(\[data-collapsed="true"\]\),\s*\.outline-rail:not\(\[data-collapsed="true"\]\)\s*\{[^}]*animation:/s,
     );
   });
 
@@ -593,15 +626,22 @@ describe("accessibility: stylesheet guarantees", () => {
 
   it.each([
     ["left top", ".sidebar-rail", "::before", "100% 100%"],
-    ["left bottom", ".sidebar-rail", "::after", "100% 0"],
     ["right top", ".outline-rail", "::before", "0 100%"],
-    ["right bottom", ".outline-rail", "::after", "0 0"],
   ])("curves the %s sidebar connector toward the canvas", (_name, rail, pseudo, center) => {
     expect(appCss).toMatch(
       new RegExp(
         `\\.${rail.slice(1)}\\[data-collapsed="false"\\]${pseudo}\\s*\\{[^}]*background:\\s*radial-gradient\\(\\s*circle at ${center.replace(" ", "\\s+")},`,
         "s",
       ),
+    );
+  });
+
+  it.each([
+    ["left", ".sidebar-rail"],
+    ["right", ".outline-rail"],
+  ])("does not draw a bottom connector on the %s sidebar", (_name, rail) => {
+    expect(appCss).not.toMatch(
+      new RegExp(`\\.${rail.slice(1)}\\[data-collapsed="false"\\]::after\\s*\\{`, "s"),
     );
   });
 
@@ -664,7 +704,7 @@ describe("accessibility: stylesheet guarantees", () => {
   });
 
   it("defines the Baseline-style entry keyframes", () => {
-    for (const name of ["dialogIn", "fadeIn", "bannerIn", "panelIn"]) {
+    for (const name of ["dialogIn", "fadeIn", "bannerIn"]) {
       expect(appCss).toMatch(new RegExp(`@keyframes ${name}\\s*\\{`));
     }
   });
@@ -680,8 +720,8 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(appCss).toMatch(
       /\.icon-button:hover:not\(:disabled\)\s*\{[^}]*box-shadow:\s*var\(--shadow-hover\);/s,
     );
-    expect(tokensCss).toMatch(/--shadow-hover:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.4\);/);
-    expect(tokensCss).toMatch(/--shadow-hover:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.08\);/);
+    expect(tokensCss).toMatch(/--shadow-hover:\s*0 6px 16px -4px rgba\(0,\s*0,\s*0,\s*0\.4\);/);
+    expect(tokensCss).toMatch(/--shadow-hover:\s*0 6px 16px -4px rgba\(0,\s*0,\s*0,\s*0\.18\);/);
   });
 
   it("hooks the entry animations and keeps collapsed rails intact", () => {
@@ -693,9 +733,6 @@ describe("accessibility: stylesheet guarantees", () => {
     );
     expect(appCss).toMatch(
       /\.app-alert,[^}]*\.perf-banner,[^}]*\.translation-banner\s*\{[^}]*animation:\s*bannerIn var\(--anim-moderate\) var\(--anim-easing\);/s,
-    );
-    expect(appCss).toMatch(
-      /\.sidebar-rail:not\(\[data-collapsed="true"\]\),\s*\.outline-rail:not\(\[data-collapsed="true"\]\)\s*\{[^}]*animation:\s*panelIn var\(--anim-moderate\) var\(--anim-easing\);/s,
     );
   });
 

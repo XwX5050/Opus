@@ -16,6 +16,7 @@ import {
 import ConflictDialog from "../conflict/ConflictDialog";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import InlineNameInput from "./InlineNameInput";
+import FileQuickSwitcher from "./FileQuickSwitcher";
 import MarkdownEditor, {
   type EditorImageDrop,
   type MarkdownEditorHandle,
@@ -38,12 +39,14 @@ import {
   PanelLeftIcon,
   PanelRightIcon,
   PencilLineIcon,
+  SearchIcon,
   SettingsIcon,
   TranslateIcon,
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
 import WelcomeScreen from "./WelcomeScreen";
+import WorkspaceSearch from "./WorkspaceSearch";
 import WindowControls, {
   isWindowsNative,
   WindowResizeHandles,
@@ -59,7 +62,6 @@ import type { TranslationTextRange } from "../translate/translate";
 import type { TableCellEditRequest } from "../editor/tableWidgets";
 import {
   animateDialogIntro,
-  animateListIntro,
   animatePanelIntro,
   bindButtonHoverMotion,
   bindPanelDividerHover,
@@ -117,6 +119,7 @@ export interface AppShellProps {
 }
 
 const EMPTY_OUTLINE_IDS: ReadonlySet<string> = new Set();
+const ACTIVITY_RAIL_WIDTH = 36;
 
 interface PendingTableFocus extends TableFocusRequest {
   readonly tabId: string;
@@ -272,7 +275,18 @@ export default function AppShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tabItemsKey],
   );
+  const fileSwitcherPaths = useMemo(
+    () => [
+      ...new Set([
+        ...controller.state.tabs.flatMap((tab) => tab.path ? [tab.path] : []),
+        ...controller.recent.filter((item) => item.kind === "file").map((item) => item.path),
+      ]),
+    ],
+    [controller.state.tabs, controller.recent],
+  );
   const [settingsRequested, setSettingsRequested] = useState(false);
+  const [sidebarView, setSidebarView] = useState<"files" | "search">("files");
+  const [fileSwitcherOpen, setFileSwitcherOpen] = useState(false);
   // The shared right-click context menu; at most one open at a time. Items
   // carry their own handlers, so the state only needs the position and the
   // item list. The menu itself is intentionally not part of anyDialogOpen:
@@ -313,10 +327,11 @@ export default function AppShell({
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineResizing, setOutlineResizing] = useState(false);
-  // Drag-resize writes the live width straight to the panel elements instead
+  // Drag-resize writes the live width straight to the panel and header instead
   // of re-rendering the whole shell on every pointermove; the final width is
   // committed to the preferences (which persist the session) once, on
   // pointerup, and the committed width is restored on pointercancel.
+  const headerRef = useRef<HTMLElement>(null);
   const sidebarRailRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const sidebarResizeRef = useRef<PanelDragState | null>(null);
@@ -342,6 +357,7 @@ export default function AppShell({
       startWidth: number;
       direction: 1 | -1;
       setResizing: (resizing: boolean) => void;
+      onLiveWidthChange?: (width: number) => void;
       commit: (width: number) => void;
     },
   ) => {
@@ -356,6 +372,7 @@ export default function AppShell({
       const panel = options.panelRef.current;
       if (rail !== null) rail.style.width = `${width}px`;
       if (panel !== null) panel.style.width = `${width}px`;
+      options.onLiveWidthChange?.(width);
     };
     const drag: PanelDragState = {
       pointerId: event.pointerId,
@@ -462,6 +479,12 @@ export default function AppShell({
       startWidth: committed,
       direction: 1,
       setResizing: setSidebarResizing,
+      onLiveWidthChange: (width) => {
+        headerRef.current?.style.setProperty(
+          "--header-leading-width",
+          `${ACTIVITY_RAIL_WIDTH + width}px`,
+        );
+      },
       commit: (width) => {
         if (width !== committed) {
           setSidebar((current) => ({ ...current, width }));
@@ -870,38 +893,6 @@ export default function AppShell({
         sidebarAvailable,
         Boolean(active),
       ],
-    },
-  );
-
-  useGSAP(
-    () => {
-      const panel = sidebarRailRef.current;
-      if (!panel || sidebar.collapsed) return;
-      animatePanelIntro(panel);
-      panel
-        .querySelectorAll<HTMLElement>("[data-motion-list]")
-        .forEach((list) => animateListIntro(list));
-    },
-    {
-      scope: shellRef,
-      dependencies: [sidebar.collapsed],
-      revertOnUpdate: true,
-    },
-  );
-
-  useGSAP(
-    () => {
-      const panel = outlineRailRef.current;
-      if (!panel || !outlineOpen) return;
-      animatePanelIntro(panel);
-      panel
-        .querySelectorAll<HTMLElement>("[data-motion-list]")
-        .forEach((list) => animateListIntro(list));
-    },
-    {
-      scope: shellRef,
-      dependencies: [outlineOpen, Boolean(active)],
-      revertOnUpdate: true,
     },
   );
 
@@ -1365,7 +1356,7 @@ export default function AppShell({
   menuActionHandlerRef.current = (action: string) => {
     // Menu accelerators bypass the inert background, so gate them like the
     // shell keyboard shortcuts: no file actions while a modal dialog is up.
-    if (anyDialogOpen) return;
+    if (anyDialogOpen || fileSwitcherOpen) return;
     switch (action) {
       case "menu.new":
         controller.newDocument();
@@ -1509,7 +1500,7 @@ export default function AppShell({
   }, [customFileHeader]);
 
   const onShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (anyDialogOpen) return;
+    if (anyDialogOpen || fileSwitcherOpen) return;
     if (!(event.metaKey || event.ctrlKey)) return;
     if ((event.target as HTMLElement).closest(".cm-editor")) return;
     const key = event.key.toLowerCase();
@@ -1685,13 +1676,15 @@ export default function AppShell({
         className="app-background"
       >
       <header
+        ref={headerRef}
         aria-label="应用标题栏"
         className="app-header"
+        data-sidebar-collapsed={sidebar.collapsed}
         data-tauri-drag-region
         onMouseDown={onHeaderMouseDown}
         onDoubleClick={onHeaderDoubleClick}
         style={{
-          "--header-leading-width": `${44 + (sidebarAvailable && !sidebar.collapsed ? sidebar.width : 0)}px`,
+          "--header-leading-width": `${ACTIVITY_RAIL_WIDTH + (sidebarAvailable && !sidebar.collapsed ? sidebar.width : 0)}px`,
         } as CSSProperties}
       >
         <div className="app-header-leading">
@@ -1708,7 +1701,7 @@ export default function AppShell({
               title="文件"
               onClick={() => setFileMenuOpen((open) => !open)}
             >
-              <FileTextIcon size={20} />
+              <FileTextIcon size={16} />
             </button>
             {fileMenuOpen && (
               <div
@@ -1749,6 +1742,24 @@ export default function AppShell({
               </div>
             )}
           </div>
+        )}
+        {sidebarAvailable && (
+          <button
+            type="button"
+            className="icon-button sidebar-toggle"
+            aria-expanded={!sidebar.collapsed}
+            aria-controls="app-sidebar"
+            aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
+            title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
+            onClick={() =>
+              setSidebar((current) => ({
+                ...current,
+                collapsed: !current.collapsed,
+              }))
+            }
+          >
+            <PanelLeftIcon />
+          </button>
         )}
         {!(customFileHeader && detectPathPlatform() === "linux") && (
           <strong className="app-title" data-tauri-drag-region>
@@ -1810,35 +1821,39 @@ export default function AppShell({
           data-sidebar-collapsed={sidebar.collapsed}
         >
           <div className="activity-rail-top">
-            {sidebarAvailable && (
-              <button
-                type="button"
-                className="icon-button sidebar-toggle activity-rail-button"
-                aria-expanded={!sidebar.collapsed}
-                aria-controls="app-sidebar"
-                aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
-                title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
-                onClick={() =>
-                  setSidebar((current) => ({
-                    ...current,
-                    collapsed: !current.collapsed,
-                  }))
-                }
-              >
-                <PanelLeftIcon />
-              </button>
-            )}
-          </div>
-          <div className="activity-rail-bottom">
             <button
               type="button"
               className="icon-button activity-rail-button"
-              aria-label="设置"
-              title="设置"
-              onClick={(event) => openSettingsFrom(event.currentTarget)}
+              aria-label="文件"
+              title="文件"
+              aria-haspopup="dialog"
+              onClick={() => {
+                if (sidebarView !== "files" || sidebar.collapsed) {
+                  setSidebarView("files");
+                  setSidebar((current) => ({ ...current, collapsed: false }));
+                } else {
+                  setFileSwitcherOpen(true);
+                }
+              }}
             >
-              <SettingsIcon size={20} />
+              <FileTextIcon size={16} />
             </button>
+            {sidebarAvailable && (
+              <button
+                type="button"
+                className="icon-button activity-rail-button"
+                aria-label="搜索"
+                title="搜索"
+                aria-pressed={sidebarView === "search"}
+                aria-controls="app-sidebar"
+                onClick={() => {
+                  setSidebarView((current) => current === "search" ? "files" : "search");
+                  setSidebar((current) => ({ ...current, collapsed: false }));
+                }}
+              >
+                <SearchIcon size={16} />
+              </button>
+            )}
           </div>
         </nav>
         {sidebarAvailable && (
@@ -1859,41 +1874,62 @@ export default function AppShell({
             className="sidebar"
             style={{ width: sidebar.width }}
           >
-            <div className="sidebar-scroll">
-              <section className="sidebar-section explorer-section">
-                <button
-                  type="button"
-                  className="sidebar-section-header"
-                  aria-expanded={!sidebar.filesSectionCollapsed}
-                  aria-controls="sidebar-files-content"
-                  onClick={() =>
-                    setSidebar((current) => ({
-                      ...current,
-                      filesSectionCollapsed: !current.filesSectionCollapsed,
-                    }))
-                  }
-                >
-                  资源管理器
-                </button>
-                <div id="sidebar-files-content">
-                  {!sidebar.filesSectionCollapsed && (
-                    controller.workspace ? (
-                      <FileSidebar
-                        root={controller.workspace}
-                        port={port}
-                        onOpenFile={(path) => void controller.openPath(path)}
-                        onCloseWorkspace={controller.closeWorkspace}
-                      />
-                    ) : (
-                      <div className="explorer-empty">
-                        <p>尚未打开文件夹。</p>
-                        <p className="explorer-empty-hint">打开一个文件夹，即可浏览和全文搜索其中的 Markdown 文档。</p>
-                        <button type="button" aria-label="打开文件夹（资源管理器）" onClick={openWorkspaceFromUser}>打开文件夹</button>
-                      </div>
-                    )
-                  )}
-                </div>
-              </section>
+            {sidebarView === "search" ? (
+              <WorkspaceSearch
+                port={port}
+                workspace={controller.workspace}
+                dedicated
+                autoFocus
+                onOpenResult={(match) => void controller.openPath(match.path)}
+              />
+            ) : (
+              <div className="sidebar-scroll">
+                <section className="sidebar-section explorer-section">
+                  <button
+                    type="button"
+                    className="sidebar-section-header"
+                    aria-expanded={!sidebar.filesSectionCollapsed}
+                    aria-controls="sidebar-files-content"
+                    onClick={() =>
+                      setSidebar((current) => ({
+                        ...current,
+                        filesSectionCollapsed: !current.filesSectionCollapsed,
+                      }))
+                    }
+                  >
+                    资源管理器
+                  </button>
+                  <div id="sidebar-files-content">
+                    {!sidebar.filesSectionCollapsed && (
+                      controller.workspace ? (
+                        <FileSidebar
+                          root={controller.workspace}
+                          port={port}
+                          onOpenFile={(path) => void controller.openPath(path)}
+                          onCloseWorkspace={controller.closeWorkspace}
+                        />
+                      ) : (
+                        <div className="explorer-empty">
+                          <p>尚未打开文件夹。</p>
+                          <p className="explorer-empty-hint">打开一个文件夹，即可浏览和全文搜索其中的 Markdown 文档。</p>
+                          <button type="button" aria-label="打开文件夹（资源管理器）" onClick={openWorkspaceFromUser}>打开文件夹</button>
+                        </div>
+                      )
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
+            <div className="sidebar-settings-row">
+              <button
+                type="button"
+                className="icon-button sidebar-settings"
+                aria-label="设置"
+                title="设置"
+                onClick={(event) => openSettingsFrom(event.currentTarget)}
+              >
+                <SettingsIcon size={16} />
+              </button>
             </div>
           </aside>
           </div>
@@ -2200,6 +2236,15 @@ export default function AppShell({
           )}
         </div>
       )}
+
+      <FileQuickSwitcher
+        open={fileSwitcherOpen && !anyDialogOpen}
+        port={port}
+        workspace={controller.workspace}
+        additionalPaths={fileSwitcherPaths}
+        onOpenFile={(path) => controller.openPath(path)}
+        onClose={() => setFileSwitcherOpen(false)}
+      />
 
       {closing && (
         <div className="dialog-overlay" data-motion-dialog="true">

@@ -55,6 +55,63 @@ beforeEach(() => {
   document.documentElement.removeAttribute("style");
 });
 
+describe("settings: category navigation", () => {
+  it("shows only the selected category panel", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={new MemoryDocumentPort(new Map())} />);
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const tablist = within(dialog).getByRole("tablist", { name: "设置分类" });
+
+    expect(within(tablist).getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "外观",
+      "编辑器",
+      "翻译",
+      "关于",
+    ]);
+    expect(within(dialog).getAllByRole("tabpanel")).toHaveLength(1);
+    expect(within(dialog).getByRole("tabpanel", { name: "外观" })).toBeVisible();
+    expect(within(dialog).getByLabelText("主题")).toBeInTheDocument();
+
+    await user.click(within(tablist).getByRole("tab", { name: "编辑器" }));
+    expect(within(dialog).getByRole("tabpanel", { name: "编辑器" })).toBeVisible();
+    expect(within(dialog).getByLabelText("正文字号")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("主题")).not.toBeInTheDocument();
+
+    await user.click(within(tablist).getByRole("tab", { name: "翻译" }));
+    expect(within(dialog).getByRole("tabpanel", { name: "翻译" })).toBeVisible();
+    expect(within(dialog).getByLabelText("API 端点")).toBeInTheDocument();
+
+    await user.click(within(tablist).getByRole("tab", { name: "关于" }));
+    expect(within(dialog).getByRole("tabpanel", { name: "关于" })).toBeVisible();
+    expect(within(dialog).getByText(/v\d+\.\d+\.\d+/)).toBeInTheDocument();
+  });
+
+  it("moves the selected category with vertical arrow keys, Home and End", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={new MemoryDocumentPort(new Map())} />);
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const appearance = within(dialog).getByRole("tab", { name: "外观" });
+    appearance.focus();
+
+    fireEvent.keyDown(appearance, { key: "ArrowDown" });
+    const editor = within(dialog).getByRole("tab", { name: "编辑器" });
+    expect(editor).toHaveAttribute("aria-selected", "true");
+    expect(editor).toHaveFocus();
+    expect(within(dialog).getByRole("tabpanel", { name: "编辑器" })).toBeVisible();
+
+    fireEvent.keyDown(editor, { key: "End" });
+    const about = within(dialog).getByRole("tab", { name: "关于" });
+    expect(about).toHaveAttribute("aria-selected", "true");
+    expect(about).toHaveFocus();
+
+    fireEvent.keyDown(about, { key: "Home" });
+    expect(appearance).toHaveAttribute("aria-selected", "true");
+    expect(appearance).toHaveFocus();
+  });
+});
+
 describe("settings: theme and editor preferences", () => {
   it("applies a persisted theme from the session on startup", async () => {
     const port = new MemoryDocumentPort(new Map(), {
@@ -184,6 +241,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     const bodySize = within(dialog).getByLabelText("正文字号");
     fireEvent.change(bodySize, { target: { value: "20" } });
     fireEvent.blur(bodySize);
@@ -204,6 +262,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     const bodySize = within(dialog).getByLabelText("正文字号");
     await user.clear(bodySize);
     // Enter the draft through a single change event: user.type's per-keystroke
@@ -231,6 +290,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     const width = within(dialog).getByLabelText("内容宽度");
     await user.clear(width);
     // The draft goes in via a single change event: user.type's per-keystroke
@@ -254,6 +314,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     const bodySize = within(dialog).getByLabelText("正文字号");
     await user.clear(bodySize);
     // Blur is dispatched directly so the commit is deterministic: user.tab()
@@ -270,6 +331,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     const bodySize = within(dialog).getByLabelText("正文字号");
     fireEvent.change(bodySize, { target: { value: "99" } });
     fireEvent.blur(bodySize);
@@ -287,6 +349,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
     fireEvent.change(within(dialog).getByLabelText("自定义字体"), {
       target: { value: "LXGW WenKai" },
@@ -316,6 +379,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -342,6 +406,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -398,6 +463,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -441,6 +507,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -476,6 +543,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -509,6 +577,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -543,6 +612,7 @@ describe("settings: installed font enumeration", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
     await user.selectOptions(within(dialog).getByLabelText("字体"), "custom");
 
     const input = within(dialog).getByLabelText("自定义字体");
@@ -584,6 +654,7 @@ describe("settings: manual update check", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "关于" }));
     expect(within(dialog).getByText(/v\d+\.\d+\.\d+/)).toBeInTheDocument();
     // Presence, not visibility: the rows are mid intro animation.
     expect(
@@ -598,6 +669,7 @@ describe("settings: manual update check", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "关于" }));
     await user.click(
       within(dialog).getByRole("button", { name: "检查更新" }),
     );
@@ -630,6 +702,7 @@ describe("settings: manual update check", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "关于" }));
     const checkButton = within(dialog).getByRole("button", {
       name: "检查更新",
     });
@@ -667,6 +740,7 @@ describe("settings: manual update check", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "关于" }));
     await user.click(
       within(dialog).getByRole("button", { name: "检查更新" }),
     );
@@ -698,6 +772,7 @@ describe("settings: manual update check", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "关于" }));
     await user.click(
       within(dialog).getByRole("button", { name: "检查更新" }),
     );
@@ -714,7 +789,7 @@ describe("settings: manual update check", () => {
     ).not.toBeInTheDocument();
 
     // ...and appears once settings closes.
-    await user.click(within(dialog).getByRole("button", { name: "完成" }));
+    await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
     expect(
       await screen.findByRole("dialog", { name: "发现新版本 v2.0.0" }),
     ).toBeVisible();
@@ -741,6 +816,7 @@ describe("settings: translation", () => {
         port={port}
       />,
     );
+    fireEvent.click(screen.getByRole("tab", { name: "翻译" }));
     return {
       dialog: screen.getByRole("dialog", { name: "设置" }),
       onTranslationSettingsChange,
@@ -779,6 +855,7 @@ describe("settings: translation", () => {
       );
     };
     render(<Wrapper />);
+    fireEvent.click(screen.getByRole("tab", { name: "翻译" }));
     return {
       dialog: screen.getByRole("dialog", { name: "设置" }),
       onTranslationSettingsChange,
@@ -786,13 +863,13 @@ describe("settings: translation", () => {
     };
   };
 
-  it("renders the translation section between editor and about", () => {
+  it("renders the translation category and its fields", () => {
     const { dialog } = renderTranslationDialog();
     expect(
       within(dialog)
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
-    ).toEqual(["设置", "外观", "编辑器", "翻译", "关于"]);
+    ).toEqual(["设置", "翻译"]);
     expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
       DEFAULT_TRANSLATION_SETTINGS.endpoint,
     );
@@ -982,6 +1059,7 @@ describe("settings: translation", () => {
       />,
     );
     const dialog = screen.getByRole("dialog", { name: "设置" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "翻译" }));
     expect(
       within(dialog).getByRole("button", { name: "获取模型列表" }),
     ).toBeDisabled();

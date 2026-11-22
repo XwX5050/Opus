@@ -117,25 +117,11 @@
   background: var(--selection);
 }
 
-/* The app's reading-view quote styling is scoped to `.markdown-editor`;
-   replicate it here so quotes keep their card-and-accent-bar look on slides. */
+/* Match the editor's borderless quote cards on presentation slides. */
 .presentation-slide-host .cm-line.cm-live-preview-quote-line {
-  position: relative;
   width: 100%;
   background: var(--surface-quote);
   padding-inline: var(--space-quote-inline);
-}
-
-/* Per-line accent bar: top:0/bottom:0 joins consecutive lines into one
-   continuous strip; only the quote's outer ends get rounded caps. */
-.presentation-slide-host .cm-line.cm-live-preview-quote-line::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: var(--space-3);
-  width: var(--space-1);
-  background: var(--quote-accent);
 }
 
 .presentation-slide-host .cm-line.cm-live-preview-quote-line-single {
@@ -143,26 +129,14 @@
   padding-block: var(--space-quote-block);
 }
 
-.presentation-slide-host .cm-line.cm-live-preview-quote-line-single::before {
-  border-radius: var(--space-0-5);
-}
-
 .presentation-slide-host .cm-line.cm-live-preview-quote-line-first {
   border-radius: var(--radius-medium) var(--radius-medium) 0 0;
   padding-top: var(--space-quote-block);
 }
 
-.presentation-slide-host .cm-line.cm-live-preview-quote-line-first::before {
-  border-radius: var(--space-0-5) var(--space-0-5) 0 0;
-}
-
 .presentation-slide-host .cm-line.cm-live-preview-quote-line-last {
   border-radius: 0 0 var(--radius-medium) var(--radius-medium);
   padding-bottom: var(--space-quote-block);
-}
-
-.presentation-slide-host .cm-line.cm-live-preview-quote-line-last::before {
-  border-radius: 0 0 var(--space-0-5) var(--space-0-5);
 }
 
 /* Hidden measurement host: same classes and width as the visible slide host,

@@ -4,7 +4,6 @@ import {
   useReducer,
   useRef,
   useState,
-  useId,
   type KeyboardEvent,
 } from "react";
 import type {
@@ -15,7 +14,7 @@ import type {
 import type { DiskEvent } from "../document/types";
 import ContextMenu from "../app/ContextMenu";
 import InlineNameInput from "../app/InlineNameInput";
-import { DisclosureChevronIcon, FileTextIcon, SearchIcon } from "../app/icons";
+import { DisclosureChevronIcon } from "../app/icons";
 import {
   initialTreeState,
   pendingLoads,
@@ -48,7 +47,7 @@ interface RootMenuState {
 }
 
 /** Pixels of indentation per tree depth level (the create row adds one). */
-const TREE_DEPTH_INDENT_PX = 14;
+const TREE_DEPTH_INDENT_PX = 24;
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -95,8 +94,6 @@ export default function FileSidebar({
   onCloseWorkspace,
 }: FileSidebarProps) {
   const [state, dispatch] = useReducer(treeReducer, initialTreeState);
-  const filterInputId = useId();
-  const [filterOpen, setFilterOpen] = useState(false);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
@@ -129,7 +126,6 @@ export default function FileSidebar({
     inFlightRef.current.clear();
     rowRefs.current.clear();
     dispatch({ type: "workspaceOpened", root });
-    setFilterOpen(false);
     setActivePath(null);
     setEditing(null);
     setMenu(null);
@@ -364,37 +360,6 @@ export default function FileSidebar({
       >
         <strong className="sidebar-title">{root.title}</strong>
       </div>
-      {filterOpen || state.filter.length > 0 ? (
-        <div className="sidebar-filter">
-          <SearchIcon />
-          <input
-            id={filterInputId}
-            type="text"
-            aria-label="筛选文件"
-            placeholder="筛选文件…"
-            autoFocus
-            value={state.filter}
-            onChange={(event) =>
-              dispatch({ type: "filterChanged", filter: event.target.value })
-            }
-            onBlur={() => {
-              if (state.filter.length === 0) setFilterOpen(false);
-            }}
-          />
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="sidebar-filter-trigger"
-          aria-label="筛选文件"
-          aria-expanded="false"
-          aria-controls={filterInputId}
-          onClick={() => setFilterOpen(true)}
-        >
-          <SearchIcon />
-          <span>筛选文件</span>
-        </button>
-      )}
       {error && <div role="alert">{error}</div>}
       {[...state.failed]
         .filter((path) => path === root.path || state.expanded.has(path))
@@ -477,9 +442,7 @@ export default function FileSidebar({
                     <DisclosureChevronIcon />
                   </span>
                 ) : (
-                  <span aria-hidden="true" className="file-tree-file-icon">
-                    <FileTextIcon size={14} />
-                  </span>
+                  <span aria-hidden="true" className="file-tree-file-spacer" />
                 )}
                 {renaming ? (
                   <InlineNameInput

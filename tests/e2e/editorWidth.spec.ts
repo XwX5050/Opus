@@ -141,3 +141,46 @@ test("keeps a margin on both edges at a narrow viewport and keeps the scrollbar 
   expect(metrics.rightMargin).toBeGreaterThanOrEqual(19);
   expectEdgeToEdgeScroller(metrics);
 });
+
+test("moves the tab bar in the same frame as a live sidebar resize", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [{ path: "/docs/width.md", text: columnDocument }],
+    workspace: { path: "/docs", title: "docs" },
+    session: {
+      ...sessionWith("/docs/width.md"),
+      workspacePath: "/docs",
+    },
+  });
+
+  const sidebar = page.getByRole("complementary", { name: "侧栏" });
+  const resizer = page.getByRole("slider", { name: "调整侧栏宽度" });
+  const tabsBar = page.locator(".document-tabs-bar");
+  await expect(resizer).toBeVisible();
+  await expect(sidebar).toHaveCSS("width", "260px");
+  await expect(page.locator(".app-header")).toHaveCSS("transform", "none");
+
+  const initialTabs = await tabsBar.boundingBox();
+  const handle = await resizer.boundingBox();
+  if (!initialTabs || !handle) throw new Error("resize layout not ready");
+
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 180);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 + 72, handle.y + 180, {
+    steps: 6,
+  });
+
+  const duringDrag = await page.evaluate(() => {
+    const sidebar = document.querySelector(".sidebar")!.getBoundingClientRect();
+    const tabs = document.querySelector(".document-tabs-bar")!.getBoundingClientRect();
+    const firstTab = document.querySelector(".tab-item")!.getBoundingClientRect();
+    return { sidebarRight: sidebar.right, tabsLeft: tabs.left, tabLeft: firstTab.left };
+  });
+  expect(Math.abs(duringDrag.sidebarRight - duringDrag.tabsLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(duringDrag.tabsLeft - initialTabs.x - 72)).toBeLessThanOrEqual(1);
+
+  await page.mouse.up();
+  await expect(tabsBar).toBeVisible();
+  await expect(sidebar).toHaveCSS("width", "332px");
+});

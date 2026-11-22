@@ -19,7 +19,7 @@ const iconProps = {
 } as const;
 
 export const PanelLeftIcon = () => (
-  <svg {...iconProps}>
+  <svg {...iconProps} width={16} height={16}>
     <rect
       data-panel-fill=""
       x="3"
@@ -91,7 +91,7 @@ export const ListTreeIcon = () => (
 );
 
 export const PanelRightIcon = () => (
-  <svg {...outlineIconProps}>
+  <svg {...iconProps} width={16} height={16}>
     <rect
       data-panel-fill=""
       x="15"
@@ -160,5 +160,19 @@ export const SearchIcon = ({ size = 14 }: { size?: number }) => (
   <svg {...outlineIconProps} width={size} height={size}>
     <circle cx="11" cy="11" r="8" />
     <path d="m21 21-4.3-4.3" />
+  </svg>
+);
+
+export const SunIcon = ({ size = 18 }: { size?: number }) => (
+  <svg {...outlineIconProps} width={size} height={size}>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41" />
+  </svg>
+);
+
+export const InfoIcon = ({ size = 18 }: { size?: number }) => (
+  <svg {...outlineIconProps} width={size} height={size}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5M12 8h.01" />
   </svg>
 );

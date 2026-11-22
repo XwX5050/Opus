@@ -840,7 +840,7 @@ const livePreviewTheme = EditorView.baseTheme({
   ".cm-live-preview-strong": { fontWeight: "700" },
   ".cm-live-preview-emphasis": { fontStyle: "italic" },
   ".cm-live-preview-strikethrough": { textDecoration: "line-through" },
-  ".cm-live-preview-inline-code, .cm-live-preview-code-block": {
+  ".cm-live-preview-code-block": {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
   },
   // Frontmatter reads as metadata: code-like but muted and smaller.
@@ -866,8 +866,9 @@ const livePreviewTheme = EditorView.baseTheme({
     whiteSpace: "nowrap",
   },
   ".cm-live-preview-inline-code": {
-    backgroundColor: "var(--surface)",
-    borderRadius: "0.2em",
+    fontFamily: "KaTeX_Math, STIX Two Math, Cambria Math, Times New Roman, serif",
+    fontStyle: "italic",
+    backgroundColor: "transparent",
   },
   ".cm-live-preview-link": { textDecoration: "underline" },
   ".cm-live-preview-reference-definition": { opacity: "0.75" },

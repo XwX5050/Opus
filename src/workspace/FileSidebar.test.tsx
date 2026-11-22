@@ -103,55 +103,23 @@ describe("FileSidebar", () => {
     expect(port.listCalls).toHaveLength(2);
   });
 
-  it("narrows visible rows to filenames matching the filter", async () => {
+  it("omits file icons and the old filter while emphasizing nested indentation", async () => {
     const user = userEvent.setup();
-    renderSidebar();
-    await screen.findByRole("treeitem", { name: "alpha.md" });
-    await user.click(screen.getByRole("treeitem", { name: "drafts" }));
-    await screen.findByRole("treeitem", { name: "gamma.md" });
-
-    await user.click(screen.getByRole("button", { name: "筛选文件" }));
-    await user.type(screen.getByRole("textbox", { name: "筛选文件" }), "GAM");
-
-    expect(rowNames()).toEqual(["gamma.md"]);
-
-    await user.clear(screen.getByRole("textbox", { name: "筛选文件" }));
-    expect(rowNames()).toHaveLength(5);
-  });
-
-  it("expands the filter on activation and collapses only when it is empty", async () => {
-    const user = userEvent.setup();
-    renderSidebar();
-    await screen.findByRole("treeitem", { name: "alpha.md" });
-
-    const trigger = screen.getByRole("button", { name: "筛选文件" });
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("textbox", { name: "筛选文件" })).not.toBeInTheDocument();
-
-    await user.click(trigger);
-    const input = screen.getByRole("textbox", { name: "筛选文件" });
-    expect(input).toHaveFocus();
-    expect(input).toHaveAttribute("placeholder", "筛选文件…");
-
-    await user.type(input, "alp");
-    await user.click(screen.getByText("notes"));
-    expect(input).toBeInTheDocument();
-
-    await user.clear(input);
-    await user.click(screen.getByText("notes"));
-    expect(screen.queryByRole("textbox", { name: "筛选文件" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "筛选文件" })).toBeVisible();
-  });
-
-  it("marks directory rows with a disclosure chevron and file rows with a file icon", async () => {
     renderSidebar();
     const drafts = await screen.findByRole("treeitem", { name: "drafts" });
     const alpha = screen.getByRole("treeitem", { name: "alpha.md" });
 
+    expect(screen.queryByRole("button", { name: "筛选文件" })).not.toBeInTheDocument();
     expect(drafts.querySelector(".file-tree-chevron")).toBeInTheDocument();
     expect(drafts.querySelector(".file-tree-file-icon")).not.toBeInTheDocument();
-    expect(alpha.querySelector(".file-tree-file-icon")).toBeInTheDocument();
+    expect(alpha.querySelector(".file-tree-file-icon")).not.toBeInTheDocument();
     expect(alpha.querySelector(".file-tree-chevron")).not.toBeInTheDocument();
+    expect(alpha).toHaveStyle({ paddingLeft: "24px" });
+
+    await user.click(drafts);
+    expect(await screen.findByRole("treeitem", { name: "gamma.md" })).toHaveStyle({
+      paddingLeft: "48px",
+    });
   });
 
   it("opens a file through onOpenFile when clicked", async () => {

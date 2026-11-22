@@ -780,7 +780,7 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
     bottom: getComputedStyle(element, "::after").backgroundImage,
   }));
   expect(outlineCurves.top).toContain("radial-gradient");
-  expect(outlineCurves.bottom).toContain("radial-gradient");
+  expect(outlineCurves.bottom).toBe("none");
   await expect(outline.locator(".outline-content")).toHaveAttribute(
     "data-motion-list",
     "outline",
@@ -916,18 +916,14 @@ test("opens the folder drawer and opens a file from the tree", async ({
   await expect(menu.getByRole("menuitem", { name: "移到废纸篓" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  const filterTrigger = sidebar.getByRole("button", { name: "筛选文件" });
-  await expect(filterTrigger).toBeVisible();
-  await expect(sidebar.getByRole("textbox", { name: "筛选文件" })).toHaveCount(0);
-  await filterTrigger.click();
-  const filter = sidebar.getByRole("textbox", { name: "筛选文件" });
-  await expect(filter).toBeFocused();
-  await filter.fill("a.md");
-  await expect(sidebar.getByRole("treeitem")).toHaveCount(1);
-  await filter.clear();
-  await sidebar.locator(".sidebar-title").click();
-  await expect(filter).toHaveCount(0);
-  await expect(filterTrigger).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "筛选文件" })).toHaveCount(0);
+  await expect(fileRow.locator(".file-tree-file-icon")).toHaveCount(0);
+  await expect(fileRow).toHaveCSS("padding-left", "48px");
+  await expect(fileRow).toHaveCSS("padding-top", "6px");
+  await expect(fileRow).toHaveCSS("padding-bottom", "6px");
+  await expect(page.locator(".sidebar-rail")).toHaveCSS("width", "260px");
+  await expect(page.locator(".app-header-leading")).toHaveCSS("width", "296px");
+  await expect(page.locator(".app-header")).toHaveCSS("transform", "none");
 
   const layout = await page.evaluate(() => {
     const tabRow = document.querySelector(".document-tabs-bar");
@@ -975,11 +971,13 @@ test("opens the folder drawer and opens a file from the tree", async ({
   expect(layout.sidebarTopRadius).toBe("0px");
   expect(layout.sidebarBottomRadius).toBe("0px");
   expect(layout.panelTopCurve).toContain("radial-gradient");
-  expect(layout.panelBottomCurve).toContain("radial-gradient");
+  expect(layout.panelBottomCurve).toBe("none");
 
-  const explorerToggle = page.getByRole("button", { name: "收起侧栏" });
-  await explorerToggle.hover();
-  await expect(explorerToggle).toHaveCSS("transform", "none");
+  const fileAction = page
+    .getByRole("navigation", { name: "活动栏" })
+    .getByRole("button", { name: "文件" });
+  await fileAction.hover();
+  await expect(fileAction).toHaveCSS("transform", "none");
 
   // The drawer stays manually collapsible.
   const sidebarRail = sidebar.locator("..");

@@ -219,8 +219,8 @@ describe("AppShell", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(toggle.querySelector("svg")).toHaveAttribute("width", "20");
     expect(toggle.querySelector("svg")).toHaveAttribute("height", "20");
-    expect(sidebarToggle.querySelector("svg")).toHaveAttribute("width", "20");
-    expect(sidebarToggle.querySelector("svg")).toHaveAttribute("height", "20");
+    expect(sidebarToggle.querySelector("svg")).toHaveAttribute("width", "16");
+    expect(sidebarToggle.querySelector("svg")).toHaveAttribute("height", "16");
     expect(root.querySelector(".cm-live-preview-strong")).not.toBeNull();
     expect(root.querySelector(".cm-live-preview-horizontal-rule")).not.toBeNull();
     expect(editor()).not.toHaveTextContent("**");
@@ -1219,31 +1219,30 @@ describe("AppShell workspace drawer", () => {
     await screen.findByRole("complementary", { name: "侧栏" });
 
     const rail = screen.getByRole("navigation", { name: "活动栏" });
+    const header = screen.getByRole("banner", { name: "应用标题栏" });
     expect(rail.parentElement).toHaveClass("app-body");
-    const collapse = within(rail).getByRole("button", { name: "收起侧栏" });
+    const collapse = within(header).getByRole("button", { name: "收起侧栏" });
     expect(collapse).toHaveAttribute("aria-controls", "app-sidebar");
-    expect(within(rail).getByRole("button", { name: "设置" })).toBeEnabled();
+    expect(within(screen.getByRole("complementary", { name: "侧栏" })).getByRole("button", { name: "设置" })).toBeEnabled();
 
     await user.click(collapse);
 
     expect(rail).toBeVisible();
-    expect(within(rail).getByRole("button", { name: "展开侧栏" })).toBeVisible();
-    expect(within(rail).getByRole("button", { name: "设置" })).toBeVisible();
-    // The rail owns the shell's only explorer toggle and settings entry.
+    expect(within(header).getByRole("button", { name: "展开侧栏" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "展开侧栏" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "设置" })).toHaveLength(1);
   });
 
   it("opens settings from the activity rail and restores focus on close", async () => {
     const user = userEvent.setup();
     render(<AppShell port={new InspectablePort()} />);
     const settings = within(
-      screen.getByRole("navigation", { name: "活动栏" }),
+      screen.getByRole("complementary", { name: "侧栏" }),
     ).getByRole("button", { name: "设置" });
 
     await user.click(settings);
     const dialog = await screen.findByRole("dialog", { name: "设置" });
-    await user.click(within(dialog).getByRole("button", { name: "完成" }));
+    await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
 
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "设置" })).not.toBeInTheDocument(),
@@ -1354,6 +1353,9 @@ describe("AppShell workspace drawer", () => {
     // is committed (and persisted) only on pointerup. waitFor flushes frames.
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 340, buttons: 1 });
     await waitFor(() => expect(sidebar).toHaveStyle({ width: "300px" }));
+    expect(screen.getByRole("banner", { name: "应用标题栏" })).toHaveStyle({
+      "--header-leading-width": "336px",
+    });
 
     // Out-of-range deltas clamp to [120, window-aware cap (1024px → 512px)].
     fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 3000, buttons: 1 });
@@ -2088,16 +2090,16 @@ describe("AppShell conflict and save-failure dialogs", () => {
       expect(within(header).queryByRole("button", { name: "打开文件" })).not.toBeInTheDocument();
       expect(within(header).queryByRole("button", { name: "打开文件夹" })).not.toBeInTheDocument();
       expect(within(header).queryByRole("button", { name: "另存为…" })).not.toBeInTheDocument();
-      // Settings and the explorer toggle left the header for the persistent
-      // activity rail, which is the single entry for both.
       expect(
         within(header).queryByRole("button", { name: "设置" }),
       ).not.toBeInTheDocument();
       expect(
-        within(header).queryByRole("button", { name: "收起侧栏" }),
-      ).not.toBeInTheDocument();
+        within(header).getByRole("button", { name: "收起侧栏" }),
+      ).toBeVisible();
       const rail = screen.getByRole("navigation", { name: "活动栏" });
-      expect(within(rail).getByRole("button", { name: "设置" })).toBeVisible();
+      expect(within(screen.getByRole("complementary", { name: "侧栏" })).getByRole("button", { name: "设置" })).toBeVisible();
+      expect(within(rail).getByRole("button", { name: "文件" })).toBeVisible();
+      expect(within(rail).getByRole("button", { name: "搜索" })).toBeVisible();
       // The view-mode/translation toggles still live in the header and only
       // render while the outline panel is open.
       await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
@@ -2416,6 +2418,7 @@ describe("AppShell manual update check", () => {
     vi.mocked(checkUpdate).mockImplementationOnce(() => pending.promise);
 
     await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("tab", { name: "关于" }));
     await user.click(updateCheckButton());
 
     expect(updateCheckButton()).toBeDisabled();
@@ -2435,6 +2438,7 @@ describe("AppShell manual update check", () => {
     vi.mocked(checkUpdate).mockImplementationOnce(() => pending.promise);
 
     await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("tab", { name: "关于" }));
     await user.click(updateCheckButton());
     view.unmount();
 
@@ -2449,6 +2453,7 @@ describe("AppShell manual update check", () => {
 
     render(<AppShell port={new InspectablePort()} />);
     await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("tab", { name: "关于" }));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(updateCheckButton()).toBeEnabled();
   });

@@ -2,6 +2,22 @@
 
 All notable changes to Opus are documented in this file.
 
+## [0.2.5] - 2026-11-22
+
+### Changed
+
+- Refined workspace navigation with a Markdown-only explorer, quick file
+  switching, dedicated full-text search, compact titlebar controls, and a
+  dual-pane settings dialog with transparent controls and descriptive labels.
+- Updated macOS and Windows application icons, with matching raster assets for
+  every bundled size.
+
+### Fixed
+
+- Improved tab creation, sidebar toggling, titlebar alignment and window
+  dragging, panel spacing, narrow-window settings layout, and sidebar corner
+  continuity.
+
 ## [0.2.0] - 2026-11-22
 
 Workspace navigation overhaul, with a more reliable document lifecycle and a

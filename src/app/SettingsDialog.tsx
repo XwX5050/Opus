@@ -26,6 +26,7 @@ import { matchPreset, TRANSLATION_PRESETS } from "../translate/presets";
 import { MOTION } from "../motion/motionConfig";
 import { prefersReducedMotion } from "../motion/motionRuntime";
 import type { UpdateCheckState } from "./updates";
+import { InfoIcon, PencilLineIcon, SunIcon, TranslateIcon } from "./icons";
 import { version as APP_VERSION } from "../../package.json";
 
 gsap.registerPlugin(useGSAP);
@@ -60,6 +61,15 @@ const FONT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "monospace", label: "等宽" },
   { value: "custom", label: "自定义…" },
 ];
+
+const SETTINGS_SECTIONS = [
+  { id: "appearance", label: "外观", description: "选择应用的颜色与显示方式", Icon: SunIcon },
+  { id: "editor", label: "编辑器", description: "调整正文排版、字体与阅读宽度", Icon: PencilLineIcon },
+  { id: "translation", label: "翻译", description: "配置翻译服务、模型与目标语言", Icon: TranslateIcon },
+  { id: "about", label: "关于", description: "查看应用版本并检查更新", Icon: InfoIcon },
+] as const;
+
+type SettingsSection = (typeof SETTINGS_SECTIONS)[number]["id"];
 
 /** Target languages for document translation; the display name is the value
  * passed through to the translation API. */
@@ -104,6 +114,23 @@ const CONNECTION_HINTS = {
 
 const isPresetFont = (fontFamily: string): boolean =>
   (FONT_PRESETS as ReadonlyArray<string>).includes(fontFamily);
+
+function FieldLabel({
+  id,
+  label,
+  description,
+}: {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+}) {
+  return (
+    <span className="settings-field-label">
+      <label htmlFor={id}>{label}</label>
+      <span className="settings-field-description">{description}</span>
+    </span>
+  );
+}
 
 interface NumberFieldProps {
   readonly id: string;
@@ -414,9 +441,9 @@ function FontSearchField({ id, value, fonts, onChange }: FontSearchFieldProps) {
 }
 
 /**
- * Theme and editor-preferences dialog. Changes apply (and persist)
- * immediately; values are clamped by the controller. Follows the same modal
- * discipline as the other dialogs: labelled, focus-trapped, Escape closes.
+ * Category-based settings dialog. Changes apply (and persist) immediately;
+ * values are clamped by the controller. Follows the same modal discipline as
+ * the other dialogs: labelled, focus-trapped, Escape closes.
  */
 export default function SettingsDialog({
   theme,
@@ -435,6 +462,7 @@ export default function SettingsDialog({
 }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstControlRef = useRef<HTMLSelectElement>(null);
+  const [activeSection, setActiveSection] = useState<SettingsSection>("appearance");
   // Whether the custom-font row is shown. Tracked locally so picking
   // "自定义…" does not round-trip through the (clamped) stored value before
   // the user has typed a name.
@@ -564,6 +592,33 @@ export default function SettingsDialog({
     { scope: dialogRef },
   );
 
+  const onSectionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = SETTINGS_SECTIONS.findIndex(
+      (section) => section.id === activeSection,
+    );
+    let nextIndex: number;
+    switch (event.key) {
+      case "ArrowDown":
+        nextIndex = (currentIndex + 1) % SETTINGS_SECTIONS.length;
+        break;
+      case "ArrowUp":
+        nextIndex = (currentIndex - 1 + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = SETTINGS_SECTIONS.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const next = SETTINGS_SECTIONS[nextIndex];
+    setActiveSection(next.id);
+    document.getElementById(`settings-tab-${next.id}`)?.focus();
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -575,7 +630,7 @@ export default function SettingsDialog({
       ...event.currentTarget.querySelectorAll<HTMLElement>(
         "button:not(:disabled), select:not(:disabled), input:not(:disabled)",
       ),
-    ];
+    ].filter((control) => control.tabIndex >= 0);
     const first = controls[0];
     const last = controls.at(-1);
     if (!first || !last) {
@@ -690,6 +745,10 @@ export default function SettingsDialog({
       : [translationSettings.model, ...models];
   }, [translationModels, translationSettings.model]);
 
+  const activeSectionMeta = SETTINGS_SECTIONS.find(
+    (section) => section.id === activeSection,
+  ) ?? SETTINGS_SECTIONS[0];
+
   return (
     <div
       ref={dialogRef}
@@ -700,21 +759,62 @@ export default function SettingsDialog({
       className="settings-dialog"
       onKeyDown={onKeyDown}
     >
-      <h2 id="settings-dialog-title">设置</h2>
+      <div className="settings-layout">
+        <nav className="settings-navigation" aria-label="设置导航">
+          <h2 id="settings-dialog-title" className="settings-navigation-title">设置</h2>
+          <div
+            role="tablist"
+            aria-label="设置分类"
+            aria-orientation="vertical"
+            className="settings-tabs"
+            onKeyDown={onSectionKeyDown}
+          >
+            {SETTINGS_SECTIONS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                id={`settings-tab-${id}`}
+                type="button"
+                role="tab"
+                aria-label={label}
+                aria-selected={activeSection === id}
+                tabIndex={activeSection === id ? 0 : -1}
+                className="settings-tab"
+                onClick={() => setActiveSection(id)}
+              >
+                <Icon />
+                <span className="settings-tab-label">{label}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
 
-      {/* Scrollable middle row: on short windows the sections scroll while
-          the title and 完成 button stay pinned. */}
-      <div className="settings-body">
+        <div className="settings-content">
+          <header className="settings-content-header">
+            <div className="settings-content-heading">
+              <h2 className="settings-content-title">{activeSectionMeta.label}</h2>
+              <p className="settings-content-description">{activeSectionMeta.description}</p>
+            </div>
+            <button
+              type="button"
+              className="icon-button settings-close"
+              aria-label="关闭设置"
+              onClick={onClose}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
+          </header>
+          <div className="settings-body">
+      {activeSection === "appearance" && (
       <section
+        role="tabpanel"
         className="settings-section"
-        aria-labelledby="settings-heading-appearance"
+        aria-labelledby="settings-tab-appearance"
       >
-        <h3 id="settings-heading-appearance" className="settings-section-heading">
-          外观
-        </h3>
         <div className="settings-group">
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-theme">主题</label>
+            <FieldLabel id="settings-theme" label="主题" description="选择浅色、深色，或跟随系统设置" />
             <select
               id="settings-theme"
               ref={firstControlRef}
@@ -732,17 +832,17 @@ export default function SettingsDialog({
           </div>
         </div>
       </section>
+      )}
 
+      {activeSection === "editor" && (
       <section
+        role="tabpanel"
         className="settings-section"
-        aria-labelledby="settings-heading-editor"
+        aria-labelledby="settings-tab-editor"
       >
-        <h3 id="settings-heading-editor" className="settings-section-heading">
-          编辑器
-        </h3>
         <div className="settings-group">
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-body-size">正文字号</label>
+            <FieldLabel id="settings-body-size" label="正文字号" description="设置 Markdown 正文的文字大小" />
             <NumberField
               id="settings-body-size"
               min={limits.bodySizePx.min}
@@ -753,7 +853,7 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-line-height">行高</label>
+            <FieldLabel id="settings-line-height" label="行高" description="调整正文行与行之间的距离" />
             <NumberField
               id="settings-line-height"
               min={limits.lineHeight.min}
@@ -765,7 +865,7 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-content-width">内容宽度</label>
+            <FieldLabel id="settings-content-width" label="内容宽度" description="设置正文阅读栏的基础宽度" />
             <NumberField
               id="settings-content-width"
               min={limits.contentWidthPx.min}
@@ -777,7 +877,7 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-font">字体</label>
+            <FieldLabel id="settings-font" label="字体" description="选择编辑和阅读时使用的字体" />
             <select
               id="settings-font"
               value={customSelected ? "custom" : editorPreferences.fontFamily}
@@ -801,7 +901,7 @@ export default function SettingsDialog({
 
           {customSelected && (
             <div className="settings-row" data-settings-row>
-              <label htmlFor="settings-font-custom">自定义字体</label>
+              <FieldLabel id="settings-font-custom" label="自定义字体" description="输入本机已安装的字体名称" />
               <FontSearchField
                 id="settings-font-custom"
                 value={
@@ -816,20 +916,17 @@ export default function SettingsDialog({
           )}
         </div>
       </section>
+      )}
 
+      {activeSection === "translation" && (
       <section
+        role="tabpanel"
         className="settings-section"
-        aria-labelledby="settings-heading-translation"
+        aria-labelledby="settings-tab-translation"
       >
-        <h3
-          id="settings-heading-translation"
-          className="settings-section-heading"
-        >
-          翻译
-        </h3>
         <div className="settings-group">
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-translation-preset">服务商预设</label>
+            <FieldLabel id="settings-translation-preset" label="服务商预设" description={matchedPreset?.note ?? "快速填入服务商的接口与模型配置"} />
             <select
               id="settings-translation-preset"
               value={matchedPreset?.id ?? CUSTOM_PRESET_VALUE}
@@ -864,19 +961,8 @@ export default function SettingsDialog({
             </select>
           </div>
 
-          {matchedPreset !== undefined && (
-            <div className="settings-row" data-settings-row>
-              <span className="settings-row-label" />
-              <div className="settings-update-controls">
-                <span className="settings-update-hint">
-                  {matchedPreset.note}
-                </span>
-              </div>
-            </div>
-          )}
-
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-translation-endpoint">API 端点</label>
+            <FieldLabel id="settings-translation-endpoint" label="API 端点" description="OpenAI 兼容的聊天补全接口地址" />
             <TextField
               id="settings-translation-endpoint"
               value={translationSettings.endpoint}
@@ -885,7 +971,13 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-translation-api-key">API Key</label>
+            <FieldLabel
+              id="settings-translation-api-key"
+              label="API Key"
+              description={keyProtection === "file"
+                ? "系统凭据存储不可用：API Key 以文件形式保存在本机，保护较弱。"
+                : "仅写入系统凭据存储，不会回显已保存的密钥"}
+            />
             <div className="settings-update-controls">
               {/* Write-only: a stored key is acknowledged by the placeholder,
                   never read back into the field. */}
@@ -911,19 +1003,8 @@ export default function SettingsDialog({
             </div>
           </div>
 
-          {keyProtection === "file" && (
-            <div className="settings-row" data-settings-row>
-              <span className="settings-row-label" />
-              <div className="settings-update-controls">
-                <span className="settings-update-hint">
-                  系统凭据存储不可用：API Key 以文件形式保存在本机，保护较弱。
-                </span>
-              </div>
-            </div>
-          )}
-
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-translation-model">模型</label>
+            <FieldLabel id="settings-translation-model" label="模型" description="选择文档翻译使用的模型" />
             <div className="settings-update-controls">
               <select
                 id="settings-translation-model"
@@ -954,7 +1035,7 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-translation-concurrency">并发数</label>
+            <FieldLabel id="settings-translation-concurrency" label="并发数" description="同时翻译的段落数，范围 1-32，默认 10；调太高可能被服务商限流。" />
             <div className="settings-update-controls">
               <input
                 id="settings-translation-concurrency"
@@ -973,14 +1054,14 @@ export default function SettingsDialog({
                   updateTranslation({ concurrency: parsed });
                 }}
               />
-              <span className="settings-update-hint">
-                同时翻译的段落数，范围 1-32，默认 10；调太高可能被服务商限流。
-              </span>
             </div>
           </div>
 
           <div className="settings-row" data-settings-row>
-            <span className="settings-row-label">连接</span>
+            <span className="settings-row-label settings-field-label">
+              <span>连接</span>
+              <span className="settings-field-description">检查当前接口与密钥是否可用</span>
+            </span>
             <div className="settings-update-controls">
               <button
                 type="button"
@@ -998,7 +1079,7 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <label htmlFor="settings-translation-target-language">目标语言</label>
+            <FieldLabel id="settings-translation-target-language" label="目标语言" description="设置译文使用的语言" />
             <select
               id="settings-translation-target-language"
               value={translationSettings.targetLanguage}
@@ -1016,21 +1097,27 @@ export default function SettingsDialog({
         </div>
         <p>翻译结果会缓存在本机，原文不变时不重复调用 API。</p>
       </section>
+      )}
 
+      {activeSection === "about" && (
       <section
+        role="tabpanel"
         className="settings-section"
-        aria-labelledby="settings-heading-about"
+        aria-labelledby="settings-tab-about"
       >
-        <h3 id="settings-heading-about" className="settings-section-heading">
-          关于
-        </h3>
         <div className="settings-group">
           <div className="settings-row" data-settings-row>
-            <span className="settings-row-label">版本</span>
+            <span className="settings-row-label settings-field-label">
+              <span>版本</span>
+              <span className="settings-field-description">当前安装的 Opus 版本</span>
+            </span>
             <span className="settings-version-value">v{APP_VERSION}</span>
           </div>
           <div className="settings-row" data-settings-row>
-            <span className="settings-row-label">更新</span>
+            <span className="settings-row-label settings-field-label">
+              <span>更新</span>
+              <span className="settings-field-description">检查是否有可用的新版本</span>
+            </span>
             <div className="settings-update-controls">
               <button
                 type="button"
@@ -1048,12 +1135,9 @@ export default function SettingsDialog({
           </div>
         </div>
       </section>
-      </div>
-
-      <div className="dialog-actions">
-        <button type="button" onClick={onClose}>
-          完成
-        </button>
+      )}
+          </div>
+        </div>
       </div>
     </div>
   );

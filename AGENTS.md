@@ -13,7 +13,7 @@ Rust/Tauri backend.
 
 - Product name: **Opus**
 - Bundle identifier: `com.xiongweini.markdown-edit`
-- Version: `0.2.0` (kept in sync across `package.json`,
+- Version: `0.2.5` (kept in sync across `package.json`,
   `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
   `src-tauri/tauri.conf.json`)
 - Target platform: macOS 12+ (Apple Silicon first), Windows 10/11 (WebView2),
@@ -99,18 +99,31 @@ Rust/Tauri backend.
 
 - `src/app/`: composition root (`App.tsx`, `createApp.tsx`), top-level shell
   (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings
-  dialog (`SettingsDialog.tsx` — its API Key field is write-only: it never
+  dialog (`SettingsDialog.tsx` — a dual-pane dialog with vertical 外观/编辑器/
+  翻译/关于 tabs on the left, the active panel on the right with descriptive
+  labels, hairline rows and transparent controls (plain number fields and
+  capsule select/text fields), roving-tabindex
+  ArrowUp/ArrowDown/Home/End navigation, and a compact icon rail below 700 px;
+  its API Key field is write-only: it never
   echoes a stored key, shows an 已保存 placeholder when the addressed slot has
   one, commits on blur/Enter straight to the credential store, and offers a
   清除 button plus a warning when the store fell back to the weakly-protected
   file), tab bar (`TabList.tsx`), automatic
   performance-mode hook (`usePerformanceMode.ts`), in-app update checks
-  (`updates.ts`), and the E2E fixture bridge (`e2e.ts`). A persistent 44 px
-  activity rail sits at the far left of the shell body: its top button is the
-  only explorer toggle and its bottom button is the only settings entry; the
-  rail never collapses with the explorer, and its buttons never scale on hover. When the
-  explorer collapses, an inverse radial corner joins the rail's upper edge to
-  the canvas; sidebar/outline connectors have no drop shadows. `WelcomeScreen.tsx` (styles in
+  (`updates.ts`), and the E2E fixture bridge (`e2e.ts`). A persistent 36 px
+  activity rail sits at the far left of the shell body: its top actions are
+  文件 (return to the explorer when search is active, otherwise open the
+  native-Dialog quick switcher) and 搜索 (a dedicated full-text search view;
+  activating it again returns to the file tree). Settings live at the bottom
+  of every expanded sidebar view and disappear with a collapsed sidebar. The
+  explorer toggle lives in the titlebar's leading group and remains clickable
+  below the macOS traffic-light inset. The rail never collapses with the
+  explorer, and its buttons never scale on hover or use an accent pressed
+  background. When the explorer collapses, an inverse radial corner joins the
+  rail's upper edge to the canvas; neither the activity rail nor the
+  sidebar/outline connectors have drop shadows. Titlebar controls share one
+  vertical centerline, tabs remain flush with its bottom edge, and both
+  panel-toggle icons are 16 px inside 32 px targets. `WelcomeScreen.tsx` (styles in
   `welcome.css`) renders the empty editor area as a single-column welcome page:
   a script `Opus` wordmark with no subtitle, accent-colored 启动/最近 headings,
   launch actions with the real
@@ -132,7 +145,8 @@ Rust/Tauri backend.
   (see `AppShell.customFileHeader.test.tsx`). Windows, whose window is
   undecorated (`set_decorations(false)`), additionally draws its own caption
   buttons and window-edge resize handles (`WindowControls.tsx`). Settings open
-  from the activity rail; the macOS native menu and Ctrl/Cmd+, remain.
+  from the expanded sidebar's bottom-right button; the macOS native menu and
+  Ctrl/Cmd+, remain.
   `TabList.tsx` renders horizontal document tabs directly in the unified top
   bar (Left/Right, Home/End, single-row horizontal overflow), shown only when
   documents are open. Its leading column follows the activity rail/sidebar
@@ -167,9 +181,14 @@ Rust/Tauri backend.
   controller, CodeMirror view, and `TauriDocumentPort` through marker/report
   commands. Normal builds tree-shake it, and update checks stay disabled
   (`updates.ts` treats `MODE === "native-e2e"` like dev/E2E).
-  `WorkspaceSearch.tsx` remains a reusable, unit-tested saved-Markdown search
-  component and `DocumentPort.searchWorkspace` keeps its backend contract, but
-  the unified top bar no longer mounts a global search field.
+  `WorkspaceSearch.tsx` is the reusable, unit-tested saved-Markdown search
+  component and `DocumentPort.searchWorkspace` keeps its backend contract; in
+  dedicated mode it fills the left sidebar with a single pill-shaped search
+  field. `FileQuickSwitcher.tsx` uses a native `<dialog>` with combobox
+  keyboard navigation, recursively collected Markdown paths, and Shift+Enter
+  creation through `createMarkdownFile`. It shows six options before a
+  更多… disclosure (auto-opening for keyboard selection), has no close icon,
+  and closes on an outside pointer press or Escape.
 - `src/perf/`: `main.tsx` is the production performance entry loaded by
   `perf.html`. It injects the shared demo port through
   `createApp(port, { browserShell: true })` under React's production runtime;
@@ -279,20 +298,23 @@ Rust/Tauri backend.
   `compositionend`).
 - `src/motion/`: GSAP-based animation. `motionConfig.ts` holds the shared
   timing/easing tokens; `motionRuntime.ts` provides panel/dialog/list intro
-  helpers that honor `prefers-reduced-motion`; `editorMotion.ts` animates
-  editor content on view-mode switches and is disabled in light performance
-  mode. Target counts are clamped (`MAX_EDITOR_MOTION_TARGETS`,
+  helpers that honor `prefers-reduced-motion`; sidebar/outline expansion
+  deliberately uses only the shared CSS width/opacity transition (including
+  the header grid track), never per-panel or per-row intro timelines;
+  `editorMotion.ts` animates editor content on view-mode switches and is
+  disabled in light performance mode. Target counts are clamped (`MAX_EDITOR_MOTION_TARGETS`,
   `MAX_LIST_MOTION_TARGETS`) to bound animation cost.
 - `src/workspace/`: persistent explorer tree state (`treeReducer.ts`) and UI
   (`FileSidebar.tsx`). Only directories and `.md`/`.markdown` files appear;
   other formats stay hidden. The header shows only the workspace title; its
   actions (new file / close folder) live in the title's right-click menu. The
-  file filter starts as a quiet option, expands and focuses on click, and
-  collapses on blur only when empty. Activity/sidebar/editor boundaries use
-  surface contrast, a faint edge glow, and 32 px outward radial corners on both
-  sidebars without extra divider lines.
-  Tree rows render a rotating disclosure chevron for folders and a document
-  glyph for files (`DisclosureChevronIcon`/`FileTextIcon`) at
+  activity rail's 搜索 button replaces this panel with dedicated full-text
+  search and toggles back to the tree. Activity/sidebar/editor boundaries use
+  surface contrast, a faint edge glow, and 32 px outward radial top corners on
+  both sidebars without extra divider lines or bottom connectors. Tree rows use
+  24 px indentation per depth level, a rotating disclosure chevron for folders,
+  and no file icon;
+  an invisible spacer keeps file and folder labels aligned at
   `--font-ui-size-large`. Rows have no inline action buttons; the right-click
   context menu (rename / move to trash; folders additionally offer creating a
   file inside) is built on `src/app/ContextMenu.tsx` and owns those editing
@@ -553,7 +575,7 @@ Automated gates:
   the in-memory port (see `src/app/e2e.ts` and `playwright.config.ts`). The
   `workspaceSearch` spec also covers the single-column welcome page at startup
   and after closing `欢迎.md`, the five-item recent limit and 更多… disclosure,
-  recent-file activation, the 44 px activity rail while the explorer is
+  recent-file activation, the 36 px activity rail while the explorer is
   collapsed, and the 1280/1080/680 px layouts without horizontal overflow.
   This suite does
   not exercise the native seam.

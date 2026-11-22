@@ -282,7 +282,7 @@ describe("AppShell update dialog", () => {
       screen.queryByRole("dialog", { name: "发现新版本 v2.0.0" }),
     ).not.toBeInTheDocument();
     await user.click(
-      within(settingsDialog).getByRole("button", { name: "完成" }),
+      within(settingsDialog).getByRole("button", { name: "关闭设置" }),
     );
     expect(
       await screen.findByRole("dialog", { name: "发现新版本 v2.0.0" }),

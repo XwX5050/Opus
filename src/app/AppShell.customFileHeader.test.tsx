@@ -76,6 +76,8 @@ const activityRail = () =>
   screen.getByRole("navigation", { name: "活动栏" });
 const railButton = (name: string) =>
   within(activityRail()).getByRole("button", { name });
+const settingsButton = () =>
+  within(screen.getByRole("complementary", { name: "侧栏" })).getByRole("button", { name: "设置" });
 
 const editorText = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
 const replaceEditorText = (text: string) => {
@@ -98,16 +100,18 @@ describe("AppShell custom file header", () => {
     expect(
       screen.queryByRole("button", { name: "另存为…" }),
     ).not.toBeInTheDocument();
-    // Settings and the explorer toggle left every header surface for the
-    // persistent activity rail.
     expect(
       within(titlebar()).queryByRole("button", { name: "设置" }),
     ).not.toBeInTheDocument();
     expect(
-      within(titlebar()).queryByRole("button", { name: "收起侧栏" }),
+      within(titlebar()).getByRole("button", { name: "收起侧栏" }),
+    ).toBeVisible();
+    expect(settingsButton()).toBeVisible();
+    expect(railButton("文件")).toBeVisible();
+    expect(railButton("搜索")).toBeVisible();
+    expect(
+      within(activityRail()).queryByRole("button", { name: "收起侧栏" }),
     ).not.toBeInTheDocument();
-    expect(railButton("设置")).toBeVisible();
-    expect(railButton("收起侧栏")).toBeVisible();
   });
 
   it("keeps the window title and the file menu on Windows", async () => {
@@ -137,7 +141,7 @@ describe("AppShell custom file header", () => {
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
     await screen.findByRole("tab", { name: /a\.md/ });
 
-    await user.click(railButton("设置"));
+    await user.click(settingsButton());
 
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
   });
@@ -146,7 +150,7 @@ describe("AppShell custom file header", () => {
     const user = userEvent.setup();
     renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
-    await user.click(railButton("设置"));
+    await user.click(settingsButton());
 
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
   });
@@ -239,13 +243,13 @@ describe("AppShell custom file header", () => {
     );
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
     await screen.findByRole("tab", { name: /a\.md/ });
-    const gear = railButton("设置");
+    const gear = settingsButton();
 
     await user.click(gear);
 
     const dialog = await screen.findByRole("dialog", { name: "设置" });
     expect(dialog).toBeVisible();
-    await user.click(within(dialog).getByRole("button", { name: "完成" }));
+    await user.click(within(dialog).getByRole("button", { name: "关闭设置" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "设置" })).not.toBeInTheDocument(),
     );
@@ -301,7 +305,7 @@ describe("AppShell custom file header", () => {
     // Menu accelerators are gated while a modal dialog is up, like the
     // native menu handler.
     fireEvent.keyDown(window, { key: "n", ctrlKey: true });
-    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Untitled/ })).not.toBeInTheDocument();
   });
 
   it("saves exactly once on Ctrl+S with the editor focused", async () => {

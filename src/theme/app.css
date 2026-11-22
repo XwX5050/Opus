@@ -165,7 +165,7 @@ input[type="number"]::-webkit-inner-spin-button {
   grid-row: 1;
   display: grid;
   grid-template-columns:
-    max(var(--header-leading-width, 44px), var(--header-safe-left, 0px))
+    max(var(--header-leading-width, var(--activity-rail-width)), var(--header-safe-left, 0px))
     minmax(0, 1fr)
     auto;
   align-items: center;
@@ -174,6 +174,7 @@ input[type="number"]::-webkit-inner-spin-button {
   z-index: 4;
   background: var(--surface-panel);
   user-select: none;
+  transition: grid-template-columns var(--transition-sidebar);
   -webkit-app-region: drag;
 }
 
@@ -182,11 +183,24 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .app-header-leading {
+  position: relative;
+  z-index: 4;
   display: flex;
   align-items: center;
   min-width: 0;
   height: 44px;
   padding: var(--space-1) var(--space-3);
+}
+
+.app-header-leading > .sidebar-toggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.app-header[data-sidebar-collapsed="true"] .app-title {
+  display: none;
 }
 
 .tauri .app-header-leading {
@@ -329,6 +343,13 @@ input[type="number"]::-webkit-inner-spin-button {
   background: transparent;
   color: var(--text-secondary);
   padding: var(--space-1) var(--space-2);
+}
+
+.app-header-actions > .right-sidebar-toggle.icon-button {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
 }
 
 .app-header-actions > button:hover:not(:disabled) {
@@ -795,15 +816,14 @@ input[type="number"]::-webkit-inner-spin-button {
   position: relative;
 }
 
-/* VS Code-style activity rail: a fixed navigation column at the far left.
-   It never collapses with the explorer, so the resource-manager toggle and
-   settings stay reachable in every layout state. */
+/* Compact navigation rail; settings live at the expanded sidebar's bottom. */
 .activity-rail {
   position: relative;
+  z-index: 2;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  width: 44px;
+  width: var(--activity-rail-width);
   height: 100%;
   padding: var(--space-1) 0;
   background: var(--surface-panel);
@@ -825,21 +845,36 @@ input[type="number"]::-webkit-inner-spin-button {
   );
 }
 
-.activity-rail-top,
-.activity-rail-bottom {
+.activity-rail-top {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 
-.activity-rail-bottom {
-  margin-top: auto;
+.activity-rail-button {
+  width: 32px;
+  height: 32px;
+  margin: 0 2px;
+  border-radius: var(--radius-medium);
 }
 
-.activity-rail-button {
-  width: 100%;
-  height: 40px;
-  border-radius: 0;
+.activity-rail-button[aria-pressed="true"] {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.sidebar-settings-row {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: var(--space-2);
+}
+
+.sidebar-settings {
+  width: 32px;
+  height: 32px;
+  color: var(--text-muted);
 }
 
 .sidebar-rail {
@@ -851,30 +886,17 @@ input[type="number"]::-webkit-inner-spin-button {
   transition: width var(--transition-sidebar), opacity var(--transition-fast);
 }
 
-.sidebar-rail[data-collapsed="false"]::before,
-.sidebar-rail[data-collapsed="false"]::after {
+.sidebar-rail[data-collapsed="false"]::before {
   content: "";
   position: absolute;
   left: 100%;
+  top: 0;
   z-index: 1;
   width: var(--radius-panel);
   height: var(--radius-panel);
   pointer-events: none;
-}
-
-.sidebar-rail[data-collapsed="false"]::before {
-  top: 0;
   background: radial-gradient(
     circle at 100% 100%,
-    transparent 31px,
-    var(--surface-panel) 32px
-  );
-}
-
-.sidebar-rail[data-collapsed="false"]::after {
-  bottom: 0;
-  background: radial-gradient(
-    circle at 100% 0,
     transparent 31px,
     var(--surface-panel) 32px
   );
@@ -910,8 +932,8 @@ input[type="number"]::-webkit-inner-spin-button {
   overscroll-behavior: contain;
 }
 
-/* Drag handle between the sidebar and the editor: a slim hit area whose
-   accent strip only appears on hover or while a drag is in progress. */
+/* A centered neutral light marks the drag handle without splitting the
+   whole window with a full-height accent line. */
 .sidebar-resizer {
   flex-shrink: 0;
   width: 6px;
@@ -930,16 +952,18 @@ input[type="number"]::-webkit-inner-spin-button {
 .sidebar-resizer::after {
   content: "";
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 16%;
+  bottom: 16%;
   left: 2px;
   width: 2px;
+  border-radius: var(--radius-small);
   background: transparent;
 }
 
 .sidebar-resizer:hover::after,
 body.sidebar-resizing .sidebar-resizer::after {
-  background: var(--accent);
+  background: var(--resize-indicator-core);
+  box-shadow: var(--resize-indicator-glow);
 }
 
 body.sidebar-resizing {
@@ -948,6 +972,10 @@ body.sidebar-resizing {
 }
 
 body.sidebar-resizing .sidebar-rail {
+  transition: none;
+}
+
+body.sidebar-resizing .app-header {
   transition: none;
 }
 
@@ -970,30 +998,17 @@ body.sidebar-resizing * {
   transition: width var(--transition-sidebar), opacity var(--transition-fast);
 }
 
-.outline-rail[data-collapsed="false"]::before,
-.outline-rail[data-collapsed="false"]::after {
+.outline-rail[data-collapsed="false"]::before {
   content: "";
   position: absolute;
   right: 100%;
+  top: 0;
   z-index: 1;
   width: var(--radius-panel);
   height: var(--radius-panel);
   pointer-events: none;
-}
-
-.outline-rail[data-collapsed="false"]::before {
-  top: 0;
   background: radial-gradient(
     circle at 0 100%,
-    transparent 31px,
-    var(--surface-panel) 32px
-  );
-}
-
-.outline-rail[data-collapsed="false"]::after {
-  bottom: 0;
-  background: radial-gradient(
-    circle at 0 0,
     transparent 31px,
     var(--surface-panel) 32px
   );
@@ -1173,16 +1188,18 @@ body.sidebar-resizing * {
 .outline-resizer::after {
   content: "";
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 16%;
+  bottom: 16%;
   left: 2px;
   width: 2px;
+  border-radius: var(--radius-small);
   background: transparent;
 }
 
 .outline-resizer:hover::after,
 body.outline-resizing .outline-resizer::after {
-  background: var(--accent);
+  background: var(--resize-indicator-core);
+  box-shadow: var(--resize-indicator-glow);
 }
 
 body.outline-resizing {
@@ -1464,18 +1481,20 @@ body.outline-resizing * {
 }
 
 .cm-live-preview-inline-code {
-  font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 0.88em;
-  background: var(--surface);
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-small);
-  padding: 0.05em 0.25em;
+  font-family: "KaTeX_Math", "STIX Two Math", "Cambria Math", "Times New Roman", serif;
+  font-size: 0.98em;
+  font-style: italic;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 
 .cm-live-preview-highlight .cm-live-preview-inline-code,
 .cm-live-preview-inline-code.cm-live-preview-highlight {
   background: var(--highlight);
-  border-color: var(--divider);
+  border-radius: var(--radius-small);
+  padding-inline: var(--space-0-5);
 }
 
 .cm-live-preview-code-block {
@@ -1492,23 +1511,9 @@ body.outline-resizing * {
 }
 
 .markdown-editor .cm-line.cm-live-preview-quote-line {
-  position: relative;
   width: 100%;
   background: var(--surface-quote);
   padding-inline: var(--space-quote-inline);
-}
-
-/* The accent bar: a per-line ::before spanning the full line height
-   (top:0/bottom:0) so consecutive lines form one continuous strip;
-   only the quote's outer ends get rounded caps. */
-.markdown-editor .cm-line.cm-live-preview-quote-line::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: var(--space-3);
-  width: var(--space-1);
-  background: var(--quote-accent);
 }
 
 .markdown-editor .cm-line.cm-live-preview-quote-line-single {
@@ -1516,26 +1521,14 @@ body.outline-resizing * {
   padding-block: var(--space-quote-block);
 }
 
-.markdown-editor .cm-line.cm-live-preview-quote-line-single::before {
-  border-radius: var(--space-0-5);
-}
-
 .markdown-editor .cm-line.cm-live-preview-quote-line-first {
   border-radius: var(--radius-medium) var(--radius-medium) 0 0;
   padding-top: var(--space-quote-block);
 }
 
-.markdown-editor .cm-line.cm-live-preview-quote-line-first::before {
-  border-radius: var(--space-0-5) var(--space-0-5) 0 0;
-}
-
 .markdown-editor .cm-line.cm-live-preview-quote-line-last {
   border-radius: 0 0 var(--radius-medium) var(--radius-medium);
   padding-bottom: var(--space-quote-block);
-}
-
-.markdown-editor .cm-line.cm-live-preview-quote-line-last::before {
-  border-radius: 0 0 var(--space-0-5) var(--space-0-5);
 }
 
 .cm-live-preview-horizontal-rule {
@@ -1617,6 +1610,35 @@ body.outline-resizing * {
   flex-basis: 420px;
 }
 
+.workspace-search-dedicated {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: hidden;
+}
+
+.workspace-search-title h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size);
+  font-weight: 600;
+}
+
+.workspace-search-dedicated .workspace-search-results {
+  position: static;
+  flex: 1;
+  width: 100%;
+  max-height: none;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
 .workspace-search-form {
   display: flex;
   align-items: center;
@@ -1654,6 +1676,31 @@ body.outline-resizing * {
   width: 28px;
   height: 28px;
   min-height: 28px;
+}
+
+.workspace-search-dedicated .workspace-search-form {
+  border: none;
+  background: transparent;
+}
+
+.workspace-search-dedicated .workspace-search-form:focus-within {
+  outline: none;
+}
+
+.workspace-search-dedicated .workspace-search-form input {
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+}
+
+.workspace-search-dedicated .workspace-search-form input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.workspace-search-dedicated .workspace-search-submit {
+  display: none;
 }
 
 .workspace-search-results {
@@ -1724,6 +1771,119 @@ body.outline-resizing * {
   background: var(--search-match);
   color: var(--text-primary);
   border-radius: var(--radius-small);
+}
+
+/* ---------- Native file quick-switcher dialog ---------- */
+
+.file-switcher-dialog {
+  width: min(640px, calc(100% - var(--space-5) * 2));
+  max-width: 640px;
+  max-height: calc(100vh - var(--space-5) * 4);
+  max-height: calc(100dvh - var(--space-5) * 4);
+  margin: 12vh auto auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-large);
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-dialog);
+}
+
+.file-switcher-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.file-switcher-dialog:modal {
+  overscroll-behavior: contain;
+}
+
+.file-switcher-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--backdrop);
+}
+
+.file-switcher-input-row {
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--divider);
+}
+
+.file-switcher-input-row input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  caret-color: var(--text-primary);
+  font-size: var(--font-ui-size-large);
+}
+
+.file-switcher-input-row input::placeholder {
+  color: var(--text-muted);
+}
+
+.file-switcher-input-row input:focus-visible {
+  outline: none;
+}
+
+.file-switcher-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.file-switcher-list {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2);
+}
+
+.file-switcher-option {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  border-radius: var(--radius-medium);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.file-switcher-option[aria-selected="true"] {
+  background: var(--selection);
+  color: var(--text-primary);
+}
+
+.file-switcher-more summary {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+  user-select: none;
+  cursor: default;
+}
+
+.file-switcher-state {
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+}
+
+.file-switcher-footer {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--divider);
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
 }
 
 /* ---------- Empty explorer ---------- */
@@ -1864,7 +2024,7 @@ body.outline-resizing * {
   display: flex;
   gap: var(--space-1);
   align-items: center;
-  padding-block: var(--space-1);
+  padding-block: calc(var(--space-1) + var(--space-0-5));
   border-radius: var(--radius-medium);
   cursor: default;
   color: var(--text-secondary);
@@ -1882,10 +2042,9 @@ body.outline-resizing * {
   color: var(--text-primary);
 }
 
-/* Folders carry a disclosure chevron that rotates open; files carry a
-   document glyph, so the two row kinds read apart at a glance. */
+/* Folder labels and icon-free file labels share the same text start. */
 .file-tree-chevron,
-.file-tree-file-icon {
+.file-tree-file-spacer {
   flex-shrink: 0;
   display: grid;
   place-items: center;
@@ -1900,10 +2059,6 @@ body.outline-resizing * {
 
 .file-tree-chevron-expanded {
   transform: rotate(90deg);
-}
-
-.file-tree-file-icon {
-  color: var(--text-muted);
 }
 
 .file-tree-name {
@@ -1936,17 +2091,17 @@ body.outline-resizing * {
   gap: var(--space-3);
 }
 
-/* The settings panel takes the full dialog width; other dialogs stay
-   content-sized. The overlay is a centered grid, so an auto width would
-   shrink to max-content. The panel is capped to the window height so the
-   middle row scrolls on short windows; the vh line is the no-dvh fallback
-   for older WKWebViews. The middle row is minmax(0, 1fr) so it shrinks
-   below its content height when the cap binds. */
-.dialog-overlay .settings-dialog {
-  width: min(520px, 100% - 48px);
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  max-height: calc(100vh - var(--space-5) - var(--space-5));
-  max-height: calc(100dvh - var(--space-5) - var(--space-5));
+/* Settings uses a fixed dual-pane workspace inside the viewport. The vh
+   height is the fallback for older WKWebViews; dvh handles dynamic chrome. */
+.dialog-overlay [role="dialog"].settings-dialog {
+  width: min(900px, calc(100% - 48px));
+  height: min(640px, calc(100vh - 48px));
+  height: min(640px, calc(100dvh - 48px));
+  max-width: none;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .dialog-overlay [role="dialog"] h2 {
@@ -1987,42 +2142,171 @@ body.outline-resizing * {
 
 /* ---------- Settings dialog ---------- */
 
-/* Scrollable middle row of the settings dialog: the sections scroll under
-   the pinned title and 完成 button when the window is short. The gutter is
-   reserved so an appearing scrollbar never shifts the rows horizontally;
-   overflow-x stays hidden so no horizontal scrollbar can sneak in. */
-.settings-body {
+.settings-layout {
   display: grid;
-  gap: var(--space-3);
+  grid-template-columns: 200px minmax(0, 1fr);
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
-  padding-bottom: var(--space-1);
 }
 
-/* macOS-style grouped settings: labelled sections (外观/编辑器/关于), each a
-   rounded inset card of hairline-divided rows. Cards stay overflow-visible
-   so the custom-font dropdown can float below its row without being
-   clipped; the card background still follows the rounded corners. */
+.settings-navigation {
+  min-width: 0;
+  padding: var(--space-5) var(--space-4);
+  border-right: 1px solid var(--divider);
+  background: var(--surface-panel);
+}
+
+.dialog-overlay .settings-dialog .settings-navigation-title {
+  padding-inline: var(--space-2);
+  font-size: 22px;
+  line-height: 1.3;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-5);
+}
+
+.settings-tab {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-medium);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size-large);
+  text-align: left;
+}
+
+.settings-tab svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+
+.settings-tab:hover,
+.settings-tab[aria-selected="true"] {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.settings-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset-block: 10px;
+  inset-inline-start: 0;
+  border-inline-start: 2px solid currentColor;
+}
+
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-5) var(--space-5) var(--space-4);
+}
+
+.settings-content-header {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-4);
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-5);
+}
+
+.settings-content-heading {
+  min-width: 0;
+}
+
+.dialog-overlay .settings-dialog .settings-content-title {
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.dialog-overlay .settings-dialog .settings-content-description {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size);
+  line-height: 1.5;
+}
+
+.settings-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--space-1) var(--space-1) 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 .settings-section {
   display: grid;
-  gap: var(--space-0-5);
+  gap: var(--space-2);
+  align-content: start;
 }
 
-.settings-section-heading {
-  margin: 0;
-  padding: var(--space-1) var(--space-1) var(--space-0-5);
-  font-size: var(--font-ui-size-small);
-  font-weight: 600;
-  color: var(--text-muted);
-  letter-spacing: 0.02em;
+@media (max-width: 700px) {
+  .settings-layout {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .settings-navigation {
+    padding: var(--space-4) var(--space-0-5);
+  }
+
+  .settings-navigation-title,
+  .settings-tab-label {
+    display: none;
+  }
+
+  .settings-tabs {
+    margin-top: 0;
+  }
+
+  .settings-tab {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .settings-tab[aria-selected="true"]::after {
+    inset-inline-start: 2px;
+  }
+
+  .settings-content {
+    padding: var(--space-4);
+  }
+
+  .dialog-overlay .settings-dialog .settings-content-title {
+    font-size: 20px;
+  }
+
+  .settings-row:has(.settings-update-controls) {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-2);
+  }
+
+  .settings-update-controls {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
 }
 
 .settings-group {
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-medium);
-  background: var(--surface-inset);
+  border: 0;
+  background-color: transparent;
 }
 
 .settings-row {
@@ -2030,8 +2314,8 @@ body.outline-resizing * {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  min-height: 40px;
+  padding: var(--space-3) 0;
+  min-height: 64px;
 }
 
 .settings-row + .settings-row {
@@ -2039,25 +2323,60 @@ body.outline-resizing * {
 }
 
 .settings-row > label,
-.settings-row-label {
+.settings-row-label,
+.settings-field-label > label {
   color: var(--text-primary);
+  font-weight: 600;
 }
 
-.settings-row input[type="number"] {
-  width: 6.5em;
+.settings-field-label {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
-/* Control polish: the quiet form styling above, plus a surface lift on
-   hover and a background transition so focus/hover never snap. */
+.settings-field-description {
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .settings-row input:not([type="checkbox"]):not([type="radio"]),
 .settings-row select {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-pill);
+  background-color: transparent;
   transition: border-color var(--transition-fast),
-    background var(--transition-fast);
+    background-color var(--transition-fast);
+}
+
+.settings-row input:not([type="number"]) {
+  min-height: 34px;
+}
+
+.settings-dialog .settings-row input[type="number"] {
+  width: 6.5em;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-row button {
+  border-radius: var(--radius-pill);
+  background-color: transparent;
 }
 
 .settings-row input:hover:not(:disabled):not(:focus-visible),
 .settings-row select:hover:not(:disabled):not(:focus-visible) {
-  background: var(--surface);
+  border-color: var(--text-muted);
+  background-color: transparent;
+}
+
+.settings-row button:hover:not(:disabled) {
+  background-color: var(--surface-hover);
 }
 
 /* Custom-font field: drawn searchable list anchored below the input. The
@@ -2372,13 +2691,6 @@ button:active:not(:disabled),
   }
 }
 
-@keyframes panelIn {
-  from {
-    opacity: 0;
-    transform: scale(0.98);
-  }
-}
-
 .dialog-overlay {
   animation: fadeIn var(--anim-fast) ease;
 }
@@ -2391,13 +2703,6 @@ button:active:not(:disabled),
 .perf-banner,
 .translation-banner {
   animation: bannerIn var(--anim-moderate) var(--anim-easing);
-}
-
-/* Collapsed rails skip the entry animation so the collapsed opacity: 0 /
- * visibility: hidden styles keep winning. */
-.sidebar-rail:not([data-collapsed="true"]),
-.outline-rail:not([data-collapsed="true"]) {
-  animation: panelIn var(--anim-moderate) var(--anim-easing);
 }
 
 @media (prefers-reduced-motion: reduce) {
