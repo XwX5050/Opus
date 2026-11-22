@@ -42,6 +42,17 @@ const renderSidebar = (port = makePort(), onOpenFile = vi.fn()) => {
 const rows = () => screen.getAllByRole("treeitem");
 const rowNames = () => rows().map((row) => row.getAttribute("aria-label"));
 
+const selectRowAction = async (
+  user: ReturnType<typeof userEvent.setup>,
+  row: HTMLElement,
+  name: "重命名" | "移到废纸篓",
+) => {
+  expect(within(row).queryByRole("button", { name })).not.toBeInTheDocument();
+  await user.pointer({ keys: "[MouseRight]", target: row });
+  const menu = await screen.findByRole("menu");
+  await user.click(within(menu).getByRole("menuitem", { name }));
+};
+
 // The disk-event reload path — event -> invalidation -> listing request ->
 // render — spans several React commits plus an async listing per event. CI
 // runners under parallel load exceed the 1s default find*/waitFor budget, so
@@ -99,12 +110,48 @@ describe("FileSidebar", () => {
     await user.click(screen.getByRole("treeitem", { name: "drafts" }));
     await screen.findByRole("treeitem", { name: "gamma.md" });
 
+    await user.click(screen.getByRole("button", { name: "筛选文件" }));
     await user.type(screen.getByRole("textbox", { name: "筛选文件" }), "GAM");
 
     expect(rowNames()).toEqual(["gamma.md"]);
 
     await user.clear(screen.getByRole("textbox", { name: "筛选文件" }));
     expect(rowNames()).toHaveLength(5);
+  });
+
+  it("expands the filter on activation and collapses only when it is empty", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    const trigger = screen.getByRole("button", { name: "筛选文件" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("textbox", { name: "筛选文件" })).not.toBeInTheDocument();
+
+    await user.click(trigger);
+    const input = screen.getByRole("textbox", { name: "筛选文件" });
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("placeholder", "筛选文件…");
+
+    await user.type(input, "alp");
+    await user.click(screen.getByText("notes"));
+    expect(input).toBeInTheDocument();
+
+    await user.clear(input);
+    await user.click(screen.getByText("notes"));
+    expect(screen.queryByRole("textbox", { name: "筛选文件" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "筛选文件" })).toBeVisible();
+  });
+
+  it("marks directory rows with a disclosure chevron and file rows with a file icon", async () => {
+    renderSidebar();
+    const drafts = await screen.findByRole("treeitem", { name: "drafts" });
+    const alpha = screen.getByRole("treeitem", { name: "alpha.md" });
+
+    expect(drafts.querySelector(".file-tree-chevron")).toBeInTheDocument();
+    expect(drafts.querySelector(".file-tree-file-icon")).not.toBeInTheDocument();
+    expect(alpha.querySelector(".file-tree-file-icon")).toBeInTheDocument();
+    expect(alpha.querySelector(".file-tree-chevron")).not.toBeInTheDocument();
   });
 
   it("opens a file through onOpenFile when clicked", async () => {
@@ -157,14 +204,14 @@ describe("FileSidebar", () => {
 
     port.trashFailure = new DocumentPortError("io", "trash failed");
     const betaRow = screen.getByRole("treeitem", { name: "Beta.markdown" });
-    await user.click(within(betaRow).getByRole("button", { name: "移到废纸篓" }));
+    await selectRowAction(user, betaRow, "移到废纸篓");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("trash failed");
     expect(screen.getByRole("treeitem", { name: "Beta.markdown" })).toBeInTheDocument();
 
     port.trashFailure = null;
     const alphaRow = screen.getByRole("treeitem", { name: "alpha.md" });
-    await user.click(within(alphaRow).getByRole("button", { name: "移到废纸篓" }));
+    await selectRowAction(user, alphaRow, "移到废纸篓");
 
     await waitFor(() =>
       expect(screen.queryByRole("treeitem", { name: "alpha.md" })).not.toBeInTheDocument(),
@@ -178,7 +225,10 @@ describe("FileSidebar", () => {
     renderSidebar();
     await screen.findByRole("treeitem", { name: "alpha.md" });
 
-    await user.click(screen.getByRole("button", { name: "新建文件" }));
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("notes") });
+    await user.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "新建文件" }),
+    );
     const input = screen.getByRole("textbox", { name: "文件名" });
     await user.type(input, "new-note.md{Enter}");
 
@@ -197,7 +247,7 @@ describe("FileSidebar", () => {
     renderSidebar();
     const alphaRow = await screen.findByRole("treeitem", { name: "alpha.md" });
 
-    await user.click(within(alphaRow).getByRole("button", { name: "重命名" }));
+    await selectRowAction(user, alphaRow, "重命名");
     const input = screen.getByRole("textbox", { name: "文件名" });
     await user.clear(input);
     await user.type(input, "renamed.md{Enter}");
@@ -291,7 +341,24 @@ describe("FileSidebar", () => {
     );
   });
 
-  it("closes the workspace through the header action", async () => {
+  it("moves the workspace actions from the header into the title's context menu", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    // The header shows only the workspace title; both actions live in its
+    // right-click menu.
+    expect(screen.queryByRole("button", { name: "新建文件" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "关闭文件夹" })).not.toBeInTheDocument();
+
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("notes") });
+
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "新建文件" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "关闭文件夹" })).toBeInTheDocument();
+  });
+
+  it("closes the workspace through the title's context menu", async () => {
     const user = userEvent.setup();
     const onCloseWorkspace = vi.fn();
     render(
@@ -303,7 +370,10 @@ describe("FileSidebar", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "关闭文件夹" }));
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("notes") });
+    await user.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "关闭文件夹" }),
+    );
 
     expect(onCloseWorkspace).toHaveBeenCalledOnce();
   });
@@ -329,7 +399,7 @@ describe("FileSidebar", () => {
     const betaRow = await screen.findByRole("treeitem", { name: "Beta.markdown" });
 
     await user.click(screen.getByRole("treeitem", { name: "drafts" }));
-    await user.click(within(betaRow).getByRole("button", { name: "重命名" }));
+    await selectRowAction(user, betaRow, "重命名");
     const input = screen.getByRole("textbox", { name: "文件名" });
     await user.clear(input);
     await user.type(input, "draf");
@@ -484,7 +554,10 @@ describe("FileSidebar", () => {
     const { port } = renderSidebar();
     await screen.findByRole("treeitem", { name: "alpha.md" });
 
-    await user.click(screen.getByRole("button", { name: "新建文件" }));
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("notes") });
+    await user.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "新建文件" }),
+    );
     const input = screen.getByRole("textbox", { name: "文件名" });
     await user.type(input, "sub/deep.md{Enter}");
 
@@ -518,7 +591,7 @@ describe("FileSidebar", () => {
 
     await user.click(screen.getByRole("treeitem", { name: "drafts" }));
     const draftsRow = screen.getByRole("treeitem", { name: "drafts" });
-    await user.click(within(draftsRow).getByRole("button", { name: "重命名" }));
+    await selectRowAction(user, draftsRow, "重命名");
     const input = screen.getByRole("textbox", { name: "文件名" });
     await user.clear(input);
     await user.type(input, "published{Enter}");

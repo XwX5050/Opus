@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useGSAP } from "@gsap/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Text } from "@codemirror/state";
@@ -27,6 +27,7 @@ import {
   collectOutlineParentIds,
   type OutlineHeading,
 } from "../editor/outline";
+import { REDUCED_SYNTAX_MIN_LENGTH } from "../editor/performanceMode";
 import { useAutomaticPerformanceMode } from "./usePerformanceMode";
 import RecoveryDialog from "../recovery/RecoveryDialog";
 import { useTheme } from "../theme/useTheme";
@@ -34,7 +35,6 @@ import FileSidebar from "../workspace/FileSidebar";
 import {
   BookOpenIcon,
   FileTextIcon,
-  FolderIcon,
   PanelLeftIcon,
   PanelRightIcon,
   PencilLineIcon,
@@ -43,6 +43,7 @@ import {
 } from "./icons";
 import SettingsDialog from "./SettingsDialog";
 import TabList from "./TabList";
+import WelcomeScreen from "./WelcomeScreen";
 import WindowControls, {
   isWindowsNative,
   WindowResizeHandles,
@@ -96,18 +97,19 @@ export interface AppShellProps {
   subscribeToImageDrops?: ImageDropSubscriber | null;
   subscribeToMenuActions?: MenuActionSubscriber | null;
   /**
-   * Renders the file-action text buttons (新建/打开文件/打开文件夹/另存为/设置)
+   * Renders the file-action text buttons (新建/打开文件/打开文件夹/另存为)
    * in the header. Browser shells have no native menu bar and keep them;
-   * production moves those actions into the macOS menu instead.
+   * production moves those actions into the macOS menu instead. Settings
+   * never live here: the activity rail owns the shell's only entry.
    */
   fileActionsInHeader?: boolean;
   /**
    * Non-macOS native builds have no native menu bar: the header shows a
-   * compact file-menu dropdown next to the sidebar toggle and owns the menu
-   * keyboard shortcuts at the window level (routed through the same handler
-   * the macOS native menu drives). Linux also drops the "Opus" title (its
-   * window is undecorated); Windows keeps the title and draws its own
-   * caption buttons (WindowControls) because its window is undecorated too.
+   * compact file-menu dropdown and owns the menu keyboard shortcuts at the
+   * window level (routed through the same handler the macOS native menu
+   * drives). Linux also drops the "Opus" title (its window is undecorated);
+   * Windows keeps the title and draws its own caption buttons
+   * (WindowControls) because its window is undecorated too.
    */
   customFileHeader?: boolean;
   externalError?: string | null;
@@ -126,14 +128,6 @@ const pruneTabMap = <T,>(
 ): ReadonlyMap<string, T> => {
   if ([...current.keys()].every((id) => openIds.has(id))) return current;
   return new Map([...current].filter(([id]) => openIds.has(id)));
-};
-
-/** Splits a recent-item path into a display name and its parent directory. */
-const splitRecentPath = (path: string): { name: string; parent: string } => {
-  const trimmed = path.replace(/[/\\]+$/, "");
-  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  if (index <= 0) return { name: trimmed, parent: "" };
-  return { name: trimmed.slice(index + 1), parent: trimmed.slice(0, index) };
 };
 
 /**
@@ -241,17 +235,19 @@ export default function AppShell({
   onDismissExternalError,
 }: AppShellProps) {
   const controller = useAppController(port, subscribeToEvents);
+  // Latest controller for the native E2E runner: the runner reads through a
+  // callback, so it always sees the current render's state instead of the
+  // state captured when the runner effect started.
+  const controllerRef = useRef(controller);
+  controllerRef.current = controller;
   useTheme(controller.theme, controller.editorPreferences);
   const sidebar = controller.sidebarPreferences;
   const setSidebar = controller.setSidebarPreferences;
   const outline = controller.outlinePreferences;
   const setOutline = controller.setOutlinePreferences;
-  const sidebarAvailable =
-    controller.state.tabs.length > 0 || controller.workspace !== null;
-  // The tab element only exists when the sidebar and its tabs section are
-  // both expanded; the tabpanel drops its label reference otherwise.
-  const activeTabVisible =
-    sidebarAvailable && !sidebar.collapsed && !sidebar.tabsSectionCollapsed;
+  const sidebarAvailable = true;
+  // Horizontal tabs stay visible above the editor regardless of sidebar state.
+  const activeTabVisible = true;
   // Sidebar tab rows render titles and status flags only. Handing them whole
   // document snapshots would push every open document's text through a React
   // prop on each keystroke, and React's development build then stringifies
@@ -748,6 +744,8 @@ export default function AppShell({
   const automaticMode = useAutomaticPerformanceMode(active?.id ?? null, activeText);
   const forceFull = active !== undefined && forceFullTabs.has(active.id);
   const lightMode = automaticMode === "light" && !forceFull;
+  const reducedSyntaxLightMode =
+    lightMode && (activeText?.length ?? 0) >= REDUCED_SYNTAX_MIN_LENGTH;
   const showPerfBanner = Boolean(
     active && automaticMode === "light" && !forceFull && !dismissedPerfTabs.has(active.id),
   );
@@ -789,9 +787,9 @@ export default function AppShell({
     { scope: shellRef },
   );
 
-  // Elastic scale hover on every header button (text actions and icon
-  // toggles). Rebinds when the conditionally rendered buttons appear or
-  // disappear; cleanup removes listeners and any in-flight transform.
+  // Elastic scale hover applies to header actions, not tab controls; the
+  // activity rail stays fixed-scale. Rebinds when conditionally rendered
+  // buttons change; cleanup removes listeners and in-flight transforms.
   // Panel toggles additionally animate the icon's divider line on hover as
   // a preview of the collapse/expand they trigger.
   const panelDividerStateRef = useRef({ leftCollapsed: true, rightCollapsed: true });
@@ -805,8 +803,14 @@ export default function AppShell({
       if (!root) return;
       const header = root.querySelector<HTMLElement>(".app-header");
       if (!header) return;
-      const cleanups = [bindButtonHoverMotion(header)];
-      const leftToggle = header.querySelector<HTMLElement>(".sidebar-toggle");
+      const cleanups = [
+        bindButtonHoverMotion(
+          header,
+          "button:not(:disabled):not(.tab):not(.tab-close):not(.tab-create)",
+        ),
+      ];
+      // Rail buttons keep a fixed scale so their panel dividers stay stable.
+      const leftToggle = root.querySelector<HTMLElement>(".sidebar-toggle");
       if (leftToggle) {
         cleanups.push(
           bindPanelDividerHover(
@@ -871,24 +875,46 @@ export default function AppShell({
 
   useGSAP(
     () => {
-      const root = shellRef.current;
-      if (!root) return;
-      root
-        .querySelectorAll<HTMLElement>(
-          '[data-motion-panel]:not([data-collapsed="true"])',
-        )
-        .forEach((panel) => animatePanelIntro(panel));
-      root
+      const panel = sidebarRailRef.current;
+      if (!panel || sidebar.collapsed) return;
+      animatePanelIntro(panel);
+      panel
         .querySelectorAll<HTMLElement>("[data-motion-list]")
         .forEach((list) => animateListIntro(list));
     },
     {
       scope: shellRef,
-      dependencies: [
-        sidebar.collapsed,
-        outlineOpen,
-        showPerfBanner,
-      ],
+      dependencies: [sidebar.collapsed],
+      revertOnUpdate: true,
+    },
+  );
+
+  useGSAP(
+    () => {
+      const panel = outlineRailRef.current;
+      if (!panel || !outlineOpen) return;
+      animatePanelIntro(panel);
+      panel
+        .querySelectorAll<HTMLElement>("[data-motion-list]")
+        .forEach((list) => animateListIntro(list));
+    },
+    {
+      scope: shellRef,
+      dependencies: [outlineOpen, Boolean(active)],
+      revertOnUpdate: true,
+    },
+  );
+
+  useGSAP(
+    () => {
+      const banner = shellRef.current?.querySelector<HTMLElement>(
+        '[data-motion-panel="perf-banner"]',
+      );
+      if (banner) animatePanelIntro(banner);
+    },
+    {
+      scope: shellRef,
+      dependencies: [showPerfBanner],
       revertOnUpdate: true,
     },
   );
@@ -960,6 +986,35 @@ export default function AppShell({
       disposed = true;
     };
   }, []);
+
+  // Native E2E scenario runner. The dynamic import is compiled only into the
+  // dedicated test build (`MODE === "native-e2e"` plus the `native-e2e`
+  // Cargo feature); normal production builds have MODE "production" and
+  // never include the runner chunk. It drives the real controller, the real
+  // CodeMirror view, and the real TauriDocumentPort — nothing here is
+  // exercised by the browser-shell E2E mode.
+  useEffect(() => {
+    if (import.meta.env.MODE !== "native-e2e") return;
+    let disposed = false;
+    void import("./nativeE2e")
+      .then(({ runNativeE2e }) => {
+        if (disposed) return undefined;
+        return runNativeE2e({
+          port,
+          controller: () => controllerRef.current,
+          editorView: () => activeEditorViewRef.current,
+        });
+      })
+      .catch((error: unknown) => {
+        // The runner writes its own failure report through the marker/report
+        // channel; this only keeps an unexpected load/startup failure visible
+        // in the native log.
+        console.error("native E2E runner failed", error);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [port]);
 
   // Manual check from the settings dialog. An available update hands off to
   // the existing update dialog (which yields to the open settings dialog and
@@ -1600,6 +1655,20 @@ export default function AppShell({
     void getCurrentWindow().toggleMaximize();
   };
 
+  const onHeaderMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || !("__TAURI_INTERNALS__" in window)) return;
+    const target = event.target as HTMLElement;
+    if (
+      target.closest(
+        "button, input, select, [role='slider'], .tab-item, .window-controls",
+      )
+    ) {
+      return;
+    }
+    event.preventDefault();
+    void getCurrentWindow().startDragging();
+  };
+
   return (
     <main
       ref={shellRef}
@@ -1619,23 +1688,13 @@ export default function AppShell({
         aria-label="应用标题栏"
         className="app-header"
         data-tauri-drag-region
+        onMouseDown={onHeaderMouseDown}
         onDoubleClick={onHeaderDoubleClick}
+        style={{
+          "--header-leading-width": `${44 + (sidebarAvailable && !sidebar.collapsed ? sidebar.width : 0)}px`,
+        } as CSSProperties}
       >
-        {sidebarAvailable && (
-          <button
-            type="button"
-            className="icon-button sidebar-toggle"
-            aria-expanded={!sidebar.collapsed}
-            aria-controls="app-sidebar"
-            aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
-            title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
-            onClick={() =>
-              setSidebar((current) => ({ ...current, collapsed: !current.collapsed }))
-            }
-          >
-            <PanelLeftIcon />
-          </button>
-        )}
+        <div className="app-header-leading">
         {customFileHeader && (
           <div className="file-menu-anchor" ref={fileMenuAnchorRef}>
             <button
@@ -1691,16 +1750,27 @@ export default function AppShell({
             )}
           </div>
         )}
-        {customFileHeader && detectPathPlatform() === "linux" ? (
-          // No window title on Linux (the native header bar is gone);
-          // Windows shows the title plus its custom caption buttons. The
-          // spacer keeps the right-side controls pinned to the far edge.
-          <span className="app-header-spacer" data-tauri-drag-region />
-        ) : (
+        {!(customFileHeader && detectPathPlatform() === "linux") && (
           <strong className="app-title" data-tauri-drag-region>
             Opus
           </strong>
         )}
+        </div>
+        {controller.state.tabs.length > 0 ? (
+          <div className="document-tabs-bar">
+            <TabList
+              tabs={tabItems}
+              activeId={controller.state.activeId}
+              onActivate={controller.activate}
+              onClose={closeTab}
+              onCreate={controller.newDocument}
+              onTabContextMenu={openTabContextMenu}
+            />
+          </div>
+        ) : (
+          <div />
+        )}
+        <div className="app-header-actions">
         {controller.state.tabs.length > 0 && (
           <>
             {fileActionsInHeader && (
@@ -1709,43 +1779,6 @@ export default function AppShell({
                 <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
                 <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
                 <button type="button" onClick={() => void controller.saveAs(active?.id)}>另存为…</button>
-              </>
-            )}
-            {active && outlineOpen && (
-              // Document actions live on the header's right side, but only
-              // while the outline panel is open; hiding them never resets
-              // the per-tab translation or view-mode state.
-              <>
-                <button
-                  type="button"
-                  className="icon-button translate-toggle"
-                  aria-pressed={translationReady}
-                  aria-label={translationLabel}
-                  title={translationLabel}
-                  onClick={() => controller.toggleTranslation(active.id)}
-                >
-                  <TranslateIcon />
-                </button>
-                <button
-                  type="button"
-                  className="icon-button view-mode-toggle"
-                  aria-pressed={viewMode === "reading"}
-                  aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                  title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                  onClick={() => controller.toggleReading(active.id)}
-                >
-                  {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
-                </button>
-                <button
-                  type="button"
-                  className="icon-button presentation-toggle"
-                  aria-pressed={presenting}
-                  aria-label="演示模式"
-                  title="演示模式"
-                  onClick={() => controller.openPresentation(active.id)}
-                >
-                  <PresentationIcon />
-                </button>
               </>
             )}
             {active && (
@@ -1764,25 +1797,50 @@ export default function AppShell({
             )}
           </>
         )}
-        {fileActionsInHeader && (
-          <button
-            type="button"
-            onClick={(event) => {
-              // The dialog focuses its own first control before the shell's
-              // effect could capture this, so remember the invoker here.
-              previousFocusRef.current = event.currentTarget;
-              setSettingsRequested(true);
-            }}
-          >
-            设置
-          </button>
-        )}
         <WindowControls />
+        </div>
       </header>
 
       <WindowResizeHandles />
 
       <section className="app-body">
+        <nav
+          className="activity-rail"
+          aria-label="活动栏"
+          data-sidebar-collapsed={sidebar.collapsed}
+        >
+          <div className="activity-rail-top">
+            {sidebarAvailable && (
+              <button
+                type="button"
+                className="icon-button sidebar-toggle activity-rail-button"
+                aria-expanded={!sidebar.collapsed}
+                aria-controls="app-sidebar"
+                aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
+                title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
+                onClick={() =>
+                  setSidebar((current) => ({
+                    ...current,
+                    collapsed: !current.collapsed,
+                  }))
+                }
+              >
+                <PanelLeftIcon />
+              </button>
+            )}
+          </div>
+          <div className="activity-rail-bottom">
+            <button
+              type="button"
+              className="icon-button activity-rail-button"
+              aria-label="设置"
+              title="设置"
+              onClick={(event) => openSettingsFrom(event.currentTarget)}
+            >
+              <SettingsIcon size={20} />
+            </button>
+          </div>
+        </nav>
         {sidebarAvailable && (
           <>
           <div
@@ -1802,37 +1860,7 @@ export default function AppShell({
             style={{ width: sidebar.width }}
           >
             <div className="sidebar-scroll">
-            {controller.state.tabs.length > 0 && (
-              <section className="sidebar-section">
-                <button
-                  type="button"
-                  className="sidebar-section-header"
-                  aria-expanded={!sidebar.tabsSectionCollapsed}
-                  aria-controls="sidebar-tabs-content"
-                  onClick={() =>
-                    setSidebar((current) => ({
-                      ...current,
-                      tabsSectionCollapsed: !current.tabsSectionCollapsed,
-                    }))
-                  }
-                >
-                  打开的标签
-                </button>
-                <div id="sidebar-tabs-content">
-                  {!sidebar.tabsSectionCollapsed && (
-                    <TabList
-                      tabs={tabItems}
-                      activeId={controller.state.activeId}
-                      onActivate={controller.activate}
-                      onClose={closeTab}
-                      onTabContextMenu={openTabContextMenu}
-                    />
-                  )}
-                </div>
-              </section>
-            )}
-            {controller.workspace && (
-              <section className="sidebar-section">
+              <section className="sidebar-section explorer-section">
                 <button
                   type="button"
                   className="sidebar-section-header"
@@ -1845,31 +1873,27 @@ export default function AppShell({
                     }))
                   }
                 >
-                  文件夹
+                  资源管理器
                 </button>
                 <div id="sidebar-files-content">
                   {!sidebar.filesSectionCollapsed && (
-                    <FileSidebar
-                      root={controller.workspace}
-                      port={port}
-                      onOpenFile={(path) => void controller.openPath(path)}
-                      onCloseWorkspace={controller.closeWorkspace}
-                    />
+                    controller.workspace ? (
+                      <FileSidebar
+                        root={controller.workspace}
+                        port={port}
+                        onOpenFile={(path) => void controller.openPath(path)}
+                        onCloseWorkspace={controller.closeWorkspace}
+                      />
+                    ) : (
+                      <div className="explorer-empty">
+                        <p>尚未打开文件夹。</p>
+                        <p className="explorer-empty-hint">打开一个文件夹，即可浏览和全文搜索其中的 Markdown 文档。</p>
+                        <button type="button" aria-label="打开文件夹（资源管理器）" onClick={openWorkspaceFromUser}>打开文件夹</button>
+                      </div>
+                    )
                   )}
                 </div>
               </section>
-            )}
-            </div>
-            <div className="sidebar-footer">
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="设置"
-                title="设置"
-                onClick={(event) => openSettingsFrom(event.currentTarget)}
-              >
-                <SettingsIcon />
-              </button>
             </div>
           </aside>
           </div>
@@ -1889,8 +1913,10 @@ export default function AppShell({
           )}
           </>
         )}
+        <div className="editor-column">
         <div
-          role={active ? "tabpanel" : undefined}
+          role={active ? "tabpanel" : "region"}
+          aria-label={active ? undefined : "空白状态"}
           id={active ? `document-panel-${active.id}` : undefined}
           aria-labelledby={
             active && activeTabVisible ? `document-tab-${active.id}` : undefined
@@ -1948,7 +1974,9 @@ export default function AppShell({
         {showPerfBanner && active && (
           <div role="status" className="perf-banner" data-motion-panel="perf-banner">
             <span className="perf-banner-text">
-              大文档已切换到轻量模式：图片与公式渲染已暂停，文本内容不受影响。
+              {reducedSyntaxLightMode
+                ? "大文档已切换到轻量模式：图片与公式渲染已暂停；极端大文档使用精简 Markdown 语法。文本内容不受影响。"
+                : "大文档已切换到轻量模式：图片与公式渲染已暂停，文本内容不受影响。"}
             </span>
             <button
               type="button"
@@ -2047,52 +2075,15 @@ export default function AppShell({
             }}
           />
         ) : (
-          <div role="region" aria-label="空白状态" className="empty-state">
-            <div className="empty-hero">
-              <span className="empty-mark" aria-hidden="true">
-                <FileTextIcon size={28} />
-              </span>
-              <p className="empty-headline">打开 Markdown 文件或创建新文档。</p>
-              <div className="empty-actions">
-                <button type="button" className="empty-primary-action" onClick={controller.newDocument}>新建</button>
-                <button type="button" onClick={() => void controller.openFiles()}>打开文件</button>
-                <button type="button" onClick={openWorkspaceFromUser}>打开文件夹</button>
-              </div>
-            </div>
-            {controller.state.tabs.length === 0 && controller.recent.length > 0 && (
-              <section aria-label="最近打开" className="recent-section">
-                <h2 className="recent-title">最近打开</h2>
-                <ul className="recent-list">
-                  {controller.recent.map((item) => {
-                    const { name, parent } = splitRecentPath(item.path);
-                    return (
-                      <li key={`${item.kind}:${item.path}`}>
-                        <button
-                          type="button"
-                          aria-label={`${item.kind === "file" ? "文件" : "文件夹"} ${item.path}`}
-                          title={item.path}
-                          onClick={() => openRecentFromUser(item)}
-                        >
-                          <span className="recent-icon" aria-hidden="true">
-                            {item.kind === "file" ? <FileTextIcon /> : <FolderIcon />}
-                          </span>
-                          <span className="recent-text">
-                            <span className="recent-name">{name}</span>
-                            {parent && (
-                              // LRI/PDI keep the path LTR inside the rtl
-                              // container, so the leading "/" stays put.
-                              <span className="recent-path">{`⁦${parent}⁩`}</span>
-                            )}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
-          </div>
+          <WelcomeScreen
+            recent={controller.recent}
+            onNewDocument={controller.newDocument}
+            onOpenFiles={() => void controller.openFiles()}
+            onOpenWorkspace={openWorkspaceFromUser}
+            onOpenRecent={openRecentFromUser}
+          />
         )}
+        </div>
         </div>
         {active && (
           <>
@@ -2129,6 +2120,40 @@ export default function AppShell({
                 style={{ width: outline.width }}
               >
                 <OutlinePanel
+                  actions={
+                    <>
+                      <button
+                        type="button"
+                        className="icon-button translate-toggle"
+                        aria-pressed={translationReady}
+                        aria-label={translationLabel}
+                        title={translationLabel}
+                        onClick={() => controller.toggleTranslation(active.id)}
+                      >
+                        <TranslateIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button view-mode-toggle"
+                        aria-pressed={viewMode === "reading"}
+                        aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                        title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                        onClick={() => controller.toggleReading(active.id)}
+                      >
+                        {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button presentation-toggle"
+                        aria-pressed={presenting}
+                        aria-label="演示模式"
+                        title="演示模式"
+                        onClick={() => controller.openPresentation(active.id)}
+                      >
+                        <PresentationIcon />
+                      </button>
+                    </>
+                  }
                   headings={activeOutline}
                   collapsedIds={activeCollapsedOutlineIds}
                   onToggle={(id) => toggleOutlineBranch(active.id, id)}
@@ -2143,17 +2168,6 @@ export default function AppShell({
               </aside>
             </div>
           </>
-        )}
-        {!sidebarAvailable && (
-          <button
-            type="button"
-            className="icon-button settings-fab"
-            aria-label="设置"
-            title="设置"
-            onClick={(event) => openSettingsFrom(event.currentTarget)}
-          >
-            <SettingsIcon />
-          </button>
         )}
       </section>
       </div>

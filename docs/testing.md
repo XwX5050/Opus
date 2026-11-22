@@ -10,14 +10,26 @@ applicable section before a release; the release candidate gate is
 
 ```sh
 npm test                # vitest unit/component tests (jsdom)
+npm run test:node       # node --test for scripts/*.node-test.mjs
 npm run build           # tsc -b + vite production build
+npm run perf:build      # production perf entry → dist-perf/ (build-rot gate)
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml --features native-e2e --lib native_e2e
 npm run test:e2e        # Playwright browser-shell flows (below)
-npm run perf            # performance budgets → tests/perf/report.json
+npm run test:native -- --build   # real Tauri process, default smoke scenario (below)
+npm run perf            # production-bundle + packaged-app budgets → tests/perf/report.json
 ```
 
-CI runs `npm test`, `npm run build`, `cargo fmt --check`, `cargo clippy`,
-`cargo test`, and `npm run test:e2e` on every push (`.github/workflows/ci.yml`).
+CI runs every push (`.github/workflows/ci.yml`): on `macos-latest` a `check`
+job (`npm test`, `npm run test:node`, `npm run build`, `npm run perf:build`,
+Rust fmt, clippy with and without the `native-e2e` feature, Rust tests with
+and without it) and an `e2e` job; `check-linux` on `ubuntu-latest` (frontend
+build plus Rust fmt/clippy/tests for the Linux toolchain); a `native-e2e` job
+on `ubuntu-latest` configured to run
+`xvfb-run --auto-servernum npm run test:native -- --build --scenario all` and
+to upload `test-results/native-e2e/` on failure; and `check-windows` on
+`windows-latest` (frontend tests/build plus Rust fmt/clippy/tests, both
+feature sets).
 
 ## Browser-shell E2E (tests/e2e/)
 
@@ -28,6 +40,9 @@ and drives the real shell in headless Chromium. The composition root
 `src/app/e2e.ts` builds a `MemoryDocumentPort` and publishes it as
 `window.__E2E_PORT__` for scripting (disk events, write inspection).
 Production builds never define `VITE_E2E` and always use the Tauri port.
+This suite deliberately stays on the in-memory port: it covers UI behavior,
+not the native seam. The native suite below covers the real Tauri backend for
+a smaller, workflow-shaped set of scenarios.
 
 Covered flows (real CodeMirror interactions, no reducer calls):
 
@@ -40,9 +55,110 @@ Covered flows (real CodeMirror interactions, no reducer calls):
 - LaTeX success renders KaTeX, invalid formula shows a non-blocking error
   and never blocks editing;
 - find/replace (⌘F panel, replace all) in the current document;
-- folder drawer: open folder, expand tree, open a file, collapse/expand;
+- welcome page: single-column launch/recent layout at startup and after closing `欢迎.md`, five-item recent limit, native 更多… disclosure, accent section headings and recent names with compact parent paths, recent-file activation, the persistent 44 px activity rail while the explorer is collapsed, and 1280/1080/680 px layouts without horizontal overflow;
+- folder explorer: open folder, expand tree, open a file, collapse/expand;
 - external conflict: dirty tab + disk change → dialog → 保留当前版本;
 - crash recovery: launch draft → 查看源码 → 恢复.
+
+## Native E2E (real Tauri process)
+
+```sh
+npm run test:native -- --build --scenario smoke   # build + one scenario
+npm run test:native -- --build --scenario all     # build + all four scenarios
+node scripts/native-e2e.mjs --release --scenario all   # optimized test build
+node scripts/native-e2e.mjs --app <path>          # reuse a built test binary
+```
+
+`scripts/native-e2e.mjs` builds and launches a dedicated Tauri application;
+`--help` lists every option. It is the only automated suite that exercises
+the real `TauriDocumentPort`, the Rust file I/O, the watcher, and the real
+recovery store in a native webview.
+
+### Dedicated build and isolation
+
+- **Feature-gated commands**: `src-tauri/src/native_e2e.rs` is compiled only
+  with the `native-e2e` Cargo feature and registers three commands
+  (`native_e2e_context`, `native_e2e_marker`, `native_e2e_report`). Normal
+  dev, production, and release builds never include them.
+- **Dedicated identifier**: `src-tauri/tauri.native-e2e.conf.json` sets
+  product name `Opus Native E2E` and identifier
+  `com.xiongweini.markdown-edit.native-e2e`. The Rust side refuses to start
+  the test webview under the production identifier or any identifier without
+  the `.native-e2e` suffix, so a feature-enabled binary built without the
+  config override fails fast instead of writing into a user installation.
+- **Environment-only configuration**: the scenario and the marker/report
+  paths come from `OPUS_NATIVE_E2E_SCENARIO`, `OPUS_NATIVE_E2E_MARKER`, and
+  `OPUS_NATIVE_E2E_REPORT` in the child process environment. The webview can
+  only request a context, write a phase marker, or submit a report body; it
+  can never name an output path. Reports are JSON objects, capped at 1 MiB,
+  stamped server-side with the scenario and identifier, and written with the
+  sibling-temp-file + `fsync` + rename discipline so a polling orchestrator
+  never sees a partial document.
+- **Frontend runner**: `src/app/nativeE2e.ts` is imported dynamically from
+  `AppShell` only when `import.meta.env.MODE === "native-e2e"` (the
+  `native-e2e` Vite mode); normal builds tree-shake it. Update checks
+  short-circuit to `unsupported` in this mode.
+
+### Scenarios
+
+Synchronization is marker-file based; there are no fixed sleeps. The runner
+writes a phase only after observing the corresponding state, and the
+orchestrator performs an external write only after reading the phase that
+requests it.
+
+| Scenario | What is driven | External verification |
+| --- | --- | --- |
+| `smoke` | argv open → editor mounted | report path is canonical; text and BOM/CRLF match the fixture; fixture bytes unchanged |
+| `edit-save` | CodeMirror edit → controller save → Rust write | saved bytes keep `EF BB BF`, every newline stays CRLF, the edit token occurs exactly once |
+| `external-change` | external rewrite of a clean tab → watcher reload; dirty tab → conflict dialog → 载入磁盘版本 | reloaded text matches the external write; dirty buffer survives; resolved text equals final disk bytes |
+| `recovery` | edit → poll `listDrafts()` until the draft is durable → `draft-ready` → **SIGKILL** → relaunch → restore | the persisted draft (read by its real id) survives the kill unchanged; restored tab is dirty and its text/hash match the archived draft |
+
+The recovery scenario never guesses a draft file name: draft IDs now carry a
+per-launch namespace (`draft-<uuid>-<tab id>`, `src/recovery/drafts.ts`), so
+the runner reports the id it actually listed and the orchestrator reads
+`recovery/<id>.json` through `listDrafts()`' result. Legacy
+`draft-document-N` leftovers remain readable and are migrated by
+`restoreDraft` into a namespaced owner copy before being discarded.
+
+Diagnostics land in `test-results/native-e2e/run-<timestamp>/`:
+`summary.json` (status, markers, launches, fixture/app hashes, cleanup
+record), per-launch `app-launch-*.log`, `report*.json`,
+`marker-launch-1.json`, and the archived `draft-launch-1.json`. A scenario
+failure exits non-zero; a runner-side timeout first writes a precise failure
+report and a `failed` marker (the orchestrator waits 90 s runner deadline +
+30 s startup grace). Child processes, fixtures in the OS temp directory, and
+test data are cleaned in `finally`.
+
+### Test-data boundary (platform-specific)
+
+- **macOS / Linux**: the child runs with an isolated `HOME` plus
+  `XDG_DATA_HOME`/`XDG_CONFIG_HOME`/`XDG_CACHE_HOME` (and `TMPDIR`), so
+  session and recovery data stay inside the scenario directory.
+- **Windows**: Rust resolves app data through the shell known folder
+  (`FOLDERID_RoamingAppData`), **not** the child's `APPDATA`, so `HOME` or
+  `APPDATA` overrides do not relocate real data. Isolation there is the
+  dedicated `.native-e2e` identifier under the real per-user app-data root.
+  Cleanup revalidates that the directory basename equals the test identifier
+  and refuses to touch the production identifier; because that path is fixed
+  by the identifier, Windows native runs must not execute concurrently.
+
+### Platform status
+
+- macOS: the suite runs locally (there is no macOS native CI job); a release
+  gate must record its actual result. Latest recorded local all-scenario run:
+  `run-2026-11-20T22-38-07-511Z` (`smoke`, `edit-save`, `external-change`,
+  `recovery` all passed). Do not infer a macOS native pass from the unit
+  tests or from the Linux job.
+- Linux: the `native-e2e` CI job is configured to run all four scenarios
+  under `xvfb-run`; it is the automated native gate, but no Linux pass is
+  recorded here — treat it as pending CI until the job result is confirmed.
+- Windows: the Rust feature and commands compile in the Windows CI check, but
+  the native scenarios have not been executed on Windows; treat them as
+  unverified there until a real run is recorded.
+- Still manual everywhere: native file/folder panels, Finder/Explorer file
+  associations, macOS/Windows IME behavior, drag-in from the OS file manager,
+  and signed-installer/Gatekeeper acceptance. The native suite does not
+  replace the checklists below.
 
 ## Manual macOS acceptance checklist
 
@@ -177,9 +293,15 @@ build SHA, chip, and macOS version with the results.
     draft; 查看源码 shows the draft text; 恢复 opens it as a dirty tab;
     丢弃 removes it. A clean relaunch shows no dialog.
 18. **Session restore**: open several tabs and a folder, quit normally,
-    relaunch. Tabs, order, active tab, and sidebar reopen. Recent files and
-    folders appear in the empty state (max 10) and a missing recent entry is
-    removed only after a failed open attempt.
+    relaunch. Tabs, order, active tab, and sidebar reopen. Closing the last
+    document returns to the same welcome page; its 最近 section lists the
+    first five recent files/folders with the rest behind 更多… (the session
+    keeps up to 10), names and section headings use the accent color, and the
+    secondary text shows a compact parent directory with the home prefix
+    shortened to `~` where recognized. The button tooltip and accessible name
+    retain the full path. A missing recent entry is removed only after a failed
+    open attempt. Opening a recent folder reveals the explorer even when it
+    was collapsed.
 
 ### Appearance
 
@@ -187,15 +309,33 @@ build SHA, chip, and macOS version with the results.
     immediately and persist across relaunch; 跟随系统 tracks the macOS
     appearance (toggle it in System Settings while the app runs). Then do a
     visual pass in **both** themes against `docs/screenshots/`:
-    - **垂直标签侧栏**: tab rows have rounded corners; hover raises a
-      subtle surface, the active tab sits on a stronger surface; the status
-      dot is violet (accent) for dirty, red (danger) for conflict, and
-      muted for a missing file. Section headers (打开的标签 / 文件夹) are
-      small, muted, and highlight on hover; collapse/expand works.
-    - **头部图标按钮**: the sidebar toggle is a panel-left icon button at
-      the far left of the header; the view mode is a single icon toggle
-      (book = 阅读, pencil = 编辑). Hovering each icon button shows its
-      tooltip (title); both show the accent-tinted focus ring.
+    - **欢迎页与活动栏**: the welcome page is a single launch/recent column
+      with `Opus`, accent-colored section headings, and no watermark or
+      duplicate shortcut panel. Launch actions retain the real keyboard
+      shortcuts; recent rows have no file icons and show compact parent
+      directories. The 44 px activity rail stays at the far left when the
+      explorer is expanded, collapsed, or animating; collapsing the explorer
+      never removes the rail or its settings button. Check the launch/recent
+      column at wide and narrow window sizes.
+    - **顶部文件标签与资源管理器**: document tabs share the unified top bar,
+      aligned to the editor column without covering the activity rail or file
+      explorer. The top bar and left panels share the same surface color; there
+      is no global search field. The selected file tab shares the editor canvas
+      color and joins
+      it through inverse radial shoulders on both sides, with no accent
+      underline or hover wash; Left/Right switches tabs and the selected tab
+      scrolls into view. Close buttons reveal on hover/focus; only the last tab
+      springs a create button out to its right. Blank top-bar regions drag the
+      native window without capturing tab controls. The persistent left explorer shows
+      资源管理器, only directories and `.md`/`.markdown` files, and an
+      打开文件夹 entry when empty. Dirty status is violet, conflict red, and
+      missing muted; rows have no inline action buttons, with rename/trash in
+      their right-click menu. The filter begins as a plain option and expands
+      on click; it collapses on blur only when empty.
+    - **头部图标按钮**: the activity rail owns the explorer toggle
+      (panel-left icon) and settings entry; view mode, translation, and
+      presentation actions live in the outline toolbar. Hovering each icon button shows
+      its tooltip (title); both show the accent-tinted focus ring.
     - **两态视图切换**: 阅读/编辑 toggle via the header icon or ⌘E (there
       is no source mode); 阅读 renders fully and rejects typing, 编辑
       restores live preview with marker hiding.
@@ -231,15 +371,31 @@ build SHA, chip, and macOS version with the results.
       sustained typing stays fluid (p95 input-to-paint ≤ 32 ms per
       `npm run perf`).
     - **2 MiB boundary** (`light-2mb.md`): opens in light mode with the
-      banner; 继续完整渲染 restores full rendering for that tab; closing and
-      reopening returns to automatic light mode. Tables over 1,000 cells use
-      editable raw-source fallback until full rendering is chosen; text is
-      never altered.
-    - **10 MiB pressure** (`pressure-10mb.md`): opens ≤ 3 s in light mode;
-      typing p95 ≤ 50 ms; ⌘S saves ≤ 1 s. The banner is dismissible.
-22. `npm run perf` (headless Chromium harness, `docs/performance.md`) must
-    report PASS for every budgeted metric; process-level hot-start samples
-    come from the packaged build (quit all running instances first).
+      banner, but keeps the **full** Markdown grammar (strikethrough, tables,
+      math, highlight markers, fenced-code language highlighting); 继续完整渲染
+      also stays full; closing and reopening returns to automatic light mode.
+      Tables over 1,000 cells use editable raw-source fallback until full
+      rendering is chosen; text is never altered.
+    - **10 MiB pressure** (`pressure-10mb.md`): opens ≤ 3 s in light mode and
+      triggers the **core** grammar (8 MiB UTF-16 enter threshold; the
+      banner says 精简 Markdown 语法). Headings/lists/quotes/code/emphasis/
+      links and frontmatter remain; GFM tables/strikethrough, `==` highlight,
+      `$…$` math, and nested code-language highlighting are absent. Because
+      core removes GFM, it also produces no table widgets; tables and the
+      independent 1,000-cell rule apply only with the full grammar (2 MiB
+      light documents or after 继续完整渲染). Typing p95
+      ≤ 50 ms; ⌘S saves ≤ 1 s. Press 继续完整渲染 and confirm the full grammar
+      returns with the same selection and undo history. Force-full is
+      tab-scoped: close and reopen the tab to return to automatic light mode,
+      then reduce the text to 7.5 MiB or less (for example with a smaller
+      scratch body) and confirm core exits. The banner is dismissible.
+22. `npm run perf` (headless Chromium against the production perf bundle,
+    `docs/performance.md`) must report PASS for every measured budgeted
+    metric; packaged-app metrics that cannot be collected are reported as
+    skipped with a reason, never faked. Hot-start samples come from the
+    packaged build (quit all running instances first). Browser numbers are
+    Chromium-engine numbers, not WKWebView numbers. The committed baseline
+    table is refreshed only by a complete successful run.
 
 ## Manual Windows acceptance checklist
 
@@ -262,11 +418,11 @@ build SHA, Windows version, and WebView2 runtime version with the results.
 3. **File drag**: drag a `.md` file from Explorer onto the window. It opens
    in a tab; content matches the original (no copy/import).
 4. **File dropdown menu**: Windows has no native menu bar, so the file
-   dropdown next to the sidebar toggle (same as Linux) offers 新建, 打开文件,
+   dropdown in the header (same as Linux) offers 新建, 打开文件,
    打开文件夹, 另存为…, and 设置. The pickers open and respond normally —
    selecting and cancelling both work and the app does not freeze. The
    dropdown is keyboard-accessible and offers the same actions as the
-   empty-state buttons.
+   welcome page's launch actions.
 
 ### Editing
 
@@ -333,23 +489,40 @@ build SHA, Windows version, and WebView2 runtime version with the results.
 
 ## Intentional environment-only limitations
 
-- **Browser-shell E2E and perf metrics run in headless Chromium**, not the
-  packaged native builds (WKWebView on macOS, WebView2 on Windows). They
-  verify the React/CodeMirror layer and the port contract; native behavior
-  (Finder/Explorer integration, file dialogs, IME, real disk watching,
-  drag-in from the OS file manager) is covered by the manual checklists
-  above. Numbers are recorded separately from, and never mixed with, the
-  M1/8 GB release baseline (see `docs/performance.md`).
+- **Browser-shell E2E and browser perf metrics run in headless Chromium**,
+  not the packaged native builds (WKWebView on macOS, WebView2 on Windows).
+  Browser E2E verifies the React/CodeMirror layer; perf now measures a
+  production React bundle but still in Chromium, so its numbers are
+  Chromium-engine numbers. Native behavior not covered by the native suite
+  (Finder/Explorer integration, file dialogs, IME, drag-in from the OS file
+  manager) stays in the manual checklists above. Perf numbers are recorded
+  separately from, and never mixed with, the M1/8 GB release baseline (see
+  `docs/performance.md`).
 - **WebView2 vs WKWebView rendering differences are expected**: the packaged
   Windows build renders with WebView2 (Chromium) while the macOS build uses
   WKWebView. Minor engine differences — font metrics, scrollbar styling, IME
   composition details — are expected and are not regressions. The
   browser-shell E2E and perf harnesses run Chromium, so their numbers track
   the Windows engine more closely than the macOS one.
-- **E2E uses the in-memory port**, so native save dialogs, asset scopes, and
-  the Rust watcher are exercised by unit/component tests
-  (`MemoryDocumentPort` shares the same `DocumentPort` contract) plus the
-  manual checklists — not by Playwright.
+- **The native suite covers a fixed scenario set, not the whole product.** It
+  drives argv open, edit/save, external clean reload and dirty conflict, and
+  crash recovery through the real backend. Playwright remains the broad UI
+  suite and still uses the in-memory port; unit/component tests cover the
+  remaining port-contract behavior. Native save dialogs, OS file
+  associations, IME, and signed-installer acceptance are not automated.
+- **Extreme-document core grammar is an intentional rendering trade-off.**
+  At ≥8 MiB UTF-16 in light mode, advanced Markdown syntax (GFM tables,
+  strikethrough/task lists, `==` highlight, `$…$` math, nested code-language
+  highlighting) is not parsed; frontmatter and base Markdown/outline remain.
+  The banner says 精简 Markdown 语法, document text is unchanged, and
+  继续完整渲染 restores the full grammar with selection and undo intact.
+- **Native E2E platform coverage is uneven.** macOS runs the suite locally;
+  Linux CI is configured to run it under Xvfb (pending a recorded CI result);
+  Windows compiles the feature but has not executed the scenarios — no
+  Windows native pass is claimed. On Windows
+  the test-data boundary is the dedicated `.native-e2e` identifier under the
+  real per-user app-data root, because Rust resolves the shell known folder
+  instead of `APPDATA`; concurrent Windows native runs are unsupported.
 - **Cold start and Gatekeeper first launch** cannot be measured in a single
   session: cold samples require one launch per reboot cycle and the
   Gatekeeper sample requires installing the signed/notarized build. They

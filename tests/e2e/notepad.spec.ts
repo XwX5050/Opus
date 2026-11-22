@@ -192,6 +192,52 @@ test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
   await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
   await expect(editorContent(page)).toContainText("Alpha");
 
+  const selectedItem = tabs.nth(0).locator("..");
+  const inactiveItem = tabs.nth(1).locator("..");
+  await inactiveItem.hover();
+  await expect(inactiveItem).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  const curves = await selectedItem.evaluate((element) => ({
+    left: getComputedStyle(element, "::before").backgroundImage,
+    right: getComputedStyle(element, "::after").backgroundImage,
+    accent: getComputedStyle(
+      element.querySelector(".tab") as HTMLElement,
+      "::after",
+    ).content,
+  }));
+  expect(curves.left).toContain("radial-gradient");
+  expect(curves.right).toContain("radial-gradient");
+  expect(curves.accent).toBe("none");
+
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.mouse.move(8, 180);
+  await expect(
+    selectedItem.getByRole("button", { name: "新建文件" }),
+  ).toHaveCount(0);
+  const followingLeft = await inactiveItem.evaluate(
+    (element) => element.getBoundingClientRect().left,
+  );
+  await selectedItem.hover();
+  await expect(selectedItem).toHaveCSS("margin-right", "0px");
+  expect(
+    await inactiveItem.evaluate((element) => element.getBoundingClientRect().left),
+  ).toBe(followingLeft);
+  await page.mouse.move(8, 180);
+  const close = inactiveItem.getByRole("button", { name: "关闭 b.md" });
+  const create = inactiveItem.getByRole("button", { name: "新建文件" });
+  await expect(close).toHaveCSS("opacity", "0");
+  await expect(create).toHaveCSS("opacity", "0");
+  await inactiveItem.hover();
+  await expect(tabs.nth(1)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(close).toHaveCSS("opacity", "1");
+  await expect(create).toHaveCSS("opacity", "1");
+  await expect(inactiveItem).toHaveCSS("margin-right", "28px");
+  await create.click();
+  await expect(page.getByRole("tab", { name: "Untitled" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await tabs.nth(0).click();
   await editorContent(page).click();
   await page.keyboard.type(" edited");
   await expect(page.locator(".tab-dirty")).toHaveCount(1);
@@ -452,6 +498,58 @@ test("clicking a reading-mode Markdown table body cell enters editing and saves 
   expect(writes).toEqual([expected]);
 });
 
+test("scrolls an overflowing Markdown table with its dedicated slider", async ({
+  page,
+}) => {
+  const source = [
+    "| 标识 | 原处理 | 修正后 | 主要依据 | 补充说明 |",
+    "| --- | --- | --- | --- | --- |",
+    `| 93 | 多选 A、C、D | 多选 A、D | ${"用于验证横向滚动的主要依据".repeat(8)} | ${"需要完整显示的补充说明".repeat(6)} |`,
+    "",
+    "| 窄表 | 内容 |",
+    "| --- | --- |",
+    "| A | B |",
+  ].join("\n");
+  await seed(page, {
+    files: [{ path: "/docs/wide-table.md", text: source }],
+    session: sessionWith("/docs/wide-table.md"),
+  });
+
+  const frames = page.locator(".md-table-frame");
+  await expect(frames).toHaveCount(2);
+  const wide = frames.nth(0);
+  const narrow = frames.nth(1);
+  const slider = wide.getByRole("slider", { name: "横向滚动表格" });
+  const scroll = wide.locator(".md-table-scroll");
+  await expect(slider).toBeVisible();
+  await expect(narrow.locator(".md-table-horizontal-slider")).toBeHidden();
+
+  const maximum = await scroll.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  expect(maximum).toBeGreaterThan(0);
+  const bounds = await slider.boundingBox();
+  expect(bounds).not.toBeNull();
+  await slider.click({ position: { x: bounds!.width * 0.65, y: bounds!.height / 2 } });
+  await expect.poll(() => scroll.evaluate((element) => element.scrollLeft))
+    .toBeGreaterThan(0);
+
+  await slider.focus();
+  await page.keyboard.press("End");
+  await expect.poll(() => scroll.evaluate((element) => element.scrollLeft))
+    .toBe(maximum);
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(() => scroll.evaluate((element) => element.scrollLeft))
+    .toBe(maximum - 1);
+
+  await scroll.evaluate((element) => {
+    element.scrollLeft = 120;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(slider).toHaveValue("120");
+  await expect(page.locator(".tab-dirty")).toHaveCount(0);
+});
+
 test("navigates, appends, undoes, redoes, saves, and reads a Markdown table", async ({
   page,
 }) => {
@@ -671,9 +769,18 @@ test("opens, navigates, collapses, and resizes the document outline", async ({
   // right-sidebar toggle and render only while the outline is open.
   const modeToggle = page.getByRole("button", { name: "编辑模式" });
   await expect(modeToggle).toBeVisible();
-  await expect(page.locator(".app-header .view-mode-toggle")).toBeVisible();
+  await expect(page.locator(".app-header .view-mode-toggle")).toHaveCount(0);
+  await expect(outline.locator(".view-mode-toggle")).toBeVisible();
   await expect(page.locator(".app-header .right-sidebar-toggle")).toBeVisible();
   await expect(outline).toHaveCSS("width", "336px");
+  await expect(outline).toHaveCSS("border-top-left-radius", "0px");
+  await expect(outline).toHaveCSS("border-bottom-left-radius", "0px");
+  const outlineCurves = await outline.locator("..").evaluate((element) => ({
+    top: getComputedStyle(element, "::before").backgroundImage,
+    bottom: getComputedStyle(element, "::after").backgroundImage,
+  }));
+  expect(outlineCurves.top).toContain("radial-gradient");
+  expect(outlineCurves.bottom).toContain("radial-gradient");
   await expect(outline.locator(".outline-content")).toHaveAttribute(
     "data-motion-list",
     "outline",
@@ -776,7 +883,7 @@ test("opens the folder drawer and opens a file from the tree", async ({
     workspace: { path: "/docs", title: "docs" },
   });
 
-  await page.getByRole("button", { name: "打开文件夹" }).click();
+  await page.getByRole("button", { name: "打开文件夹", exact: true }).click();
   const sidebar = page.locator('aside[aria-label="侧栏"]');
   await expect(sidebar).toBeVisible();
   await expect(sidebar.locator(".file-tree")).toHaveAttribute(
@@ -798,6 +905,81 @@ test("opens the folder drawer and opens a file from the tree", async ({
     "tab",
   );
   await expect(editorContent(page)).toContainText("笔记 A");
+
+  const fileRow = sidebar.getByRole("treeitem", { name: "a.md" });
+  await fileRow.hover();
+  await expect(fileRow.getByRole("button", { name: "重命名" })).toHaveCount(0);
+  await expect(fileRow.getByRole("button", { name: "移到废纸篓" })).toHaveCount(0);
+  await fileRow.click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "重命名" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "移到废纸篓" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const filterTrigger = sidebar.getByRole("button", { name: "筛选文件" });
+  await expect(filterTrigger).toBeVisible();
+  await expect(sidebar.getByRole("textbox", { name: "筛选文件" })).toHaveCount(0);
+  await filterTrigger.click();
+  const filter = sidebar.getByRole("textbox", { name: "筛选文件" });
+  await expect(filter).toBeFocused();
+  await filter.fill("a.md");
+  await expect(sidebar.getByRole("treeitem")).toHaveCount(1);
+  await filter.clear();
+  await sidebar.locator(".sidebar-title").click();
+  await expect(filter).toHaveCount(0);
+  await expect(filterTrigger).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const tabRow = document.querySelector(".document-tabs-bar");
+    const editor = document.querySelector(".editor-area");
+    const rail = document.querySelector(".activity-rail");
+    const sidebar = document.querySelector(".sidebar");
+    const panelRail = document.querySelector(".sidebar-rail");
+    const header = document.querySelector(".app-header");
+    const title = document.querySelector(".document-title");
+    const selected = document.querySelector(
+      '.tab-item:has(.tab[aria-selected="true"])',
+    );
+    const list = document.querySelector(".tab-list");
+    if (!tabRow || !editor || !rail || !sidebar || !panelRail || !header || !title || !selected || !list) {
+      throw new Error("editor tab layout missing");
+    }
+    return {
+      tabLeft: tabRow.getBoundingClientRect().left,
+      tabTop: tabRow.getBoundingClientRect().top,
+      tabBottom: tabRow.getBoundingClientRect().bottom,
+      editorLeft: editor.getBoundingClientRect().left,
+      railRight: rail.getBoundingClientRect().right,
+      sidebarRight: sidebar.getBoundingClientRect().right,
+      headerTop: header.getBoundingClientRect().top,
+      headerBottom: header.getBoundingClientRect().bottom,
+      titleTop: title.getBoundingClientRect().top,
+      curveClearance:
+        selected.getBoundingClientRect().left - list.getBoundingClientRect().left,
+      selectedBackground: getComputedStyle(selected).backgroundColor,
+      editorBackground: getComputedStyle(editor).backgroundColor,
+      sidebarTopRadius: getComputedStyle(sidebar).borderTopRightRadius,
+      sidebarBottomRadius: getComputedStyle(sidebar).borderBottomRightRadius,
+      panelTopCurve: getComputedStyle(panelRail, "::before").backgroundImage,
+      panelBottomCurve: getComputedStyle(panelRail, "::after").backgroundImage,
+    };
+  });
+  expect(layout.tabLeft).toBe(layout.editorLeft);
+  expect(layout.tabLeft).toBeGreaterThan(layout.railRight);
+  expect(layout.tabLeft).toBeGreaterThanOrEqual(layout.sidebarRight);
+  expect(layout.tabTop).toBe(layout.headerTop);
+  expect(layout.tabBottom).toBe(layout.headerBottom);
+  expect(layout.titleTop).toBe(layout.headerBottom);
+  expect(layout.curveClearance).toBeGreaterThanOrEqual(12);
+  expect(layout.selectedBackground).toBe(layout.editorBackground);
+  expect(layout.sidebarTopRadius).toBe("0px");
+  expect(layout.sidebarBottomRadius).toBe("0px");
+  expect(layout.panelTopCurve).toContain("radial-gradient");
+  expect(layout.panelBottomCurve).toContain("radial-gradient");
+
+  const explorerToggle = page.getByRole("button", { name: "收起侧栏" });
+  await explorerToggle.hover();
+  await expect(explorerToggle).toHaveCSS("transform", "none");
 
   // The drawer stays manually collapsible.
   const sidebarRail = sidebar.locator("..");

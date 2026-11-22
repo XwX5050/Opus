@@ -52,6 +52,19 @@ export interface DirectoryEntry {
   readonly isDirectory: boolean;
 }
 
+export interface WorkspaceSearchMatch {
+  readonly path: string;
+  readonly line: number;
+  readonly column: number;
+  readonly text: string;
+  readonly matchLength: number;
+}
+
+export interface WorkspaceSearchResult {
+  readonly matches: ReadonlyArray<WorkspaceSearchMatch>;
+  readonly truncated: boolean;
+}
+
 export interface DocumentPort {
   chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>>;
   openPath(path: string): Promise<OpenedFile>;
@@ -66,6 +79,8 @@ export interface DocumentPort {
   /** Clears the backend workspace anchor; best-effort, no-op outside Tauri. */
   closeWorkspace(): Promise<void>;
   listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>>;
+  /** Searches saved Markdown lines under the currently opened workspace root. */
+  searchWorkspace(root: string, query: string): Promise<WorkspaceSearchResult>;
   createMarkdownFile(root: string, relative: string): Promise<DirectoryEntry>;
   renameEntry(root: string, from: string, toName: string): Promise<DirectoryEntry>;
   /**

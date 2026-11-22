@@ -1,12 +1,14 @@
 import { createRef } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { undoDepth } from "@codemirror/commands";
+import { language, syntaxTree } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import MarkdownEditor, {
   type MarkdownEditorHandle,
 } from "./MarkdownEditor";
+import { REDUCED_SYNTAX_MIN_LENGTH } from "./performanceMode";
 
 const renderEditor = (
   overrides: Partial<React.ComponentProps<typeof MarkdownEditor>> = {},
@@ -964,5 +966,144 @@ describe("MarkdownEditor", () => {
       expect(view.state.doc.toString()).toBe(rich);
       expect(onChange).not.toHaveBeenCalled();
     });
+  });
+
+  describe("extreme-document grammar", () => {
+    const syntaxPrefix =
+      "---\ntitle: note\n---\n\n# Heading\n\n~~done~~ and $x^2$ and ==重点==\n\n";
+    const syntaxTreeText = (view: EditorView) =>
+      syntaxTree(view.state).toString();
+
+    it(
+      "keeps one view, selection and undo history while composing, then core↔full switches grammar",
+      async () => {
+        const onChange = vi.fn();
+        const large = `${syntaxPrefix}${"x".repeat(REDUCED_SYNTAX_MIN_LENGTH)}`;
+        const rendered = renderEditor({
+          value: large,
+          performanceMode: "light",
+          onChange,
+        });
+        const view = editorView();
+        const coreLanguage = view.state.facet(language);
+
+        expect(syntaxTreeText(view)).toContain("FrontMatter");
+        expect(syntaxTreeText(view)).not.toContain("SetextHeading");
+        expect(syntaxTreeText(view)).not.toContain("Strikethrough");
+
+        // Make undoDepth non-zero, then keep the controlled value in sync so
+        // the value-sync effect cannot replace the document on rerender.
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        const edited = onChange.mock.calls.at(-1)?.[0] as string;
+        expect(edited.length).toBeGreaterThan(REDUCED_SYNTAX_MIN_LENGTH);
+        view.dispatch({ selection: { anchor: 17 } });
+        const selectedHead = view.state.selection.main.head;
+        const beforeUndoDepth = undoDepth(view.state);
+        expect(beforeUndoDepth).toBeGreaterThan(0);
+
+        // A language reconfigure requested during an active composition must
+        // stay frozen until compositionend.
+        content().dispatchEvent(
+          new CompositionEvent("compositionstart", { bubbles: true }),
+        );
+        (
+          view as unknown as { inputState: { composing: number } }
+        ).inputState.composing = 1;
+        expect(view.composing).toBe(true);
+
+        rendered.rerender(
+          <MarkdownEditor
+            {...rendered.props}
+            value={edited}
+            performanceMode="full"
+          />,
+        );
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(editorView()).toBe(view);
+        expect(view.state.facet(language)).toBe(coreLanguage);
+        expect(syntaxTreeText(view)).not.toContain("Strikethrough");
+        expect(view.state.selection.main.head).toBe(selectedHead);
+        expect(undoDepth(view.state)).toBe(beforeUndoDepth);
+
+        content().dispatchEvent(
+          new CompositionEvent("compositionend", { bubbles: true }),
+        );
+        await waitFor(() =>
+          expect(syntaxTreeText(view)).toContain("Strikethrough"),
+        );
+        const fullLanguage = view.state.facet(language);
+        expect(fullLanguage).not.toBe(coreLanguage);
+        expect(editorView()).toBe(view);
+        expect(view.state.selection.main.head).toBe(selectedHead);
+        expect(undoDepth(view.state)).toBe(beforeUndoDepth);
+
+        rendered.rerender(
+          <MarkdownEditor
+            {...rendered.props}
+            value={edited}
+            performanceMode="light"
+          />,
+        );
+        await waitFor(() =>
+          expect(syntaxTreeText(view)).not.toContain("Strikethrough"),
+        );
+        expect(view.state.facet(language)).not.toBe(fullLanguage);
+        expect(editorView()).toBe(view);
+        expect(view.state.selection.main.head).toBe(selectedHead);
+        expect(undoDepth(view.state)).toBe(beforeUndoDepth);
+      },
+      20_000,
+    );
+
+    it("keeps full grammar for a 2 MiB light document without reconfiguring", async () => {
+      const value = `${syntaxPrefix}${"x".repeat(2 * 1024 * 1024)}`;
+      const rendered = renderEditor({ value, performanceMode: "light" });
+      const view = editorView();
+      const grammar = view.state.facet(language);
+      expect(syntaxTreeText(view)).toContain("Strikethrough");
+
+      rendered.rerender(
+        <MarkdownEditor {...rendered.props} performanceMode="light" />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(editorView()).toBe(view);
+      expect(view.state.facet(language)).toBe(grammar);
+      expect(syntaxTreeText(view)).toContain("Strikethrough");
+    });
+  });
+
+  it("moves the caret to a search result without editing or adding undo history", () => {
+    const onChange = vi.fn();
+    const value = "# 标题\n第一行\n你好 hello\n";
+    const rendered = renderEditor({
+      value,
+      onChange,
+      searchNavigation: { sequence: 1, line: 3, column: 3 },
+    });
+    const view = editorView();
+    const expected = value.indexOf("hello");
+
+    expect(view.state.selection.main.head).toBe(expected);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(undoDepth(view.state)).toBe(0);
+
+    view.dispatch({ selection: { anchor: 0 } });
+    rendered.rerender(<MarkdownEditor {...rendered.props} />);
+    expect(view.state.selection.main.head).toBe(0);
+
+    rendered.rerender(
+      <MarkdownEditor
+        {...rendered.props}
+        searchNavigation={{ sequence: 2, line: 2, column: 0 }}
+      />,
+    );
+    expect(view.state.selection.main.head).toBe(value.indexOf("第一行"));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(undoDepth(view.state)).toBe(0);
   });
 });

@@ -10,6 +10,36 @@
  */
 export type PerformanceMode = "full" | "light";
 
+export type MarkdownSyntaxMode = "full" | "core";
+
+/**
+ * Extreme documents (at least 8 MiB of UTF-16 text) use the core Markdown
+ * grammar only while in light mode. CodeMirror's language state otherwise
+ * catches up a large unparsed range synchronously inside an input
+ * transaction; the controlled profile shows that cost at the document end
+ * pushes the pressure input p95 over budget. Core still parses frontmatter so
+ * its closing delimiter cannot become a pseudo Setext heading in the outline;
+ * it keeps headings/lists/quotes/code/emphasis/link styling. "继续完整渲染"
+ * switches the tab back to the full grammar.
+ *
+ * Core is entered at 8 MiB and left only below 7.5 MiB. The hysteresis avoids
+ * reconfiguring the parser while an edit hovers exactly at the threshold.
+ */
+export const REDUCED_SYNTAX_MIN_LENGTH = 8 * 1024 * 1024;
+export const REDUCED_SYNTAX_EXIT_LENGTH = 7.5 * 1024 * 1024;
+
+export const markdownSyntaxFor = (
+  mode: PerformanceMode,
+  utf16Length: number,
+  current: MarkdownSyntaxMode = "full",
+): MarkdownSyntaxMode => {
+  if (mode !== "light") return "full";
+  if (current === "core") {
+    return utf16Length > REDUCED_SYNTAX_EXIT_LENGTH ? "core" : "full";
+  }
+  return utf16Length >= REDUCED_SYNTAX_MIN_LENGTH ? "core" : "full";
+};
+
 export interface DocumentSize {
   /** UTF-8 encoded byte length of the document text. */
   readonly bytes: number;

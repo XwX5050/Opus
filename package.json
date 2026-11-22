@@ -1,19 +1,23 @@
 {
   "name": "markdown-edit",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:node": "node --test scripts/native-e2e.node-test.mjs scripts/measure-editor.node-test.mjs scripts/measure-startup.node-test.mjs scripts/generate-perf-fixtures.node-test.mjs",
+    "test:native": "node scripts/native-e2e.mjs",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "perf:fixtures": "node scripts/generate-perf-fixtures.mjs",
+    "perf:build": "vite build --config vite.perf.config.ts",
+    "perf:serve": "vite preview --config vite.perf.config.ts --port 1422 --strictPort",
     "perf": "node scripts/measure-editor.mjs",
     "perf:startup": "node scripts/measure-startup.mjs",
-    "check": "npm run test && npm run build && cargo test --manifest-path src-tauri/Cargo.toml",
+    "check": "npm run test && npm run test:node && npm run build && cargo test --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml --features native-e2e --lib native_e2e",
     "postinstall": "patch-package"
   },
   "dependencies": {

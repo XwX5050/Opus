@@ -4,6 +4,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useId,
   type KeyboardEvent,
 } from "react";
 import type {
@@ -14,6 +15,7 @@ import type {
 import type { DiskEvent } from "../document/types";
 import ContextMenu from "../app/ContextMenu";
 import InlineNameInput from "../app/InlineNameInput";
+import { DisclosureChevronIcon, FileTextIcon, SearchIcon } from "../app/icons";
 import {
   initialTreeState,
   pendingLoads,
@@ -39,6 +41,14 @@ interface ContextMenuState {
   readonly path: string;
   readonly isDirectory: boolean;
 }
+
+interface RootMenuState {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** Pixels of indentation per tree depth level (the create row adds one). */
+const TREE_DEPTH_INDENT_PX = 14;
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -85,9 +95,12 @@ export default function FileSidebar({
   onCloseWorkspace,
 }: FileSidebarProps) {
   const [state, dispatch] = useReducer(treeReducer, initialTreeState);
+  const filterInputId = useId();
+  const [filterOpen, setFilterOpen] = useState(false);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [rootMenu, setRootMenu] = useState<RootMenuState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(new Set<string>());
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -116,9 +129,11 @@ export default function FileSidebar({
     inFlightRef.current.clear();
     rowRefs.current.clear();
     dispatch({ type: "workspaceOpened", root });
+    setFilterOpen(false);
     setActivePath(null);
     setEditing(null);
     setMenu(null);
+    setRootMenu(null);
     setError(null);
   }, [root]);
 
@@ -258,9 +273,9 @@ export default function FileSidebar({
       return;
     }
     // Create in the target chosen when the input opened (the context-menu
-    // "在此新建文件" directory); the header button falls back to the active
-    // row, but only inside a directory whose listing is already loaded —
-    // otherwise the new file would be invisible.
+    // "在此新建文件" directory); the root menu's "新建文件" falls back to the
+    // active row, but only inside a directory whose listing is already
+    // loaded — otherwise the new file would be invisible.
     const parent =
       editing?.kind === "create" && editing.parent !== undefined
         ? editing.parent
@@ -336,30 +351,50 @@ export default function FileSidebar({
 
   return (
     <div className="sidebar-panel">
-      <div className="sidebar-header">
+      {/* The header carries only the workspace title; its actions (new file,
+          close folder) live in the title row's right-click menu. The handler
+          stops propagation so the shell fallback menu stays out of it. */}
+      <div
+        className="sidebar-header"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setRootMenu({ x: event.clientX, y: event.clientY });
+        }}
+      >
         <strong className="sidebar-title">{root.title}</strong>
+      </div>
+      {filterOpen || state.filter.length > 0 ? (
+        <div className="sidebar-filter">
+          <SearchIcon />
+          <input
+            id={filterInputId}
+            type="text"
+            aria-label="筛选文件"
+            placeholder="筛选文件…"
+            autoFocus
+            value={state.filter}
+            onChange={(event) =>
+              dispatch({ type: "filterChanged", filter: event.target.value })
+            }
+            onBlur={() => {
+              if (state.filter.length === 0) setFilterOpen(false);
+            }}
+          />
+        </div>
+      ) : (
         <button
           type="button"
-          onClick={() => {
-            setError(null);
-            setEditing({ kind: "create" });
-          }}
+          className="sidebar-filter-trigger"
+          aria-label="筛选文件"
+          aria-expanded="false"
+          aria-controls={filterInputId}
+          onClick={() => setFilterOpen(true)}
         >
-          新建文件
+          <SearchIcon />
+          <span>筛选文件</span>
         </button>
-        <button type="button" onClick={onCloseWorkspace}>
-          关闭文件夹
-        </button>
-      </div>
-      <input
-        type="text"
-        aria-label="筛选文件"
-        className="sidebar-filter"
-        value={state.filter}
-        onChange={(event) =>
-          dispatch({ type: "filterChanged", filter: event.target.value })
-        }
-      />
+      )}
       {error && <div role="alert">{error}</div>}
       {[...state.failed]
         .filter((path) => path === root.path || state.expanded.has(path))
@@ -398,7 +433,7 @@ export default function FileSidebar({
                   aria-label="新建文件"
                   data-motion-item="file"
                   className="file-tree-row"
-                  style={{ paddingLeft: (createDepth ?? 0) * 12 + 12 }}
+                  style={{ paddingLeft: ((createDepth ?? 0) + 1) * TREE_DEPTH_INDENT_PX }}
                 >
                   <InlineNameInput
                     onCommit={(name) => void commitCreate(name)}
@@ -432,10 +467,19 @@ export default function FileSidebar({
                     isDirectory: entry.isDirectory,
                   });
                 }}
-                style={{ paddingLeft: depth * 12 }}
+                style={{ paddingLeft: depth * TREE_DEPTH_INDENT_PX }}
               >
-                {entry.isDirectory && (
-                  <span aria-hidden="true">{row.isExpanded ? "▾" : "▸"}</span>
+                {entry.isDirectory ? (
+                  <span
+                    aria-hidden="true"
+                    className={`file-tree-chevron${row.isExpanded ? " file-tree-chevron-expanded" : ""}`}
+                  >
+                    <DisclosureChevronIcon />
+                  </span>
+                ) : (
+                  <span aria-hidden="true" className="file-tree-file-icon">
+                    <FileTextIcon size={14} />
+                  </span>
                 )}
                 {renaming ? (
                   <InlineNameInput
@@ -446,30 +490,32 @@ export default function FileSidebar({
                 ) : (
                   <span className="file-tree-name">{entry.name}</span>
                 )}
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setError(null);
-                    setEditing({ kind: "rename", path: entry.path });
-                  }}
-                >
-                  重命名
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void trash(entry);
-                  }}
-                >
-                  移到废纸篓
-                </button>
               </li>
             </Fragment>
           );
         })}
       </ul>
+      {rootMenu && (
+        <ContextMenu
+          position={rootMenu}
+          onClose={() => setRootMenu(null)}
+          items={[
+            {
+              id: "new-file",
+              label: "新建文件",
+              onSelect: () => {
+                setError(null);
+                setEditing({ kind: "create" });
+              },
+            },
+            {
+              id: "close-workspace",
+              label: "关闭文件夹",
+              onSelect: onCloseWorkspace,
+            },
+          ]}
+        />
+      )}
       {menu && (
         <ContextMenu
           position={{ x: menu.x, y: menu.y }}

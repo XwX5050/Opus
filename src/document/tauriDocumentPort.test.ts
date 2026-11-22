@@ -343,6 +343,27 @@ describe("tauri document port workspace commands", () => {
     ]);
   });
 
+  it("maps workspace search DTOs and forwards the query", async () => {
+    invoke.mockResolvedValue({
+      matches: [{
+        path: "/ws/a.md",
+        line: 3,
+        column: 2,
+        text: "a match",
+        match_length: 5,
+      }],
+      truncated: true,
+    });
+
+    const result = await createTauriDocumentPort().searchWorkspace("/ws", "match");
+
+    expect(invoke).toHaveBeenCalledWith("search_workspace", { root: "/ws", query: "match" });
+    expect(result).toEqual({
+      matches: [{ path: "/ws/a.md", line: 3, column: 2, text: "a match", matchLength: 5 }],
+      truncated: true,
+    });
+  });
+
   it("passes rename_entry's new name as camel case toName", async () => {
     invoke.mockResolvedValue({ name: "renamed.md", path: "/ws/renamed.md", is_directory: false });
 

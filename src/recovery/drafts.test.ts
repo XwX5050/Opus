@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DocumentSnapshot } from "../document/types";
 import {
   draftFromSnapshot,
@@ -49,6 +49,18 @@ describe("needsRecoveryDraft", () => {
     expect(needsRecoveryDraft(snapshot({ text: "已保存内容\n未保存" }))).toBe(true);
   });
 
+  it("is true for same-length and different-length buffer replacements", () => {
+    expect(
+      needsRecoveryDraft(snapshot({ text: "已保存内容。", status: "clean" })),
+    ).toBe(true);
+    expect(
+      needsRecoveryDraft(snapshot({ text: "已保存内容\nx", status: "clean" })),
+    ).toBe(true);
+    expect(
+      needsRecoveryDraft(snapshot({ text: "已保存内容\n", status: "clean" })),
+    ).toBe(false);
+  });
+
   it("is true when the status is not clean even if the text matches", () => {
     for (const status of ["conflict", "missing"] as const) {
       expect(needsRecoveryDraft(snapshot({ status }))).toBe(true);
@@ -57,9 +69,33 @@ describe("needsRecoveryDraft", () => {
 });
 
 describe("draftIdForTab", () => {
-  it("prefixes the stable tab id with draft-", () => {
-    expect(draftIdForTab("document-1")).toBe("draft-document-1");
-    expect(draftIdForTab("document-42")).toBe("draft-document-42");
+  it("is stable for a tab within one launch and distinct per tab", () => {
+    expect(draftIdForTab("document-1")).toBe(draftIdForTab("document-1"));
+    expect(draftIdForTab("document-1")).not.toBe(draftIdForTab("document-2"));
+  });
+
+  it("namespaces the id instead of reusing the legacy draft-document-N form", () => {
+    const id = draftIdForTab("document-1");
+    expect(id).toMatch(/^draft-[A-Za-z0-9_-]+-document-1$/);
+    expect(id).not.toBe("draft-document-1");
+  });
+
+  it("stays within the Rust recovery store's file-name constraints", () => {
+    // src-tauri/src/recovery.rs accepts non-empty ids of at most 128 ASCII
+    // alphanumerics, '-' or '_'; a draft id becomes "<id>.json".
+    const id = draftIdForTab("document-1234567890");
+    expect(id.length).toBeLessThanOrEqual(128);
+    expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it("uses a different namespace for two consecutive launches", async () => {
+    const first = await import("./drafts");
+    vi.resetModules();
+    const second = await import("./drafts");
+
+    expect(first.draftIdForTab("document-1")).not.toBe(
+      second.draftIdForTab("document-1"),
+    );
   });
 });
 
@@ -78,7 +114,7 @@ describe("draftFromSnapshot", () => {
       }),
     );
     expect(draft).toEqual({
-      draftId: "draft-document-7",
+      draftId: draftIdForTab("document-7"),
       originalPath: "/notes/draft.md",
       title: "draft.md",
       text: "未保存内容\n",

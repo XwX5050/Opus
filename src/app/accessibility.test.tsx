@@ -23,13 +23,12 @@ const replaceEditorText = (text: string) => {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
 };
 
-// The shell exposes two 设置 buttons in the empty state — the header text
-// action and the floating gear — both opening the same dialog; queries here
-// target the header one (first in document order).
-const headerSettingsButton = () =>
-  within(screen.getByRole("banner", { name: "应用标题栏" })).getByRole("button", {
-    name: "设置",
-  });
+// The activity rail is the shell's only settings entry; it stays reachable
+// whether or not the explorer is open or collapsed.
+const activityRail = () =>
+  screen.getByRole("navigation", { name: "活动栏" });
+const activityRailSettingsButton = () =>
+  within(activityRail()).getByRole("button", { name: "设置" });
 
 // Opening a file, folder, or dialog — click -> async port call -> controller
 // state -> render — spans several React commits plus CodeMirror construction
@@ -52,10 +51,50 @@ describe("accessibility: roles and names", () => {
     expect(within(titlebar).getByText("Opus")).toHaveAttribute(
       "data-tauri-drag-region",
     );
-    expect(headerSettingsButton()).toBeVisible();
-    for (const button of within(titlebar).getAllByRole("button")) {
+    expect(
+      within(titlebar).queryByRole("button", { name: "设置" }),
+    ).not.toBeInTheDocument();
+    expect(activityRailSettingsButton()).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "设置" })).toHaveLength(1);
+    for (const button of within(titlebar).queryAllByRole("button")) {
       expect(button).not.toHaveAttribute("data-tauri-drag-region");
     }
+  });
+
+  it("exposes the activity rail as a navigation landmark with one explorer toggle", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md")]]),
+      { workspace: { path: "/notes", title: "notes" } },
+    );
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+
+    const rail = activityRail();
+    expect(within(rail).getByRole("button", { name: "收起侧栏" })).toHaveAttribute(
+      "aria-controls",
+      "app-sidebar",
+    );
+    expect(screen.getAllByRole("button", { name: "收起侧栏" })).toHaveLength(1);
+    expect(
+      within(screen.getByRole("banner", { name: "应用标题栏" })).queryByRole(
+        "button",
+        { name: "收起侧栏" },
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("tracks the explorer collapse state on the activity rail", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(new Map(), {
+      workspace: { path: "/notes", title: "notes" },
+    });
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件夹" }));
+
+    expect(activityRail()).toHaveAttribute("data-sidebar-collapsed", "false");
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(activityRail()).toHaveAttribute("data-sidebar-collapsed", "true");
   });
 
   it("exposes tabs with names, selection state and a labelled panel", async () => {
@@ -70,7 +109,7 @@ describe("accessibility: roles and names", () => {
     await user.click(screen.getByRole("button", { name: "打开文件" }));
 
     const tablist = screen.getByRole("tablist", { name: "打开的文档" });
-    expect(tablist).toHaveAttribute("aria-orientation", "vertical");
+    expect(tablist).toHaveAttribute("aria-orientation", "horizontal");
     const tabs = within(tablist).getAllByRole("tab");
     expect(tabs).toHaveLength(2);
     for (const tab of tabs) expect(tab).toHaveAccessibleName();
@@ -93,11 +132,10 @@ describe("accessibility: roles and names", () => {
     const tab = screen.getByRole("tab", { name: /a\.md/ });
     expect(panel).toHaveAttribute("aria-labelledby", tab.id);
 
-    // Collapsing the section removes the tab element; the panel must not
-    // keep a label reference to a node that no longer exists.
-    await user.click(screen.getByRole("button", { name: "打开的标签" }));
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(screen.getByRole("tabpanel")).not.toHaveAttribute("aria-labelledby");
+    // Collapsing the explorer never removes the horizontal document tab.
+    await user.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(screen.getByRole("tablist")).toBeVisible();
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", tab.id);
   });
 
   it("exposes side-panel resizers as sliders with labelled value ranges", async () => {
@@ -166,7 +204,7 @@ describe("accessibility: roles and names", () => {
     const user = userEvent.setup();
     render(<AppShell port={new MemoryDocumentPort(new Map())} />);
 
-    await user.click(headerSettingsButton());
+    await user.click(activityRailSettingsButton());
     // The role query's name comes from the dialog's visible heading:
     // aria-labelledby -> settings-dialog-title (h2 "设置").
     const dialog = screen.getByRole("dialog", { name: "设置" });
@@ -301,7 +339,7 @@ describe("accessibility: keyboard-only flows", () => {
     expect(port.writes[0].text).toBe("xsaved");
   });
 
-  it("switches tabs with arrow keys from the vertical tab list", async () => {
+  it("switches tabs with arrow keys from the horizontal tab list", async () => {
     const user = userEvent.setup();
     const port = new MemoryDocumentPort(
       new Map([
@@ -314,7 +352,7 @@ describe("accessibility: keyboard-only flows", () => {
 
     const tabs = screen.getAllByRole("tab");
     tabs[0].focus();
-    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{ArrowRight}");
     expect(screen.getAllByRole("tab")[1]).toHaveFocus();
     expect(screen.getAllByRole("tab")[1]).toHaveAttribute("aria-selected", "true");
   });
@@ -358,7 +396,7 @@ describe("accessibility: keyboard-only flows", () => {
     const port = new MemoryDocumentPort(new Map());
     render(<AppShell port={port} />);
 
-    headerSettingsButton().focus();
+    activityRailSettingsButton().focus();
     await user.keyboard("{Enter}");
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const themeSelect = within(dialog).getByLabelText("主题");
@@ -377,7 +415,7 @@ describe("accessibility: keyboard-only flows", () => {
     await waitFor(
       () => {
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-        expect(headerSettingsButton()).toHaveFocus();
+        expect(activityRailSettingsButton()).toHaveFocus();
       },
       { timeout: APP_ASYNC_TIMEOUT_MS },
     );
@@ -466,11 +504,46 @@ describe("accessibility: stylesheet guarantees", () => {
     );
     expect(appCss).toMatch(/\.app-body\s*\{[^}]*overflow:\s*hidden;/s);
     expect(appCss).toMatch(/\.sidebar\s*\{[^}]*height:\s*100%;/s);
-    // The sidebar pins its footer (settings gear); the sections scroll
-    // inside a dedicated wrapper.
+    // The explorer sections scroll inside a dedicated wrapper while the
+    // sidebar itself clips.
     expect(appCss).toMatch(/\.sidebar\s*\{[^}]*overflow:\s*hidden;/s);
     expect(appCss).toMatch(/\.sidebar-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
-    expect(appCss).toMatch(/\.sidebar-footer\s*\{[^}]*flex-shrink:\s*0;/s);
+  });
+
+  it("keeps a fixed 44px activity rail outside the collapsing sidebar", () => {
+    expect(appCss).toMatch(
+      /\.activity-rail\s*\{[^}]*width:\s*44px;[^}]*height:\s*100%;/s,
+    );
+    expect(appCss).toMatch(
+      /\.activity-rail-bottom\s*\{[^}]*margin-top:\s*auto;/s,
+    );
+    // The old competing entry surfaces are gone with the rail in place.
+    expect(appCss).not.toMatch(/\.sidebar-footer\s*\{/);
+    expect(appCss).not.toMatch(/\.settings-fab\s*\{/);
+  });
+
+  it("adds an inward corner when only the activity rail remains", () => {
+    expect(appCss).toMatch(/\.activity-rail\s*\{[^}]*position:\s*relative;/s);
+    expect(appCss).toMatch(
+      /\.activity-rail\[data-sidebar-collapsed="true"\]::before\s*\{[^}]*left:\s*100%;[^}]*top:\s*0;[^}]*background:\s*radial-gradient\(\s*circle at 100% 100%,/s,
+    );
+  });
+
+  it("keeps panel-to-canvas connectors free of drop shadows", () => {
+    expect(appCss).not.toMatch(
+      /\.sidebar-rail\[data-collapsed="false"\]\s*\{[^}]*box-shadow:/s,
+    );
+    expect(appCss).not.toMatch(
+      /\.outline-rail\[data-collapsed="false"\]\s*\{[^}]*box-shadow:/s,
+    );
+  });
+
+  it("joins the first tab shoulder to the left connector without a gap", () => {
+    expect(tokensCss).toMatch(/--radius-panel:\s*32px;/);
+    expect(tokensCss).toMatch(/--radius-large:\s*12px;/);
+    expect(appCss).toMatch(
+      /\.tab-list\s*\{[^}]*padding-inline:\s*calc\(var\(--radius-panel\) \+ var\(--radius-large\)\) var\(--space-3\);[^}]*scroll-padding-inline:\s*calc\(var\(--radius-panel\) \+ var\(--radius-large\)\) var\(--space-3\);/s,
+    );
   });
 
   it("uses larger titlebar icon controls", () => {
@@ -479,9 +552,24 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
+  it("keeps the unified top bar draggable outside tab controls", () => {
+    expect(appCss).toMatch(
+      /\.document-tabs-bar\s*\{[^}]*-webkit-app-region:\s*drag;/s,
+    );
+    expect(appCss).toMatch(
+      /\.tab-list\s*\{[^}]*-webkit-app-region:\s*drag;/s,
+    );
+    expect(appCss).toMatch(
+      /\.tab-item\s*\{[^}]*-webkit-app-region:\s*no-drag;/s,
+    );
+  });
+
   it("matches native macOS horizontal titlebar insets", () => {
     expect(appCss).toMatch(
-      /\.tauri \.app-header\s*\{[^}]*padding:\s*var\(--space-1\)\s+14px\s+var\(--space-1\)\s+86px;/s,
+      /\.tauri \.app-header\s*\{[^}]*--header-safe-left:\s*86px;/s,
+    );
+    expect(appCss).toMatch(
+      /\.tauri \.app-header-leading\s*\{[^}]*padding-left:\s*var\(--header-safe-left\);/s,
     );
   });
 
@@ -503,6 +591,20 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
+  it.each([
+    ["left top", ".sidebar-rail", "::before", "100% 100%"],
+    ["left bottom", ".sidebar-rail", "::after", "100% 0"],
+    ["right top", ".outline-rail", "::before", "0 100%"],
+    ["right bottom", ".outline-rail", "::after", "0 0"],
+  ])("curves the %s sidebar connector toward the canvas", (_name, rail, pseudo, center) => {
+    expect(appCss).toMatch(
+      new RegExp(
+        `\\.${rail.slice(1)}\\[data-collapsed="false"\\]${pseudo}\\s*\\{[^}]*background:\\s*radial-gradient\\(\\s*circle at ${center.replace(" ", "\\s+")},`,
+        "s",
+      ),
+    );
+  });
+
   it("mirrors the full-height animated sidebar treatment for the outline", () => {
     expect(appCss).toMatch(
       /\.outline-rail\s*\{[^}]*height:\s*100%;[^}]*transition:\s*width var\(--transition-sidebar\),\s*opacity var\(--transition-fast\);/s,
@@ -511,7 +613,7 @@ describe("accessibility: stylesheet guarantees", () => {
       /\.outline-rail\[data-collapsed="true"\]\s*\{[^}]*opacity:\s*0;[^}]*visibility:\s*hidden;/s,
     );
     expect(appCss).toMatch(
-      /\.outline-sidebar\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;[^}]*border-left:\s*1px solid var\(--divider\);/s,
+      /\.outline-rail\[data-collapsed="false"\]::before\s*\{[^}]*top:\s*0;[^}]*background:\s*radial-gradient\(/s,
     );
     expect(appCss).toMatch(
       /\.outline-content\s*\{[^}]*flex:\s*1;[^}]*overflow-y:\s*auto;/s,
@@ -544,10 +646,10 @@ describe("accessibility: stylesheet guarantees", () => {
 
   it("uses the text-selection color to highlight reading mode", () => {
     expect(appCss).toMatch(
-      /\.app-header \.icon-button\.(translate-toggle|view-mode-toggle)\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
     expect(appCss).toMatch(
-      /\.app-header \.icon-button\.(translate-toggle|view-mode-toggle)\[aria-pressed="true"\]:hover,[^}]*\.app-header \.icon-button\.(translate-toggle|view-mode-toggle)\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]:hover,[^}]*\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
     );
   });
 

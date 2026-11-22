@@ -2,7 +2,8 @@ use markdown_edit_lib::asset_scope::AssetScopeRegistry;
 use markdown_edit_lib::document_commands::{
     acquire_scoped, close_workspace_impl, create_markdown_file_impl, list_directory_impl,
     open_document_impl, open_workspace_impl, rename_entry_impl, save_document_impl,
-    trash_entry_impl, CommandError, SaveDocumentRequest, SharedAssetScopes, SharedWorkspaceAnchor,
+    search_workspace_impl, trash_entry_impl, CommandError, SaveDocumentRequest, SharedAssetScopes,
+    SharedWorkspaceAnchor,
 };
 use markdown_edit_lib::document_io::Newline;
 
@@ -381,4 +382,23 @@ fn anchored_commands_require_the_canonical_root() {
     ));
     let canonical_real = std::fs::canonicalize(&real).unwrap();
     assert!(list_directory_impl(&anchor, canonical_real, std::path::PathBuf::new()).is_ok());
+}
+
+#[test]
+fn workspace_search_requires_the_current_anchor() {
+    let (_dir, root, stealth) = anchored_fixture();
+    std::fs::write(root.join("a.md"), b"needle inside").unwrap();
+    std::fs::write(stealth.join("secret.md"), b"needle outside").unwrap();
+    let anchor = SharedWorkspaceAnchor::default();
+
+    assert!(is_permission_denied(
+        &search_workspace_impl(&anchor, root.clone(), "needle".into()).unwrap_err()
+    ));
+    open_workspace_impl(&anchor, root.clone()).unwrap();
+    let result = search_workspace_impl(&anchor, root.clone(), "needle".into()).unwrap();
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].path, root.join("a.md"));
+    assert!(is_permission_denied(
+        &search_workspace_impl(&anchor, stealth, "needle".into()).unwrap_err()
+    ));
 }

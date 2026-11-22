@@ -126,25 +126,61 @@ released. macOS (Apple Silicon release machine):
 
 ```sh
 npm ci
-npm run check            # vitest + tsc/vite build + cargo test
+npm run check            # vitest + node --test + tsc/vite build + cargo tests
+                         # (default features and native-e2e unit tests)
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+cargo clippy --manifest-path src-tauri/Cargo.toml --features native-e2e -- -D warnings
+npm run perf:build       # production perf entry must still build (dist-perf/)
 npm run test:e2e         # browser-shell E2E (headless Chromium)
-npm run perf             # performance budgets (quit running instances first)
+npm run test:native -- --build --scenario smoke   # real native smoke (see below)
 npm run tauri build -- --bundles app,dmg
 ./scripts/verify-macos-bundle.sh "src-tauri/target/release/bundle/macos/Opus.app"
+npm run perf             # production-bundle + packaged-app budgets (current bundle)
 ```
 
-Expected (macOS): all automated tests and budgets PASS; the `.app` and
-`.dmg` exist; with Developer ID credentials configured the verification
-script reports a valid signature and passes Gatekeeper assessment, and
-without them it labels the ad-hoc build `UNSIGNED` and skips Gatekeeper —
-everything else is still verified. Then run the manual macOS
-acceptance checklist in `docs/testing.md`.
+The `.app` and DMG are built and verified **before** `npm run perf` so the
+packaged-app portion of the report (and its bundle hash/provenance, when
+collected) refers to the artifact being released. Building afterwards would
+leave the report pointing at a different bundle.
 
-Windows: the same gate with `npm run tauri build -- --bundles nsis` and no
-bundle-verification script; the installer must exist in
-`src-tauri/target/release/bundle/nsis/`, and an unsigned build's SmartScreen
-warning on first run is expected. Then run the manual Windows acceptance
-checklist in `docs/testing.md`.
+`npm run check` mirrors the test/build steps of the CI `check` job:
+`npm test`, `npm run test:node`, `npm run build`, `cargo test` (default), and
+the `native-e2e` Rust unit tests. The gate runs fmt and both clippy feature
+sets explicitly, plus `perf:build`.
+`npm run perf` builds `dist-perf/`, serves it on strict port 1422, and
+refreshes `tests/perf/report.json` only on a complete successful run — never
+hand-edit the report or its baseline numbers. The pressure fixture runs under
+the light-mode core Markdown grammar; the committed report's browser numbers
+are Chromium production-frontend results, not WKWebView or the M1 signed
+baseline. If the platform cannot run the native suite or the packaged-app
+metrics, report that as unverified rather than as passing; `hot_start_ms`
+currently records `not_instrumented` and that cause is unconfirmed.
+
+The native smoke runs the dedicated test build
+(`com.xiongweini.markdown-edit.native-e2e`, isolated data) against the real
+backend; it needs an interactive display session and does not replace the
+signed-installer acceptance. `npm run test:native -- --build --scenario all`
+covers edit/save, external change, and crash recovery as well. On Linux CI the
+same suite is configured to run under Xvfb (pending a recorded CI result);
+Windows has not executed it and must not be recorded as native-verified. Diagnostics from a failed run land in
+`test-results/native-e2e/`.
+
+Expected (macOS): all automated tests, the perf build, native smoke, and
+budgeted browser metrics PASS (skipped packaged-app metrics stay explicitly
+skipped); the `.app` and `.dmg` exist; with Developer ID credentials
+configured the verification script reports a valid signature and passes
+Gatekeeper assessment, and without them it labels the ad-hoc build `UNSIGNED`
+and skips Gatekeeper — everything else is still verified. Then run the manual
+macOS acceptance checklist in `docs/testing.md`.
+
+Windows: the same gate with `npm run check`, `npm run perf:build`,
+`npm run tauri build -- --bundles nsis`, and no bundle-verification script;
+the installer must exist in `src-tauri/target/release/bundle/nsis/`, and an
+unsigned build's SmartScreen warning on first run is expected. The native
+scenario suite and packaged-app perf metrics are not established on Windows;
+run the manual Windows acceptance checklist in `docs/testing.md` and report
+anything not executed.
 
 **Local ad-hoc note:** without `APPLE_SIGNING_IDENTITY` or `APPLE_CERTIFICATE`, Tauri skips
 re-signing and the bundle keeps the linker's ad-hoc signature, which current
@@ -261,10 +297,11 @@ verify these **before** pushing any `v*` tag — every item below is a failure
 that has actually happened:
 
 - **Run the exact CI gate, not pieces of it**: `npm run check` (vitest +
-  `tsc -b` + vite build + cargo test). Vitest uses esbuild and never
-  type-checks, so a type error in a `*.test.ts` file passes `npm test`
-  locally and fails CI (v0.1.7 first attempt). After editing any test file,
-  `npx tsc -b` is mandatory.
+  `node --test` script suites + `tsc -b` + vite build + cargo tests, including
+  the `native-e2e` Rust unit tests) plus `npm run perf:build`. Vitest uses
+  esbuild and never type-checks, so a type error in a `*.test.ts` file passes
+  `npm test` locally and fails CI (v0.1.7 first attempt). After editing any
+  test file, `npx tsc -b` is mandatory.
 - **No focus- or timing-dependent test assertions**: `user.keyboard(...)`
   and anything reading `document.activeElement` depends on global focus and
   flakes under CI parallel load even when it passes locally every time

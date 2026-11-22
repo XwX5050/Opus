@@ -6,6 +6,16 @@ import { MemoryDocumentPort } from "../document/memoryDocumentPort";
 import type { OpenedFile } from "../document/types";
 import AppShell from "./AppShell";
 
+const { startDragging } = vi.hoisted(() => ({ startDragging: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    startDragging,
+    toggleMaximize: vi.fn(),
+    minimize: vi.fn(),
+    close: vi.fn(),
+  }),
+}));
+
 vi.mock("./updates", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./updates")>();
   return {
@@ -36,6 +46,8 @@ const stubUserAgent = (value: string) =>
 
 afterEach(() => {
   stubUserAgent(originalUserAgent);
+  startDragging.mockClear();
+  delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
 // The custom file header replaces the native menu bar on non-macOS native
@@ -60,6 +72,10 @@ const renderWindowsHeader = (port: MemoryDocumentPort) => {
 const titlebar = () => screen.getByRole("banner", { name: "应用标题栏" });
 const fileMenuToggle = () =>
   within(titlebar()).getByRole("button", { name: "文件" });
+const activityRail = () =>
+  screen.getByRole("navigation", { name: "活动栏" });
+const railButton = (name: string) =>
+  within(activityRail()).getByRole("button", { name });
 
 const editorText = () => screen.getByRole("textbox", { name: "Markdown 编辑器" });
 const replaceEditorText = (text: string) => {
@@ -72,7 +88,7 @@ describe("AppShell custom file header", () => {
   it("drops the window title and the header text buttons on Linux", () => {
     renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
-    expect(screen.queryByText("Opus")).not.toBeInTheDocument();
+    expect(within(titlebar()).queryByText("Opus")).not.toBeInTheDocument();
     const toggle = fileMenuToggle();
     expect(toggle).toHaveAttribute("aria-haspopup", "menu");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -82,14 +98,16 @@ describe("AppShell custom file header", () => {
     expect(
       screen.queryByRole("button", { name: "另存为…" }),
     ).not.toBeInTheDocument();
-    // Settings left the header (and the file menu); the empty state floats
-    // the gear fallback instead.
+    // Settings and the explorer toggle left every header surface for the
+    // persistent activity rail.
     expect(
       within(titlebar()).queryByRole("button", { name: "设置" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "设置" })).toHaveClass(
-      "settings-fab",
-    );
+    expect(
+      within(titlebar()).queryByRole("button", { name: "收起侧栏" }),
+    ).not.toBeInTheDocument();
+    expect(railButton("设置")).toBeVisible();
+    expect(railButton("收起侧栏")).toBeVisible();
   });
 
   it("keeps the window title and the file menu on Windows", async () => {
@@ -97,7 +115,7 @@ describe("AppShell custom file header", () => {
     renderWindowsHeader(new MemoryDocumentPort(new Map()));
 
     // Windows keeps the standard OS decorations, so the title stays.
-    expect(screen.getByText("Opus")).toBeInTheDocument();
+    expect(within(titlebar()).getByText("Opus")).toBeInTheDocument();
 
     await user.click(fileMenuToggle());
     const menu = screen.getByRole("menu", { name: "文件" });
@@ -111,7 +129,7 @@ describe("AppShell custom file header", () => {
     ]);
   });
 
-  it("opens the settings dialog from the sidebar gear on Windows", async () => {
+  it("opens the settings dialog from the activity rail on Windows", async () => {
     const user = userEvent.setup();
     renderWindowsHeader(
       new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]])),
@@ -119,23 +137,16 @@ describe("AppShell custom file header", () => {
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
     await screen.findByRole("tab", { name: /a\.md/ });
 
-    await user.click(
-      within(screen.getByRole("complementary", { name: "侧栏" })).getByRole(
-        "button",
-        { name: "设置" },
-      ),
-    );
+    await user.click(railButton("设置"));
 
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
   });
 
-  it("floats a settings gear in the empty state that opens the dialog", async () => {
+  it("opens settings from the activity rail in the empty state", async () => {
     const user = userEvent.setup();
     renderLinuxHeader(new MemoryDocumentPort(new Map()));
 
-    const fab = screen.getByRole("button", { name: "设置" });
-    expect(fab).toHaveClass("settings-fab");
-    await user.click(fab);
+    await user.click(railButton("设置"));
 
     expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
   });
@@ -221,16 +232,14 @@ describe("AppShell custom file header", () => {
     expect(items[0]).toHaveFocus();
   });
 
-  it("opens settings from the sidebar gear and restores focus on close", async () => {
+  it("opens settings from the activity rail and restores focus on close", async () => {
     const user = userEvent.setup();
     renderLinuxHeader(
       new MemoryDocumentPort(new Map([["/notes/a.md", file("/notes/a.md")]])),
     );
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
     await screen.findByRole("tab", { name: /a\.md/ });
-    const gear = within(
-      screen.getByRole("complementary", { name: "侧栏" }),
-    ).getByRole("button", { name: "设置" });
+    const gear = railButton("设置");
 
     await user.click(gear);
 
@@ -330,10 +339,27 @@ describe("AppShell custom file header", () => {
     }
   });
 
+  it("starts native dragging only from noninteractive top-bar space", () => {
+    renderLinuxHeader(new MemoryDocumentPort(new Map()));
+    const header = titlebar();
+
+    fireEvent.mouseDown(header, { button: 0 });
+    expect(startDragging).not.toHaveBeenCalled();
+
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    fireEvent.mouseDown(header, { button: 0 });
+    expect(startDragging).toHaveBeenCalledOnce();
+    fireEvent.mouseDown(fileMenuToggle(), { button: 0 });
+    expect(startDragging).toHaveBeenCalledOnce();
+  });
+
   it("keeps the browser-shell header unchanged without the flag", () => {
     render(<AppShell port={new MemoryDocumentPort(new Map())} />);
 
-    expect(screen.getByText("Opus")).toBeInTheDocument();
+    expect(within(titlebar()).getByText("Opus")).toBeInTheDocument();
     expect(
       within(titlebar()).queryByRole("button", { name: "文件" }),
     ).not.toBeInTheDocument();

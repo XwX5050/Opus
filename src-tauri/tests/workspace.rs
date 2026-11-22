@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use markdown_edit_lib::workspace::{
-    create_markdown_file, list_directory, open_workspace, rename_entry, trash_entry,
-    DirectoryEntry, WorkspaceError,
+    create_markdown_file, list_directory, open_workspace, rename_entry, search_markdown,
+    trash_entry, DirectoryEntry, WorkspaceError,
 };
 
 fn entry_names(entries: &[DirectoryEntry]) -> Vec<&str> {
@@ -335,4 +335,57 @@ fn create_markdown_file_never_writes_through_a_symlink() {
         WorkspaceError::AlreadyExists { .. }
     ));
     assert!(!outside.path().join("ghost.md").exists());
+}
+
+#[test]
+fn search_markdown_matches_saved_lines_case_insensitively() {
+    let (_dir, root) = populated_root();
+    std::fs::write(
+        root.join("notes/inner.md"),
+        "Nothing\nHello 世界\nhello again\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("draft.txt"), "hello in a hidden format").unwrap();
+    std::fs::write(root.join(".hidden.md"), "hello hidden").unwrap();
+
+    let result = search_markdown(&root, " HELLO ").unwrap();
+
+    assert_eq!(result.matches.len(), 2);
+    assert!(!result.truncated);
+    assert_eq!(result.matches[0].line, 2);
+    assert_eq!(result.matches[0].column, 0);
+    assert_eq!(result.matches[0].match_length, 5);
+    assert_eq!(result.matches[0].text, "Hello 世界");
+    assert_eq!(result.matches[1].line, 3);
+}
+
+#[test]
+fn search_markdown_handles_empty_queries_invalid_utf8_and_result_limits() {
+    let (_dir, root) = populated_root();
+    assert!(search_markdown(&root, " \n ").unwrap().matches.is_empty());
+    std::fs::write(root.join("invalid.md"), [0xff, 0xfe]).unwrap();
+    std::fs::write(
+        root.join("many.md"),
+        (0..205).map(|_| "needle\n").collect::<String>(),
+    )
+    .unwrap();
+
+    let result = search_markdown(&root, "needle").unwrap();
+
+    assert_eq!(result.matches.len(), 200);
+    assert!(result.truncated);
+}
+
+#[cfg(unix)]
+#[test]
+fn search_markdown_does_not_follow_symlinks_outside_the_root() {
+    let (_dir, root) = populated_root();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.md"), "needle outside").unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret.md"), root.join("escape.md")).unwrap();
+
+    let result = search_markdown(&root, "needle").unwrap();
+
+    assert!(result.matches.is_empty());
 }

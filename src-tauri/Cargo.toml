@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.17"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -9,6 +9,13 @@ edition = "2021"
 rust-version = "1.77.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+# Native end-to-end automation: registers the scenario marker/report commands
+# and their environment-only configuration (see src/native_e2e.rs). Never
+# enabled by normal builds; the dedicated test build adds `--features
+# native-e2e` together with `tauri.native-e2e.conf.json`.
+native-e2e = []
 
 [lib]
 name = "markdown_edit_lib"

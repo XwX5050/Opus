@@ -11,6 +11,7 @@ import type { TranslationSettings } from "../translate/types";
 import { DEFAULT_TRANSLATION_SETTINGS } from "../translate/types";
 import { TRANSLATION_PRESETS } from "../translate/presets";
 import { translateDocument } from "../translate/translate";
+import { draftIdForTab } from "../recovery/drafts";
 import { useAppController } from "./useAppController";
 
 // Pass-through wrapper: the real pipeline runs underneath (existing tests keep
@@ -65,6 +66,7 @@ class InspectableControllerPort implements DocumentPort {
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
       async closeWorkspace() {}
   async listDirectory() { return []; }
+      async searchWorkspace() { return { matches: [], truncated: false }; }
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
@@ -129,6 +131,7 @@ class ScopeAwareControllerPort implements DocumentPort {
   async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; }
       async closeWorkspace() {}
   async listDirectory() { return []; }
+      async searchWorkspace() { return { matches: [], truncated: false }; }
   async listTranslationModels() { return []; }
   async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
   async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); }
@@ -222,6 +225,44 @@ describe("useAppController", () => {
     });
   });
 
+  it("takes the per-tab save lock before the save-path chooser resolves", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", {
+        path: "/notes/a.md",
+        text: "saved",
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: "v1",
+      }]]),
+    );
+    const chooser = vi.spyOn(port, "chooseSavePath");
+    let resolveChooser!: (target: SaveTarget | null) => void;
+    chooser.mockImplementationOnce(
+      () => new Promise<SaveTarget | null>((resolve) => { resolveChooser = resolve; }),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.activeId!;
+
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = hook.result.current.saveAs(id);
+      second = hook.result.current.saveAs(id);
+    });
+    // The second attempt is refused synchronously by the flow's per-tab lock,
+    // before the first has even chosen a destination.
+    await waitFor(() => expect(chooser).toHaveBeenCalledTimes(1));
+    resolveChooser({ path: "/notes/copy.md", expectedVersion: null });
+    await act(() => Promise.all([first, second]));
+
+    expect(chooser).toHaveBeenCalledTimes(1);
+    expect(port.writes).toHaveLength(1);
+    expect(hook.result.current.state.tabs[0].path).toBe("/notes/copy.md");
+    hook.unmount();
+  });
+
   it("atomically rejects every second close choice while the first save is pending", async () => {
     let resolveWrite!: (value: SavedFile) => void;
     const write = new Promise<SavedFile>((resolve) => { resolveWrite = resolve; });
@@ -276,6 +317,7 @@ describe("useAppController", () => {
       async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; },
       async closeWorkspace() {},
       async listDirectory() { return []; },
+      async searchWorkspace() { return { matches: [], truncated: false }; },
       async listTranslationModels() { return []; },
       async createMarkdownFile(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
       async renameEntry(): Promise<DirectoryEntry> { throw new DocumentPortError("io", "not supported"); },
@@ -613,6 +655,42 @@ describe("useAppController disk watching", () => {
         status: "clean",
       }),
     );
+    hook.unmount();
+  });
+
+  it("ignores a watcher read whose disk version equals the expected one", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", memoryFile("/notes/a.md", "saved")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const read = vi.spyOn(port, "openPath").mockResolvedValueOnce({
+      path: "/notes/a.md",
+      text: "same-version disk contents",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 9,
+      version: "version:/notes/a.md",
+    });
+
+    act(() =>
+      port.emitDiskEvent({
+        kind: "changed",
+        path: "/notes/a.md",
+        modifiedUnixMs: 9,
+        version: "foreign",
+      }),
+    );
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    // A watch read that sees the version it started from is a self-save echo:
+    // committing it would overwrite a buffer the user resumed editing after a
+    // save, so the adapter ignores it.
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "saved",
+      status: "clean",
+    });
     hook.unmount();
   });
 
@@ -987,6 +1065,33 @@ describe("useAppController scope and watch retargeting", () => {
     hook.unmount();
   });
 
+  it("does not retarget scope or watch when a save keeps the same path", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", scopedFile("/notes/a.md")]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const tab = hook.result.current.state.tabs[0];
+    await waitFor(() => expect(port.watchCalls).toHaveLength(1));
+    act(() => hook.result.current.changeText(tab.id, "saved in place"));
+
+    await act(() => hook.result.current.save(tab.id));
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/a.md",
+      status: "clean",
+    });
+    // Same normalized path: a committed save must not churn the scope or the
+    // watch (the flow only calls onRetarget for a real path change).
+    expect(port.scopeCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+    ]);
+    expect(port.watchCalls).toEqual([
+      { kind: "document", consumerId: tab.id, path: "/notes/a.md" },
+    ]);
+    hook.unmount();
+  });
+
   it("delivers disk events for the new path after a save-as", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", memoryFile("/notes/a.md")]]),
@@ -1083,6 +1188,56 @@ describe("useAppController conflict resolution", () => {
     hook.unmount();
   });
 
+  it("commits an explicit disk load even when its version matches the buffer", async () => {
+    const opened: OpenedFile = {
+      path: "/notes/a.md",
+      text: "saved",
+      hasUtf8Bom: false,
+      newline: "lf",
+      modifiedUnixMs: 1,
+      version: "v1",
+    };
+    const port = new MemoryDocumentPort(new Map([[opened.path, opened]]));
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath(opened.path));
+    const id = hook.result.current.state.tabs[0].id;
+    // A disk rewrite can carry the same opaque version (for example a
+    // version-preserving external tool edit). The explicit conflict-dialog
+    // load must still replace the buffer; only watcher reads ignore an equal
+    // version as a self-save echo.
+    vi.spyOn(port, "openPath").mockResolvedValueOnce({
+      ...opened,
+      text: "same-version disk contents",
+    });
+
+    await act(() => hook.result.current.loadDiskVersion(id));
+
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "same-version disk contents",
+      savedText: "same-version disk contents",
+      version: "v1",
+      status: "clean",
+    });
+    hook.unmount();
+  });
+
+  it("keeps the conflicted tab and reports the read error when the disk file is gone", async () => {
+    const { port, hook, id } = await conflictedController();
+    act(() => port.removeFile("/notes/a.md"));
+
+    await act(() => hook.result.current.loadDiskVersion(id));
+
+    // Explicit loads keep the old conflict-dialog behavior: a vanished file
+    // reports the read error in the banner and leaves the tab conflicted with
+    // its local buffer, rather than silently turning it into a missing tab.
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "local edits",
+      status: "conflict",
+    });
+    expect(hook.result.current.error).toContain("/notes/a.md");
+    hook.unmount();
+  });
+
   it("keepLocalVersion keeps the buffer and re-dirties the tab", async () => {
     const { hook, id } = await conflictedController();
 
@@ -1144,6 +1299,41 @@ describe("useAppController save failures", () => {
     hook.unmount();
   });
 
+  it("keeps the close dialog and reports a close-save write failure through the banner", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", {
+        path: "/notes/a.md",
+        text: "saved",
+        hasUtf8Bom: false,
+        newline: "lf" as const,
+        modifiedUnixMs: 1,
+        version: "v1",
+      }]]),
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "local edits"));
+    // An external writer invalidates the expected version before the close
+    // save, so the write fails inside the close flow.
+    act(() => port.updateFile("/notes/a.md", "external", "v2", 9));
+    act(() => hook.result.current.close(id));
+
+    await act(() => hook.result.current.confirmClose("save"));
+
+    // The dialog stays open for another choice, the banner carries the error,
+    // and the retry dialog (saveError) is not opened for a close-save.
+    expect(hook.result.current.closeDocumentId).toBe(id);
+    expect(hook.result.current.closeSaving).toBe(false);
+    expect(hook.result.current.saveError).toBeNull();
+    expect(hook.result.current.error).toContain("/notes/a.md");
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      text: "local edits",
+      status: "dirty",
+    });
+    hook.unmount();
+  });
+
   it("returns to the still-dirty tab when save-as is cancelled after a failure", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", {
@@ -1201,7 +1391,7 @@ describe("useAppController recovery drafts", () => {
       await act(async () => { vi.advanceTimersByTime(2000); });
       expect(port.drafts).toHaveLength(1);
       expect(port.drafts[0]).toMatchObject({
-        draftId: `draft-${id}`,
+        draftId: draftIdForTab(id),
         originalPath: "/notes/a.md",
         title: "a.md",
         text: "unsaved work",
@@ -1211,9 +1401,9 @@ describe("useAppController recovery drafts", () => {
 
       act(() => hook.result.current.changeText(id, "unsaved work v2"));
       await act(async () => { vi.advanceTimersByTime(1999); });
-      expect((await port.readDraft(`draft-${id}`)).text).toBe("unsaved work");
+      expect((await port.readDraft(draftIdForTab(id))).text).toBe("unsaved work");
       await act(async () => { vi.advanceTimersByTime(1); });
-      expect((await port.readDraft(`draft-${id}`)).text).toBe("unsaved work v2");
+      expect((await port.readDraft(draftIdForTab(id))).text).toBe("unsaved work v2");
 
       await act(() => hook.result.current.save(id));
       expect(hook.result.current.state.tabs[0].status).toBe("clean");
@@ -1270,12 +1460,12 @@ describe("useAppController recovery drafts", () => {
 
       await act(async () => { vi.advanceTimersByTime(1); });
       expect(port.drafts).toHaveLength(1);
-      expect(port.drafts[0]).toMatchObject({ draftId: `draft-${tabB.id}`, text: "b-1" });
+      expect(port.drafts[0]).toMatchObject({ draftId: draftIdForTab(tabB.id), text: "b-1" });
 
       await act(async () => { vi.advanceTimersByTime(1000); });
       expect(port.drafts).toHaveLength(2);
       expect(port.drafts.map((draft) => draft.draftId).sort()).toEqual(
-        [`draft-${tabA.id}`, `draft-${tabB.id}`].sort(),
+        [draftIdForTab(tabA.id), draftIdForTab(tabB.id)].sort(),
       );
       hook.unmount();
     } finally {
@@ -1308,7 +1498,7 @@ describe("useAppController recovery drafts", () => {
       await act(async () => { hook.result.current.changeText(id, "typing-5"); });
       expect(port.drafts).toHaveLength(1);
       expect(port.drafts[0]).toMatchObject({
-        draftId: `draft-${id}`,
+        draftId: draftIdForTab(id),
         text: "typing-5",
       });
       hook.unmount();
@@ -1345,7 +1535,7 @@ describe("useAppController recovery drafts", () => {
       await act(async () => { vi.advanceTimersByTime(2000); });
 
       expect(port.drafts).toHaveLength(1);
-      expect(port.drafts[0]).toMatchObject({ draftId: `draft-${id}`, text: "unsaved work" });
+      expect(port.drafts[0]).toMatchObject({ draftId: draftIdForTab(id), text: "unsaved work" });
       hook.unmount();
     } finally {
       vi.useRealTimers();
@@ -1364,7 +1554,7 @@ describe("useAppController recovery drafts", () => {
       await act(() => port.emitCloseRequested());
 
       expect(port.drafts).toHaveLength(1);
-      expect(port.drafts[0]).toMatchObject({ draftId: `draft-${id}`, text: "unsaved work" });
+      expect(port.drafts[0]).toMatchObject({ draftId: draftIdForTab(id), text: "unsaved work" });
       hook.unmount();
     } finally {
       vi.useRealTimers();
@@ -1372,6 +1562,8 @@ describe("useAppController recovery drafts", () => {
   });
 
   it("surfaces leftover drafts on launch and restores one as a dirty tab", async () => {
+    // A legacy (pre-namespace) draft id, still listable/readable by the port;
+    // restore writes the owner's namespaced copy before discarding it.
     const leftover: RecoveryDraft = {
       draftId: "draft-document-9",
       originalPath: "/notes/a.md",
@@ -1406,7 +1598,7 @@ describe("useAppController recovery drafts", () => {
     // 2s debounce window loses nothing.
     expect(port.drafts).toHaveLength(1);
     expect(port.drafts[0]).toMatchObject({
-      draftId: `draft-${tab.id}`,
+      draftId: draftIdForTab(tab.id),
       originalPath: "/notes/a.md",
       title: "a.md",
       text: "unsaved",
@@ -1454,6 +1646,9 @@ describe("useAppController recovery drafts", () => {
       text: "unsaved",
       status: "dirty",
     });
+    // The restored text is safe, but the user is told the fresh backup failed
+    // and that the original leftover was kept for the next launch.
+    expect(hook.result.current.error).toContain("已恢复文档");
     expect(hook.result.current.recoveryDrafts).toEqual([]);
     expect(port.drafts).toHaveLength(1);
     expect(port.drafts[0]).toMatchObject({
@@ -2207,6 +2402,32 @@ describe("useAppController translations", () => {
     hook.unmount();
   });
 
+  it("permits Save As while a translation is visible", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", translateFile("/notes/a.md", "original")]]),
+      { ...keyedOptions, savePath: "/notes/copy.md" },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    act(() => hook.result.current.changeText(id, "edited original"));
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+
+    // Save As picks a new destination, so it is not blocked by the overlay;
+    // the write still targets the original buffer the translation overlaid.
+    await act(() => hook.result.current.saveAs(id));
+
+    expect(port.writes.at(-1)?.text).toBe("edited original");
+    expect(hook.result.current.state.tabs[0]).toMatchObject({
+      path: "/notes/copy.md",
+      status: "clean",
+    });
+    hook.unmount();
+  });
+
   it("restores and persists translation settings with the session (never a key)", async () => {
     const port = new MemoryDocumentPort(new Map(), {
       session: {
@@ -2466,8 +2687,24 @@ describe("useAppController translations", () => {
 });
 
 describe("useAppController restore transaction order", () => {
+  // A leftover draft from this launch's own namespace: the same-id defense is
+  // only reachable when the owner's namespaced id equals the leftover's id.
+  const sameIdLeftover = (changes: Partial<RecoveryDraft> = {}): RecoveryDraft => ({
+    draftId: draftIdForTab("document-1"),
+    originalPath: null,
+    title: "Unsaved crash note",
+    text: "Unique recovered text",
+    hasUtf8Bom: false,
+    newline: "lf",
+    savedTextHash: "811c9dc5",
+    savedVersion: null,
+    ...changes,
+  });
+
+  // A legacy draft id (pre-namespace) as the store still lists it after an
+  // upgrade; restore must migrate it to the owner's namespaced copy.
   const leftover = (changes: Partial<RecoveryDraft> = {}): RecoveryDraft => ({
-    draftId: "draft-document-1",
+    draftId: "draft-document-9",
     originalPath: null,
     title: "Unsaved crash note",
     text: "Unique recovered text",
@@ -2479,12 +2716,12 @@ describe("useAppController restore transaction order", () => {
   });
 
   it("keeps a durable copy when restoring an untitled draft whose id the new tab reuses", async () => {
-    // The leftover comes from a crashed session whose first tab was
-    // document-1; the fresh session's first tab id is document-1 again, so
+    // The port holds a draft under the current launch namespace for
+    // document-1, and the fresh session's first tab id is document-1 again:
     // draftIdForTab(added.id) === info.draftId. The immediate write replaces
     // the leftover in place, and discarding the "leftover" afterwards would
     // delete the freshly written copy — the restored content must survive.
-    const port = new MemoryDocumentPort(new Map(), { drafts: [leftover()] });
+    const port = new MemoryDocumentPort(new Map(), { drafts: [sameIdLeftover()] });
     const hook = renderHook(() => useAppController(port));
     await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
 
@@ -2494,15 +2731,74 @@ describe("useAppController restore transaction order", () => {
 
     expect(hook.result.current.recoveryDrafts).toEqual([]);
     expect(hook.result.current.state.tabs[0]).toMatchObject({
+      id: "document-1",
       text: "Unique recovered text",
       status: "dirty",
     });
     expect(port.drafts).toHaveLength(1);
     expect(port.drafts[0]).toMatchObject({
-      draftId: "draft-document-1",
+      draftId: draftIdForTab("document-1"),
       text: "Unique recovered text",
     });
     hook.unmount();
+  });
+
+  it("adopts a draft only once when the same restore is invoked twice", async () => {
+    const port = new MemoryDocumentPort(new Map(), { drafts: [leftover()] });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+    const info = hook.result.current.recoveryDrafts![0];
+
+    await act(() =>
+      Promise.all([
+        hook.result.current.restoreDraft(info),
+        hook.result.current.restoreDraft(info),
+      ]),
+    );
+
+    // The draftId guard drops the second click while the first transaction is
+    // still reading: one recovered tab, one dialog entry consumed.
+    expect(hook.result.current.state.tabs).toHaveLength(1);
+    expect(hook.result.current.recoveryDrafts).toEqual([]);
+    hook.unmount();
+  });
+
+  it("does not adopt a draft whose read settles after unmount", async () => {
+    let resolveRead!: (draft: RecoveryDraft) => void;
+    class GatedReadPort extends MemoryDocumentPort {
+      override readDraft(): Promise<RecoveryDraft> {
+        return new Promise<RecoveryDraft>((resolve) => { resolveRead = resolve; });
+      }
+    }
+    const draft: RecoveryDraft = {
+      draftId: "draft-document-9",
+      originalPath: null,
+      title: "Untitled",
+      text: "late recovered text",
+      hasUtf8Bom: false,
+      newline: "lf",
+      savedTextHash: "hash",
+      savedVersion: null,
+    };
+    const port = new GatedReadPort(new Map(), { drafts: [draft] });
+    const hook = renderHook(() => useAppController(port));
+    await waitFor(() => expect(hook.result.current.recoveryDrafts).toHaveLength(1));
+
+    let restoring!: Promise<void>;
+    act(() => {
+      restoring = hook.result.current.restoreDraft(
+        hook.result.current.recoveryDrafts![0],
+      );
+    });
+    hook.unmount();
+    await act(async () => {
+      resolveRead(draft);
+      await restoring;
+    });
+
+    // The lifecycle generation moved on, so the transaction reports `stale`
+    // and neither appends a tab nor touches the (unmounted) draft list.
+    expect(hook.result.current.state.tabs).toHaveLength(0);
   });
 
   it("durably migrates a draft merged into a tab already restored from disk before discarding the leftover", async () => {
@@ -2547,7 +2843,7 @@ describe("useAppController restore transaction order", () => {
     });
     expect(port.drafts).toHaveLength(1);
     expect(port.drafts[0]).toMatchObject({
-      draftId: `draft-${hook.result.current.state.tabs[0].id}`,
+      draftId: draftIdForTab(hook.result.current.state.tabs[0].id),
       text: "Unique recovered text",
     });
     hook.unmount();
@@ -2578,14 +2874,19 @@ describe("useAppController restore transaction order", () => {
       text: "",
       status: "dirty",
     });
-    expect(port.drafts.some((item) => item.draftId === "draft-document-1")).toBe(true);
+    expect(
+      port.drafts.some(
+        (item) =>
+          item.draftId === draftIdForTab(hook.result.current.state.tabs[0].id),
+      ),
+    ).toBe(true);
     hook.unmount();
   });
 
   it("keeps the draft and its dialog entry when a dirty tab refuses the merge", async () => {
-    // The crash-session draft id (draft-document-9) names no tab of this run,
-    // and the file is already open with newer local edits: the reducer refuses
-    // the merge, so the recovered text lands nowhere. Discarding the leftover
+    // The legacy draft id (draft-document-9) names no tab of this run, and the
+    // file is already open with newer local edits: the reducer refuses the
+    // merge, so the recovered text lands nowhere. Discarding the leftover
     // would silently destroy the only copy of the crashed work.
     const opened: OpenedFile = {
       path: "/notes/a.md",

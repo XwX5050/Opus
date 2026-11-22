@@ -39,14 +39,21 @@ const renderTabList = (
 ) => {
   const onActivate = vi.fn();
   const onClose = vi.fn();
+  const onCreate = vi.fn();
   render(
-    <TabList tabs={tabs} activeId={activeId} onActivate={onActivate} onClose={onClose} />,
+    <TabList
+      tabs={tabs}
+      activeId={activeId}
+      onActivate={onActivate}
+      onClose={onClose}
+      onCreate={onCreate}
+    />,
   );
-  return { onActivate, onClose };
+  return { onActivate, onClose, onCreate };
 };
 
 describe("TabList", () => {
-  it("renders a vertical tablist with each tab's title and status dot", () => {
+  it("renders a horizontal tablist with each tab's title and status dot", () => {
     renderTabList([
       tab("document-1", "a.md"),
       tab("document-2", "b.md", { status: "dirty", text: "changed" }),
@@ -54,7 +61,7 @@ describe("TabList", () => {
     ]);
 
     const tablist = screen.getByRole("tablist", { name: "打开的文档" });
-    expect(tablist).toHaveAttribute("aria-orientation", "vertical");
+    expect(tablist).toHaveAttribute("aria-orientation", "horizontal");
     const tabs = within(tablist).getAllByRole("tab");
     expect(tabs).toHaveLength(3);
     expect(tabs[0]).toHaveTextContent("a.md");
@@ -91,6 +98,28 @@ describe("TabList", () => {
     expect(onClose).toHaveBeenCalledWith("document-2");
   });
 
+  it("creates a new document from a tab's inline create action", async () => {
+    const user = userEvent.setup();
+    const { onCreate } = renderTabList([tab("document-1", "a.md")]);
+
+    await user.click(screen.getByRole("button", { name: "新建文件" }));
+
+    expect(onCreate).toHaveBeenCalledOnce();
+  });
+
+  it("renders the create action only on the last tab", () => {
+    renderTabList([
+      tab("document-1", "a.md"),
+      tab("document-2", "b.md"),
+      tab("document-3", "c.md"),
+    ]);
+
+    const items = screen.getAllByRole("tab").map((item) => item.parentElement!);
+    expect(within(items[0]).queryByRole("button", { name: "新建文件" })).toBeNull();
+    expect(within(items[1]).queryByRole("button", { name: "新建文件" })).toBeNull();
+    expect(within(items[2]).getByRole("button", { name: "新建文件" })).toBeVisible();
+  });
+
   it("disables the close button while a save is pending", () => {
     renderTabList([
       tab("document-1", "a.md", { pendingSave: pendingSave("document-1") }),
@@ -99,7 +128,7 @@ describe("TabList", () => {
     expect(screen.getByRole("button", { name: "关闭 a.md" })).toBeDisabled();
   });
 
-  it("moves focus and selection with ArrowUp/ArrowDown, wrapping at both ends", async () => {
+  it("moves focus and selection with ArrowLeft/ArrowRight, wrapping at both ends", async () => {
     const user = userEvent.setup();
     const { onActivate } = renderTabList([
       tab("document-1", "a.md"),
@@ -110,15 +139,15 @@ describe("TabList", () => {
 
     const tabs = screen.getAllByRole("tab");
     tabs[2].focus();
-    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{ArrowRight}");
     expect(tabs[0]).toHaveFocus();
     expect(onActivate).toHaveBeenLastCalledWith("document-1");
 
-    await user.keyboard("{ArrowUp}");
+    await user.keyboard("{ArrowLeft}");
     expect(tabs[2]).toHaveFocus();
     expect(onActivate).toHaveBeenLastCalledWith("document-3");
 
-    await user.keyboard("{ArrowUp}");
+    await user.keyboard("{ArrowLeft}");
     expect(tabs[1]).toHaveFocus();
     expect(onActivate).toHaveBeenLastCalledWith("document-2");
   });

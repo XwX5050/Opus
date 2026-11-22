@@ -26,6 +26,7 @@ vi.mock("../document/tauriDocumentPort", () => ({
       async openWorkspacePath(path: string) { return { path, title: path.split("/").at(-1) ?? path }; },
       async closeWorkspace() {},
       async listDirectory() { return []; },
+      async searchWorkspace() { return { matches: [], truncated: false }; },
       async createMarkdownFile() { throw new DocumentPortError("io", "not supported"); },
       async renameEntry() { throw new DocumentPortError("io", "not supported"); },
       async renameDocument() { throw new DocumentPortError("io", "not supported"); },

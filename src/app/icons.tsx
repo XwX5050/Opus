@@ -155,3 +155,10 @@ export const DisclosureChevronIcon = () => (
     <path d="m6 4 4 4-4 4" />
   </svg>
 );
+
+export const SearchIcon = ({ size = 14 }: { size?: number }) => (
+  <svg {...outlineIconProps} width={size} height={size}>
+    <circle cx="11" cy="11" r="8" />
+    <path d="m21 21-4.3-4.3" />
+  </svg>
+);

@@ -1,8 +1,8 @@
-import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { DocumentSnapshot } from "../document/types";
 
 /**
- * The fields a sidebar tab row renders. The props deliberately carry no
+ * The fields a document tab renders. The props deliberately carry no
  * document text: a whole `DocumentSnapshot` would route every open document's
  * body through this component's props on each keystroke — and React's
  * development build stringifies changed string props during its per-commit
@@ -19,6 +19,7 @@ export interface TabListProps {
   activeId: string | null;
   onActivate(id: string): void;
   onClose(id: string): void;
+  onCreate(): void;
   /**
    * Called with the tab id and the right-click event after the tab button
    * handled it (preventDefault + stopPropagation), so the host can open its
@@ -27,17 +28,21 @@ export interface TabListProps {
   onTabContextMenu?(tabId: string, event: ReactMouseEvent): void;
 }
 
-/**
- * Vertical tab list rendered inside the sidebar. Keeps the same ARIA wiring
- * as the old horizontal strip (stable `document-tab-*` ids, roving tabindex),
- * with the vertical-tablist arrow keys (Up/Down instead of Left/Right).
- */
-export default function TabList({ tabs, activeId, onActivate, onClose, onTabContextMenu }: TabListProps) {
+/** Horizontal document tabs with roving focus and a single-row overflow strip. */
+export default function TabList({ tabs, activeId, onActivate, onClose, onCreate, onTabContextMenu }: TabListProps) {
+  useEffect(() => {
+    if (!activeId) return;
+    document.getElementById(`document-tab-${activeId}`)?.scrollIntoView?.({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [activeId]);
+
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (tabs.length === 0) return;
     let targetIndex: number | null = null;
-    if (event.key === "ArrowUp") targetIndex = (index - 1 + tabs.length) % tabs.length;
-    if (event.key === "ArrowDown") targetIndex = (index + 1) % tabs.length;
+    if (event.key === "ArrowLeft") targetIndex = (index - 1 + tabs.length) % tabs.length;
+    if (event.key === "ArrowRight") targetIndex = (index + 1) % tabs.length;
     if (event.key === "Home") targetIndex = 0;
     if (event.key === "End") targetIndex = tabs.length - 1;
     if (targetIndex === null) return;
@@ -53,7 +58,7 @@ export default function TabList({ tabs, activeId, onActivate, onClose, onTabCont
     <div
       role="tablist"
       aria-label="打开的文档"
-      aria-orientation="vertical"
+      aria-orientation="horizontal"
       className="tab-list"
       data-motion-list="tabs"
     >
@@ -104,6 +109,17 @@ export default function TabList({ tabs, activeId, onActivate, onClose, onTabCont
           >
             ×
           </button>
+          {index === tabs.length - 1 && (
+            <button
+              type="button"
+              className="tab-create"
+              aria-label="新建文件"
+              title="新建文件"
+              onClick={onCreate}
+            >
+              +
+            </button>
+          )}
         </div>
       ))}
     </div>

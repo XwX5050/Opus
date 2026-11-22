@@ -18,6 +18,8 @@
     "WenQuanYi Micro Hei", "Microsoft YaHei", sans-serif;
   --font-ui-size: 13px;
   --font-ui-size-small: 12px;
+  /* Content lists (file tree) read one step above the base UI size. */
+  --font-ui-size-large: 14px;
 
   /* Density: one spacing scale for the whole shell. */
   --space-0-5: 2px;
@@ -30,10 +32,11 @@
   --space-quote-block: 20px;
   --space-quote-inline: 24px;
 
-  /* Three restrained radius steps. */
+  /* Restrained control radii plus a broad panel-edge curve. */
   --radius-small: 4px;
   --radius-medium: 8px;
   --radius-large: 12px;
+  --radius-panel: 32px;
 
   /* Editor reading column; overridden per preference by useTheme. */
   --editor-content-width: 760px;

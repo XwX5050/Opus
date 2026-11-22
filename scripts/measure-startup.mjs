@@ -29,6 +29,7 @@
  * launch and restored afterwards — even across a killed harness run.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import {
   existsSync,
@@ -57,6 +58,13 @@ const LAUNCH_TIMEOUT_MS = 30_000;
 export const HOT_BUDGET_MS = 1000;
 export const COLD_BUDGET_MS = 2000;
 export const REQUIRED_COLD_SAMPLES = 5;
+
+/**
+ * Launches owned by this process. Signal handlers use this set to quit a
+ * half-started app through the normal path (so recovery drafts flush) and
+ * restore the session store before the harness exits.
+ */
+const activeLaunches = new Set();
 
 // ---------- shell helpers ----------
 
@@ -110,6 +118,40 @@ export const bundleProvenance = async (bundlePath) => {
   return { kind: "unsigned", label: "unsigned bundle" };
 };
 
+export const fileSha256 = (filePath) =>
+  createHash("sha256").update(readFileSync(filePath)).digest("hex");
+
+/**
+ * Identity of the executable that every launch of this bundle actually runs.
+ * Cold/Gatekeeper samples carry this identity; a report only accepts samples
+ * whose hash, path and signing provenance still match the local bundle.
+ */
+export const bundleIdentity = async (bundlePath = DEFAULT_BUNDLE) => {
+  const binary = bundleBinary(bundlePath);
+  const provenance = await bundleProvenance(bundlePath);
+  return {
+    path: path.relative(ROOT, bundlePath),
+    sha256: fileSha256(binary),
+    provenance: provenance.label,
+    provenanceKind: provenance.kind,
+  };
+};
+
+export const sampleMatchesBundle = (sample, identity) =>
+  Boolean(
+    sample &&
+      identity &&
+      sample.bundleSha256 === identity.sha256 &&
+      sample.bundlePath === identity.path &&
+      sample.bundleProvenance === identity.provenance &&
+      sample.bundleProvenanceKind === identity.provenanceKind,
+  );
+
+export const coldSamplesMatchBundle = (cold, identity) =>
+  Array.isArray(cold) &&
+  cold.length >= REQUIRED_COLD_SAMPLES &&
+  cold.every((sample) => sampleMatchesBundle(sample, identity));
+
 // ---------- session store backup/restore ----------
 
 const sessionStoreFile = (bundleId) =>
@@ -142,6 +184,17 @@ const backupSessionStore = (bundleId) => {
       content: existed ? readFileSync(file, "utf8") : null,
     }),
   );
+};
+
+export const restoreStartupSession = (bundlePath = DEFAULT_BUNDLE) => {
+  if (!existsSync(bundlePath)) return false;
+  try {
+    restoreSessionStore(bundleIdentifier(bundlePath));
+    return true;
+  } catch {
+    // Best effort: the next launch also restores any stale backup.
+    return false;
+  }
 };
 
 const restoreSessionStore = (bundleId) => {
@@ -231,6 +284,22 @@ export const assertNoLiveInstance = async (binaryPath, bundleId, { force = false
   await ensureNotRunning(binaryPath, bundleId);
 };
 
+export const cleanupActiveLaunches = async () => {
+  const records = [...activeLaunches];
+  activeLaunches.clear();
+  for (const record of records) {
+    try {
+      await quitGracefully(record.child, record.binaryPath, record.bundleId);
+    } catch (error) {
+      console.warn(
+        `failed to quit ${record.bundleId} during cleanup: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      restoreSessionStore(record.bundleId);
+    }
+  }
+};
+
 const quitGracefully = async (child, binaryPath, bundleId) => {
   // The child may already have exited (e.g. the bundle lacked the perf-mark
   // instrumentation); its "exit" event has already fired, so a listener
@@ -263,9 +332,11 @@ export const launchOnce = async ({
   fixturePath = DEFAULT_FIXTURE,
   timeoutMs = LAUNCH_TIMEOUT_MS,
   force = false,
+  identity = null,
 }) => {
   const binary = bundleBinary(bundlePath);
   const bundleId = bundleIdentifier(bundlePath);
+  const fingerprint = identity ?? (await bundleIdentity(bundlePath));
   await assertNoLiveInstance(binary, bundleId, { force });
   // Recover a backup orphaned by a previously killed harness, then take a
   // fresh one — every launch path (hot, --cold, --gatekeeper) is covered.
@@ -276,14 +347,28 @@ export const launchOnce = async ({
     `markdown-edit-perf-mark-${process.pid}-${Date.now()}.txt`,
   );
   const spawnedAt = Date.now();
-  const child = spawn(binary, [fixturePath], {
-    env: { ...process.env, MARKDOWN_EDIT_PERF_MARK: markFile },
-    stdio: "ignore",
+  let child;
+  try {
+    child = spawn(binary, [fixturePath], {
+      env: { ...process.env, MARKDOWN_EDIT_PERF_MARK: markFile },
+      stdio: "ignore",
+    });
+  } catch (error) {
+    restoreSessionStore(bundleId);
+    rmSync(markFile, { force: true });
+    throw error;
+  }
+  const activeLaunch = { child, binaryPath: binary, bundleId };
+  activeLaunches.add(activeLaunch);
+  let spawnError = null;
+  child.once("error", (error) => {
+    spawnError = error;
   });
   try {
     const deadline = Date.now() + timeoutMs;
     let editableUnixMs = null;
     while (Date.now() < deadline) {
+      if (spawnError) throw spawnError;
       if (child.exitCode !== null) {
         throw new Error(`app exited early (code ${child.exitCode}) before becoming editable`);
       }
@@ -298,7 +383,7 @@ export const launchOnce = async ({
     }
     if (editableUnixMs === null || Number.isNaN(editableUnixMs)) {
       throw new Error(
-        "no editable mark within timeout — the bundle lacks MARKDOWN_EDIT_PERF_MARK instrumentation (rebuild with `npm run tauri build`)",
+        "no editable mark within timeout — the bundle may lack MARKDOWN_EDIT_PERF_MARK instrumentation, or the editor never mounted (for example while the display is locked). Rebuild with `npm run tauri build` and retry with an interactive session.",
       );
     }
     const wallMs = Date.now() - spawnedAt;
@@ -306,24 +391,43 @@ export const launchOnce = async ({
       spawnToEditableMs: editableUnixMs - spawnedAt,
       wallMs,
       startedAt: new Date(spawnedAt).toISOString(),
+      bundleSha256: fingerprint.sha256,
+      bundlePath: fingerprint.path,
+      bundleProvenance: fingerprint.provenance,
+      bundleProvenanceKind: fingerprint.provenanceKind,
     };
   } finally {
-    await quitGracefully(child, binary, bundleId);
-    restoreSessionStore(bundleId);
-    rmSync(markFile, { force: true });
+    try {
+      await quitGracefully(child, binary, bundleId);
+    } finally {
+      // Keep the record registered until the quit finishes: a signal that
+      // arrives mid-quit must still find this child and restore its session.
+      activeLaunches.delete(activeLaunch);
+      restoreSessionStore(bundleId);
+      rmSync(markFile, { force: true });
+    }
   }
 };
 
 // ---------- samples file ----------
 
-const emptySamples = () => ({ bundle: null, provenance: null, hot: [], cold: [], gatekeeperFirstLaunchMs: null });
+const emptySamples = () => ({
+  bundle: null,
+  bundleSha256: null,
+  provenance: null,
+  hot: [],
+  cold: [],
+  gatekeeperFirstLaunchMs: null,
+  gatekeeperSample: null,
+});
 
 export const loadSamples = () => {
   // Callers mutate the returned object in place (store.cold.push, …), so
   // every empty result must be a fresh object, never a shared one.
   if (!existsSync(SAMPLES_FILE)) return emptySamples();
   try {
-    return JSON.parse(readFileSync(SAMPLES_FILE, "utf8"));
+    // Merge defaults so files written before a field existed stay readable.
+    return { ...emptySamples(), ...JSON.parse(readFileSync(SAMPLES_FILE, "utf8")) };
   } catch (error) {
     // A truncated file means a previous run was killed mid-write; the old
     // baseline is lost, but the harness must keep going — --cold and
@@ -371,18 +475,27 @@ export const measureHotStarts = async ({
   fixturePath = DEFAULT_FIXTURE,
   samples = 5,
   force = false,
+  identity = null,
 } = {}) => {
-  const provenance = await bundleProvenance(bundlePath);
+  const fingerprint = identity ?? (await bundleIdentity(bundlePath));
   const run = [];
   for (let i = 0; i < samples; i += 1) {
-    run.push(await launchOnce({ bundlePath, fixturePath, force }));
+    run.push(
+      await launchOnce({
+        bundlePath,
+        fixturePath,
+        force,
+        identity: fingerprint,
+      }),
+    );
   }
   const store = loadSamples();
-  store.bundle = path.relative(ROOT, bundlePath);
-  store.provenance = provenance.label;
+  store.bundle = fingerprint.path;
+  store.bundleSha256 = fingerprint.sha256;
+  store.provenance = fingerprint.provenance;
   store.hot = run;
   saveSamples(store);
-  return { samples: run, provenance };
+  return { samples: run, provenance: { kind: fingerprint.provenanceKind, label: fingerprint.provenance }, identity: fingerprint };
 };
 
 const report = (label, values, budgetMs) => {
@@ -439,22 +552,36 @@ if (isMain) {
     process.exit(2);
   }
 
-  // On interruption, put the user's session store back before exiting.
+  // On interruption, quit any app this harness started (normal quit, so
+  // recovery drafts flush), restore the user's session store, then exit.
+  let interrupted = false;
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => {
-      try {
-        restoreSessionStore(bundleIdentifier(bundlePath));
-      } catch {
-        // Best effort; the next run restores the stale backup anyway.
-      }
-      process.exit(130);
+    process.once(signal, () => {
+      if (interrupted) return;
+      interrupted = true;
+      void (async () => {
+        try {
+          await cleanupActiveLaunches();
+        } catch {
+          // Best effort; the next run restores the stale backup anyway.
+        } finally {
+          restoreStartupSession(bundlePath);
+          process.exit(signal === "SIGINT" ? 130 : 143);
+        }
+      })();
     });
   }
 
   let failed = false;
   try {
     if (cold) {
-      const sample = await launchOnce({ bundlePath, fixturePath, force });
+      const identity = await bundleIdentity(bundlePath);
+      const sample = await launchOnce({
+        bundlePath,
+        fixturePath,
+        force,
+        identity,
+      });
       const store = loadSamples();
       store.cold.push(sample);
       saveSamples(store);
@@ -470,9 +597,18 @@ if (isMain) {
         console.log("pass/fail is computed once 5 cold samples exist — run again after the next reboot");
       }
     } else if (gatekeeper) {
-      const sample = await launchOnce({ bundlePath, fixturePath, force });
+      const identity = await bundleIdentity(bundlePath);
+      const sample = await launchOnce({
+        bundlePath,
+        fixturePath,
+        force,
+        identity,
+      });
       const store = loadSamples();
-      store.gatekeeperFirstLaunchMs = sample.spawnToEditableMs;
+      store.gatekeeperSample = sample;
+      // Legacy numeric field stays null: an unbound number cannot be
+      // compared with the current bundle and must never be reported as such.
+      store.gatekeeperFirstLaunchMs = null;
       saveSamples(store);
       report("gatekeeper first launch", [sample.spawnToEditableMs], null);
     } else {
@@ -491,8 +627,13 @@ if (isMain) {
       failed = failed || pass === false;
     }
   } catch (error) {
+    // A signal handler owns the exit path once it starts cleaning up; the
+    // app exiting as part of that cleanup must not race it with exit 1.
+    if (interrupted) {
+      await new Promise(() => {});
+    }
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(error?.code === "INSTANCE_RUNNING" ? 3 : 1);
   }
-  process.exit(failed ? 1 : 0);
+  if (!interrupted) process.exit(failed ? 1 : 0);
 }

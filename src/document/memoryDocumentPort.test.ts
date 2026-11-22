@@ -531,3 +531,53 @@ describe("MemoryDocumentPort workspace operations", () => {
     });
   });
 });
+
+
+describe("MemoryDocumentPort workspace search", () => {
+  const opened = (path: string, text: string): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: `version-${path}`,
+  });
+
+  it("searches saved Markdown lines without escaping the workspace", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([
+        ["/ws/a.md", opened("/ws/a.md", "Nothing\nHello 世界\nhello again")],
+        ["/ws/.hidden.md", opened("/ws/.hidden.md", "hello hidden")],
+        ["/ws/raw.txt", opened("/ws/raw.txt", "hello text")],
+        ["/outside/b.md", opened("/outside/b.md", "hello outside")],
+      ]),
+      { workspace: { path: "/ws", title: "ws" } },
+    );
+
+    const result = await port.searchWorkspace("/ws", " HELLO ");
+
+    expect(result.truncated).toBe(false);
+    expect(result.matches.map((match) => ({
+      path: match.path,
+      line: match.line,
+      column: match.column,
+      matchLength: match.matchLength,
+    }))).toEqual([
+      { path: "/ws/a.md", line: 2, column: 0, matchLength: 5 },
+      { path: "/ws/a.md", line: 3, column: 0, matchLength: 5 },
+    ]);
+    await expect(port.searchWorkspace("/ws", "  ")).resolves.toEqual({
+      matches: [],
+      truncated: false,
+    });
+  });
+
+  it("caps result counts and reports truncation", async () => {
+    const port = new MemoryDocumentPort(new Map([
+      ["/ws/many.md", opened("/ws/many.md", "needle\n".repeat(201))],
+    ]));
+    const result = await port.searchWorkspace("/ws", "needle");
+    expect(result.matches).toHaveLength(200);
+    expect(result.truncated).toBe(true);
+  });
+});

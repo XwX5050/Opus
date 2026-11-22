@@ -23,6 +23,7 @@ import {
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { detectPathPlatform } from "../document/platform";
+import type { MarkdownSyntaxMode } from "./performanceMode";
 import { codeBlockAutoClose } from "./codeBlockAutoClose";
 import { frontmatterMarkdownExtension } from "./frontmatterExtension";
 import { highlightMarkdownExtension } from "./highlightExtension";
@@ -80,9 +81,33 @@ const openSearchPanelForReplace = (view: EditorView): boolean => {
 // selection is safe everywhere (it only reads state.selection), so
 // drawSelection stays enabled on all platforms.
 
+export const markdownLanguageExtension = (
+  mode: MarkdownSyntaxMode = "full",
+): Extension =>
+  markdown({
+    ...(mode === "full"
+      ? {
+          codeLanguages: languages,
+          extensions: [
+            GFM,
+            highlightMarkdownExtension,
+            mathMarkdownExtension,
+            frontmatterMarkdownExtension,
+          ],
+        }
+      : {
+          // Frontmatter stays available in core: without it, the closing
+          // delimiter can be read as a Setext heading and pollute the outline
+          // with a fake entry.
+          extensions: [frontmatterMarkdownExtension],
+        }),
+    addKeymap: false,
+  });
+
 export const editorExtensions = (
   commands: EditorCommands,
   livePreview: Extension = [],
+  markdownLanguage: Extension = markdownLanguageExtension("full"),
 ): Extension => [
   highlightSpecialChars(),
   history(),
@@ -93,16 +118,7 @@ export const editorExtensions = (
   syntaxHighlighting(editorHighlightStyle, { fallback: true }),
   bracketMatching(),
   EditorView.lineWrapping,
-  markdown({
-    codeLanguages: languages,
-    extensions: [
-      GFM,
-      highlightMarkdownExtension,
-      mathMarkdownExtension,
-      frontmatterMarkdownExtension,
-    ],
-    addKeymap: false,
-  }),
+  markdownLanguage,
   livePreview,
   // WebKitGTK composition caret workaround; empty on other platforms.
   imeCaretExtension(),

@@ -147,6 +147,7 @@ const flushQueuedFocus = async () => {
 afterEach(() => {
   while (views.length) views.pop()?.destroy();
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
 });
 
 describe("tableWidgetsExtension", () => {
@@ -172,6 +173,42 @@ describe("tableWidgetsExtension", () => {
       .toBe("right");
     expect(view.contentDOM.textContent).not.toContain("---");
     expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("places an accessible horizontal slider below the table scroller", () => {
+    const view = createView(["| A | B |", "| --- | --- |", "| one | two |"].join("\n"));
+    const frame = view.dom.querySelector<HTMLElement>(".md-table-frame");
+    const scroll = view.dom.querySelector<HTMLElement>(".md-table-scroll");
+    const slider = frame?.querySelector<HTMLInputElement>(
+      "input.md-table-horizontal-slider",
+    );
+
+    expect(frame).not.toBeNull();
+    expect(frame?.firstElementChild).toBe(scroll);
+    expect(slider?.previousElementSibling).toBe(scroll);
+    expect(slider).toHaveAttribute("type", "range");
+    expect(slider).toHaveAttribute("aria-label", "横向滚动表格");
+    expect(slider).toHaveAttribute("min", "0");
+    expect(slider).toHaveAttribute("step", "1");
+    expect(slider?.hidden).toBe(true);
+  });
+
+  it("reuses the scroller and slider when table content updates", () => {
+    const doc = ["| A | B |", "| --- | --- |", "| one | two |"].join("\n");
+    const view = createView(doc);
+    const frame = view.dom.querySelector(".md-table-frame");
+    const scroll = view.dom.querySelector(".md-table-scroll");
+    const slider = view.dom.querySelector(".md-table-horizontal-slider");
+    expect(frame).not.toBeNull();
+    expect(scroll).not.toBeNull();
+    expect(slider).not.toBeNull();
+
+    view.dispatch({ changes: { from: doc.indexOf("one"), to: doc.indexOf("one") + 3, insert: "updated" } });
+
+    expect(view.dom.querySelector(".md-table-frame")).toBe(frame);
+    expect(view.dom.querySelector(".md-table-scroll")).toBe(scroll);
+    expect(view.dom.querySelector(".md-table-horizontal-slider")).toBe(slider);
+    expect(view.state.doc.toString()).toContain("updated");
   });
 
   it("renders header and body text with stable semantic cell indices", () => {
@@ -1677,6 +1714,46 @@ describe("MarkdownTableWidget", () => {
     expect(new MarkdownTableWidget(table, true).eq(
       new MarkdownTableWidget(sameSourceElsewhere, true),
     )).toBe(false);
+  });
+
+  it("leaves slider keyboard and input events outside editor handling", () => {
+    const widget = new MarkdownTableWidget(
+      tableFor(["A | B", "--- | ---"].join("\n")),
+      true,
+    );
+    const dom = widget.toDOM();
+    const slider = dom.querySelector<HTMLInputElement>(
+      ".md-table-horizontal-slider",
+    );
+    expect(slider).not.toBeNull();
+
+    for (const event of [
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      new Event("input", { bubbles: true }),
+    ]) {
+      slider!.dispatchEvent(event);
+      expect(widget.ignoreEvent(event)).toBe(true);
+    }
+  });
+
+  it("destroys the horizontal-scroll observer with the widget", () => {
+    const disconnect = vi.fn();
+    class Observer {
+      constructor(_callback: ResizeObserverCallback) {}
+      observe = vi.fn();
+      disconnect = disconnect;
+      unobserve = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", Observer);
+    const widget = new MarkdownTableWidget(
+      tableFor(["A | B", "--- | ---"].join("\n")),
+      true,
+    );
+    const dom = widget.toDOM();
+
+    widget.destroy(dom);
+
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 
   it("leaves native pointer, mouse, and deletion-key events to editable table cells", () => {

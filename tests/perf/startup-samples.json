@@ -1,33 +1,55 @@
 {
   "bundle": "src-tauri/target/release/bundle/macos/Opus.app",
+  "bundleSha256": "ab565b3f692d92f34853eee2332a41ddf4fa410a4555876d9060ef8324ae8e31",
   "provenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
   "hot": [
     {
-      "spawnToEditableMs": 1565,
-      "wallMs": 1571,
-      "startedAt": "2026-09-23T05:19:13.177Z"
+      "spawnToEditableMs": 877,
+      "wallMs": 883,
+      "startedAt": "2026-11-22T03:31:55.894Z",
+      "bundleSha256": "ab565b3f692d92f34853eee2332a41ddf4fa410a4555876d9060ef8324ae8e31",
+      "bundlePath": "src-tauri/target/release/bundle/macos/Opus.app",
+      "bundleProvenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
+      "bundleProvenanceKind": "adhoc"
     },
     {
-      "spawnToEditableMs": 757,
-      "wallMs": 770,
-      "startedAt": "2026-09-23T05:19:14.908Z"
+      "spawnToEditableMs": 523,
+      "wallMs": 525,
+      "startedAt": "2026-11-22T03:31:56.961Z",
+      "bundleSha256": "ab565b3f692d92f34853eee2332a41ddf4fa410a4555876d9060ef8324ae8e31",
+      "bundlePath": "src-tauri/target/release/bundle/macos/Opus.app",
+      "bundleProvenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
+      "bundleProvenanceKind": "adhoc"
     },
     {
-      "spawnToEditableMs": 733,
-      "wallMs": 748,
-      "startedAt": "2026-09-23T05:19:15.837Z"
+      "spawnToEditableMs": 509,
+      "wallMs": 515,
+      "startedAt": "2026-11-22T03:31:57.699Z",
+      "bundleSha256": "ab565b3f692d92f34853eee2332a41ddf4fa410a4555876d9060ef8324ae8e31",
+      "bundlePath": "src-tauri/target/release/bundle/macos/Opus.app",
+      "bundleProvenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
+      "bundleProvenanceKind": "adhoc"
     },
     {
-      "spawnToEditableMs": 720,
-      "wallMs": 721,
-      "startedAt": "2026-09-23T05:19:16.745Z"
+      "spawnToEditableMs": 505,
+      "wallMs": 506,
+      "startedAt": "2026-11-22T03:31:58.426Z",
+      "bundleSha256": "ab565b3f692d92f34853eee2332a41ddf4fa410a4555876d9060ef8324ae8e31",
+      "bundlePath": "src-tauri/target/release/bundle/macos/Opus.app",
+      "bundleProvenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
+      "bundleProvenanceKind": "adhoc"
     },
     {
-      "spawnToEditableMs": 721,
-      "wallMs": 729,
-      "startedAt": "2026-09-23T05:19:17.637Z"
+      "spawnToEditableMs": 440,
+      "wallMs": 457,
+      "startedAt": "2026-11-22T03:31:59.196Z",
+      "bundleSha256": "ab565b3f692d92f34853eee2332a41ddf4fa410a4555876d9060ef8324ae8e31",
+      "bundlePath": "src-tauri/target/release/bundle/macos/Opus.app",
+      "bundleProvenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
+      "bundleProvenanceKind": "adhoc"
     }
   ],
   "cold": [],
-  "gatekeeperFirstLaunchMs": null
+  "gatekeeperFirstLaunchMs": null,
+  "gatekeeperSample": null
 }

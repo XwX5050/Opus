@@ -13,6 +13,11 @@ pub mod linux_env;
 // (no CSD header bar, no menu bar), so no menu is built or installed there.
 #[cfg(target_os = "macos")]
 pub mod menu;
+// Native E2E automation is compiled only into the dedicated test build; the
+// commands it registers read their scenario and output paths from the
+// orchestrator's environment, never from the webview (see native_e2e.rs).
+#[cfg(feature = "native-e2e")]
+pub mod native_e2e;
 pub mod open_events;
 pub mod perf_mark;
 pub mod recovery;
@@ -81,6 +86,7 @@ pub fn run() {
             document_commands::open_workspace,
             document_commands::close_workspace,
             document_commands::list_directory,
+            document_commands::search_workspace,
             document_commands::create_markdown_file,
             document_commands::rename_entry,
             document_commands::rename_document,
@@ -99,12 +105,27 @@ pub fn run() {
             api_keys::has_translation_key,
             api_keys::translation_key_protection,
             perf_mark::perf_mark_editor_editable,
+            // Native E2E commands exist only in the dedicated test build; the
+            // feature is never enabled for normal dev or release builds.
+            #[cfg(feature = "native-e2e")]
+            native_e2e::native_e2e_context,
+            #[cfg(feature = "native-e2e")]
+            native_e2e::native_e2e_marker,
+            #[cfg(feature = "native-e2e")]
+            native_e2e::native_e2e_report,
             #[cfg(any(target_os = "macos", windows))]
             fonts::list_installed_fonts,
             #[cfg(any(target_os = "macos", windows))]
             window_background::set_window_background
         ])
         .setup(move |app| {
+            // A feature-enabled binary built outside `tauri build --config`
+            // carries the production identifier (cargo test/clippy link the
+            // bin target with the base config). Refuse to start the test
+            // webview in that case: the orchestrator would otherwise wait
+            // for a marker that can never be written.
+            #[cfg(feature = "native-e2e")]
+            native_e2e::validate_startup(app.handle())?;
             // Seed the native chrome with the dark default canvas before the
             // webview renders: the window/webview underlying backgrounds
             // default to white and flash along the resized edge.

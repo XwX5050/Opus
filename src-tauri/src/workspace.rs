@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -268,6 +269,119 @@ pub fn list_directory(root: &Path, relative: &Path) -> Result<Vec<DirectoryEntry
     files.sort_by(by_name);
     directories.extend(files);
     Ok(directories)
+}
+
+pub const WORKSPACE_SEARCH_MAX_MATCHES: usize = 200;
+const WORKSPACE_SEARCH_MAX_FILES: usize = 2_000;
+const WORKSPACE_SEARCH_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorkspaceSearchMatch {
+    pub path: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    pub text: String,
+    pub match_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorkspaceSearchResult {
+    pub matches: Vec<WorkspaceSearchMatch>,
+    pub truncated: bool,
+}
+
+/// Searches saved Markdown content under the canonical workspace root. Directory
+/// and file identity sets prevent symlink loops and duplicate matches; links that
+/// leave the root, hidden entries, unreadable UTF-8, and oversized remainders are
+/// excluded. The scan is bounded so a workspace cannot produce an unbounded result.
+pub fn search_markdown(root: &Path, query: &str) -> Result<WorkspaceSearchResult, WorkspaceError> {
+    let root = canonical_root(root)?;
+    let query = query.trim().to_lowercase();
+    let mut result = WorkspaceSearchResult {
+        matches: Vec::new(),
+        truncated: false,
+    };
+    if query.is_empty() {
+        return Ok(result);
+    }
+
+    let mut directories = vec![root.clone()];
+    let mut visited_directories = HashSet::from([root.clone()]);
+    let mut visited_files = HashSet::new();
+    let mut files_scanned = 0;
+    let mut bytes_scanned = 0_u64;
+
+    'directories: while let Some(directory) = directories.pop() {
+        let entries = fs::read_dir(&directory).map_err(|error| WorkspaceError::Io {
+            path: directory.clone(),
+            source: error,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| WorkspaceError::Io {
+                path: directory.clone(),
+                source: error,
+            })?;
+            let path = entry.path();
+            if is_hidden(&path) {
+                continue;
+            }
+            let Ok(metadata) = fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(canonical) = fs::canonicalize(&path) else {
+                continue;
+            };
+            if !canonical.starts_with(&root) {
+                continue;
+            }
+            if metadata.is_dir() {
+                if visited_directories.insert(canonical.clone()) {
+                    directories.push(canonical);
+                }
+                continue;
+            }
+            if !metadata.is_file()
+                || !is_markdown(&canonical)
+                || !visited_files.insert(canonical.clone())
+            {
+                continue;
+            }
+            if files_scanned >= WORKSPACE_SEARCH_MAX_FILES {
+                result.truncated = true;
+                break 'directories;
+            }
+            if metadata.len() > WORKSPACE_SEARCH_MAX_BYTES.saturating_sub(bytes_scanned) {
+                result.truncated = true;
+                continue;
+            }
+            let bytes = fs::read(&canonical).map_err(|error| WorkspaceError::Io {
+                path: canonical.clone(),
+                source: error,
+            })?;
+            files_scanned += 1;
+            bytes_scanned += bytes.len() as u64;
+            let Ok(text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            for (line_index, line) in text.lines().enumerate() {
+                let folded = line.to_lowercase();
+                for (byte_index, _) in folded.match_indices(&query) {
+                    result.matches.push(WorkspaceSearchMatch {
+                        path: canonical.clone(),
+                        line: line_index + 1,
+                        column: folded[..byte_index].chars().count(),
+                        text: line.to_owned(),
+                        match_length: query.chars().count(),
+                    });
+                    if result.matches.len() >= WORKSPACE_SEARCH_MAX_MATCHES {
+                        result.truncated = true;
+                        return Ok(result);
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 pub fn create_markdown_file(

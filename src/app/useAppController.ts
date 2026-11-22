@@ -16,7 +16,6 @@ import {
   normalizeSidebarPreferences,
   type DiskEvent,
   type DocumentSnapshot,
-  type DocumentState,
   type OpenedFile,
   type OutlinePreferences,
   type PersistedSession,
@@ -25,10 +24,14 @@ import {
   type SidebarPreferences,
 } from "../document/types";
 import {
-  draftFromSnapshot,
-  draftIdForTab,
-  needsRecoveryDraft,
-} from "../recovery/drafts";
+  decideDiskEvent,
+  findTabByPath,
+  isReadCommitCurrent,
+  readCurrentDiskVersion,
+} from "../document/externalChanges";
+import { createSaveFlow, type SaveFailure, type SaveFlow } from "../document/saveFlow";
+import { createDraftScheduler, type DraftScheduler } from "../recovery/draftScheduler";
+import { restoreDraft as runRestoreDraft } from "../recovery/restoreDraft";
 import {
   clampEditorPreferences,
   normalizeEditorPreferences,
@@ -69,18 +72,14 @@ export interface TabTranslation {
   readonly visible: boolean;
 }
 
-export interface SaveFailure {
-  readonly id: string;
-  readonly message: string;
-}
+/**
+ * Re-exported from the save flow: the controller's retry surface consumes this
+ * payload, and `saveFlow` is its single definition.
+ */
+export type { SaveFailure } from "../document/saveFlow";
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
-
-/** Recovery draft cadence: fired 2s after the last change, forced at worst
- * every 5s of continuous typing so a crash-loss window never grows unbounded. */
-const DRAFT_DEBOUNCE_MS = 2000;
-const DRAFT_MAX_PENDING_MS = 5000;
 
 /**
  * Reported when a restore is refused because the draft's document is already
@@ -89,30 +88,16 @@ const DRAFT_MAX_PENDING_MS = 5000;
  */
 const RESTORE_REFUSED_MESSAGE = "目标文档包含未保存的修改，草稿未合并（草稿已保留）";
 
+/**
+ * Reported after a successful restore whose owner draft could not be written:
+ * the recovered text is in a tab, but the crash copy remains only as the
+ * leftover draft for the next launch.
+ */
+const RESTORE_DRAFT_WRITE_FAILED_MESSAGE =
+  "已恢复文档，但新的恢复草稿写入失败；原草稿已保留，下次启动仍可再次恢复";
+
 /** Path-key platform, resolved once from the webview user agent. */
 const PATH_PLATFORM = detectPathPlatform();
-
-/** Disk-event paths are canonical; tab paths are user-supplied. */
-const findTabByPath = (
-  state: DocumentState,
-  path: string,
-): DocumentSnapshot | undefined => {
-  const key = normalizePathKey(path, PATH_PLATFORM);
-  return state.tabs.find(
-    (tab) => tab.path !== null && normalizePathKey(tab.path, PATH_PLATFORM) === key,
-  );
-};
-
-/**
- * Canonical-path parent key used to compare asset-scope coverage. Disk-event
- * paths are canonical and the reducer's moved target keeps the event's path,
- * so a lexical parent comparison is exact.
- */
-const parentPathKey = (path: string): string => {
-  const normalized = path.replaceAll("\\", "/");
-  const index = normalized.lastIndexOf("/");
-  return normalizePathKey(index <= 0 ? "/" : normalized.slice(0, index), PATH_PLATFORM);
-};
 
 /**
  * Returns the map with `id` moved to `mode`, storing only non-default modes
@@ -138,11 +123,27 @@ export function useAppController(
   const [state, setState] = useState(initialDocumentState);
   const stateRef = useRef(state);
   const idSequence = useRef(0);
-  const savingIds = useRef(new Set<string>());
   const closeSavingRef = useRef(false);
   const closeOperationSequence = useRef(0);
   const mountedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
+  // The port is a stable prop in production, but the save flow and draft
+  // scheduler are created once per controller and read it through a ref so a
+  // later prop identity change cannot pin them to a stale instance.
+  const portRef = useRef(port);
+  useEffect(() => {
+    portRef.current = port;
+  }, [port]);
+  // One save flow per controller: its per-tab lock is instance-private, so a
+  // fresh instance per render would defeat reentrancy protection.
+  const saveFlowRef = useRef<SaveFlow | null>(null);
+  // One draft scheduler per controller; same reasoning — timers and confirmed
+  // draft bookkeeping live in the instance.
+  const draftSchedulerRef = useRef<DraftScheduler | null>(null);
+  // Draft ids with a restore transaction in flight, so a double-click can
+  // never adopt the same recovered text twice (the second adopt would append
+  // a duplicate tab).
+  const restoringDraftIds = useRef(new Set<string>());
   const [closeDocumentId, setCloseDocumentId] = useState<string | null>(null);
   const [closeSaving, setCloseSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -193,21 +194,6 @@ export function useAppController(
   const watchedTargets = useRef(
     new Map<string, { target: string; kind: "document" | "workspace" }>(),
   );
-  // Per-tab debounce timers for recovery drafts, the tab IDs whose draft is
-  // known to be persisted (so it must be discarded once the tab is clean),
-  // and each tab's last-scheduled draft signature (status + text) so an
-  // unrelated state change never resets a tab's debounce. Signatures hold
-  // the status and text by reference: strings are immutable, so identity
-  // comparison detects changes without copying multi-megabyte documents.
-  const draftTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const persistedDraftIds = useRef(new Set<string>());
-  const draftSignatures = useRef(
-    new Map<string, { status: DocumentSnapshot["status"]; text: string }>(),
-  );
-  // When each tab's pending-draft window began. Every keystroke re-arms the
-  // 2s idle debounce, so this caps how long continuous typing can postpone a
-  // write: once the window exceeds DRAFT_MAX_PENDING_MS the draft is forced.
-  const draftPendingSince = useRef(new Map<string, number>());
   // Session saves are suppressed until the persisted session has been loaded,
   // so a slow load can never be overwritten by the empty launch state.
   const sessionLoadedRef = useRef(false);
@@ -669,18 +655,21 @@ export function useAppController(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [translationTabIdsKey]);
 
-  // A translation is bound to the exact text it was produced from. The tab
-  // list is compared by text identity on every render (no copies, so it
-  // stays cheap even for large documents), and any replacement of a tab's
-  // text — disk reloads, conflict resolution — drops the entry and aborts
-  // the in-flight request. Live edits are blocked while a translation is
-  // visible, so this only fires on external replacements.
+  // A translation is bound to the exact text it was produced from. Only tabs
+  // with a live translation entry need the comparison: a tab without one has
+  // nothing to drop, and skipping it keeps the keystroke path O(1) even for a
+  // pressure-sized document. A hidden translation's first live edit still
+  // drops its entry, which then removes it from the compared set.
   const translationTextsRef = useRef(new Map<string, string>());
   useEffect(() => {
     const seen = translationTextsRef.current;
     for (const tab of state.tabs) {
       const previous = seen.get(tab.id);
-      if (previous !== undefined && previous !== tab.text) {
+      if (
+        previous !== undefined &&
+        translationsRef.current.has(tab.id) &&
+        previous !== tab.text
+      ) {
         dropTranslation(tab.id);
       }
       seen.set(tab.id, tab.text);
@@ -736,6 +725,7 @@ export function useAppController(
       }
       if (trackRecent) rememberRecent({ path: openedFile.path, kind: "file" });
     }
+    return activate ? stateRef.current.activeId : null;
   }, [acquireDocumentScope, dispatch, nextId, rememberRecent, watchConsumer]);
 
   const openFiles = useCallback(async () => {
@@ -754,10 +744,11 @@ export function useAppController(
     setError(null);
     try {
       const file = await port.openPath(path);
-      if (isCurrent(generation)) addOpenedFiles([file]);
+      if (isCurrent(generation)) return addOpenedFiles([file]);
     } catch (caught) {
       if (isCurrent(generation)) setError(errorMessage(caught));
     }
+    return null;
   }, [addOpenedFiles, isCurrent, port]);
 
   const newDocument = useCallback(() => {
@@ -768,118 +759,75 @@ export function useAppController(
     dispatch({ type: "newDocument", id: nextId() });
   }, [dispatch, nextId]);
 
-  const performSave = useCallback(async (
-    id: string | null,
-    chooseTarget: boolean,
-  ): Promise<boolean> => {
-    const generation = lifecycleGenerationRef.current;
-    if (!id || savingIds.current.has(id)) return false;
-    const before = stateRef.current.tabs.find((tab) => tab.id === id);
-    if (!before || before.pendingSave) return false;
-    savingIds.current.add(id);
-    setError(null);
-    try {
-      let target;
-      if (chooseTarget || before.path === null) {
-        target = await port.chooseSavePath(before.title);
-        if (!isCurrent(generation)) return false;
-        if (!target) return false;
-      }
-
-      const latest = stateRef.current.tabs.find((tab) => tab.id === id);
-      if (!latest || latest.pendingSave) return false;
-      const requested = dispatch({
-        type: "saveRequested",
-        id,
+  /**
+   * One SaveFlow per controller. The host exposes only controller-level
+   * primitives; per-tab locking, target selection, reducer-owned write
+   * requests, completion classification and failure routing stay in the flow.
+   */
+  const getSaveFlow = useCallback((): SaveFlow => {
+    if (saveFlowRef.current === null) {
+      saveFlowRef.current = createSaveFlow({
+        getState: () => stateRef.current,
+        dispatch,
+        generation: () => lifecycleGenerationRef.current,
+        isCurrent,
+        chooseSavePath: (suggestedName) =>
+          portRef.current.chooseSavePath(suggestedName),
+        write: (request) => portRef.current.write(request),
+        translationVisible: (tabId) =>
+          translationsRef.current.get(tabId)?.visible ?? false,
         pathPlatform: PATH_PLATFORM,
-        ...(target ? { target } : {}),
+        clearBanner: () => setError(null),
+        showBanner: (message) => setError(message),
+        reportSaveFailure: (failure) => setSaveError(failure),
+        onRetarget: (tabId, tab) => {
+          // Ordering matters: release the old grant first, then re-acquire the
+          // document scope and register the watch for the new path. All three
+          // are serialized through the consumer's operation chain.
+          releaseScope(tabId);
+          acquireDocumentScope(tab);
+          if (tab.path !== null) watchConsumer(tabId, tab.path, "document");
+        },
       });
-      const pending = requested.tabs.find((tab) => tab.id === id)?.pendingSave;
-      if (!pending) {
-        setError("保存目标与已打开的文档冲突");
-        return false;
-      }
-
-      try {
-        const result = await port.write(pending);
-        if (!isCurrent(generation)) return false;
-        const completed = dispatch({
-          type: "saveSucceeded",
-          requestId: pending.requestId,
-          result,
-        });
-        const succeeded = completed.tabs.some(
-          (tab) => tab.id === id && !tab.pendingSave && tab.status !== "conflict",
-        );
-        if (!succeeded) {
-          const failure = new DocumentPortError(
-            "conflict",
-            "保存完成时检测到目标路径冲突，文件仍处于未保存状态",
-          );
-          setError(failure.message);
-        } else {
-          // A save that landed at a new path (save-as, first save of an
-          // untitled document) must move the scope and watch to the new
-          // location. Release old then acquire new under the same stable tab
-          // id, serialized through the per-consumer chain so refcounts stay
-          // balanced.
-          const savedTab = completed.tabs.find((tab) => tab.id === id);
-          const oldPath = latest.path;
-          const newPath = savedTab?.path ?? null;
-          const retargeted =
-            savedTab !== undefined &&
-            newPath !== null &&
-            (oldPath === null ||
-              normalizePathKey(oldPath, pending.pathPlatform) !==
-                normalizePathKey(newPath, pending.pathPlatform));
-          if (retargeted) {
-            releaseScope(id);
-            acquireDocumentScope(savedTab);
-            watchConsumer(id, newPath, "document");
-          }
-        }
-        return succeeded;
-      } catch (caught) {
-        const failure = caught instanceof DocumentPortError
-          ? caught
-          : new DocumentPortError("io", errorMessage(caught), { cause: caught });
-        if (isCurrent(generation)) {
-          dispatch({ type: "saveFailed", requestId: pending.requestId, error: failure });
-          // A failed close-save keeps the close dialog alive and reports
-          // through the inline alert; a standalone save failure surfaces the
-          // retry / save-as dialog instead.
-          if (closeSavingRef.current) setError(failure.message);
-          else setSaveError({ id, message: failure.message });
-        }
-        return false;
-      }
-    } catch (caught) {
-      if (isCurrent(generation)) setError(errorMessage(caught));
-      return false;
-    } finally {
-      savingIds.current.delete(id);
     }
-  }, [acquireDocumentScope, dispatch, isCurrent, port, releaseScope, watchConsumer]);
+    return saveFlowRef.current;
+  }, [acquireDocumentScope, dispatch, isCurrent, releaseScope, watchConsumer]);
 
   const save = useCallback((id = stateRef.current.activeId) => {
-    // While a translation is showing, saving is a no-op: the buffer belongs
-    // to the original document and must stay untouched (the read-only editor
-    // is the first line of defense, this guard the second). An errored run is
-    // never visible (see startTranslation), so it never blocks saving; a
-    // close-save bypasses the guard too — the close dialog is the user's
-    // explicit decision to leave, and the save writes the original buffer the
-    // translation only ever overlaid.
-    const translation = id ? translationsRef.current.get(id) : undefined;
-    if (translation?.visible && !closeSavingRef.current) {
-      return Promise.resolve(false);
-    }
-    return performSave(id, false);
-  }, [performSave]);
+    // The close dialog raises its latch before calling save; that is the only
+    // attempt that bypasses the visible-translation guard. Standalone save is
+    // blocked while a translation covers the buffer, while Save As picks a new
+    // destination and close is the user's explicit decision to leave.
+    const intent = closeSavingRef.current ? "close" : "save";
+    return getSaveFlow()
+      .save(id ?? undefined, intent)
+      .then((outcome) => outcome.kind === "saved");
+  }, [getSaveFlow]);
 
   const saveAs = useCallback(
-    (id = stateRef.current.activeId) => performSave(id, true),
-    [performSave],
+    (id = stateRef.current.activeId) =>
+      getSaveFlow()
+        .save(id ?? undefined, "save-as")
+        .then((outcome) => outcome.kind === "saved"),
+    [getSaveFlow],
   );
+
+  /**
+   * One draft scheduler per controller; timers, reference-based signatures
+   * and confirmed-draft bookkeeping live in the instance. The host reads tabs
+   * from `stateRef` so a timer never writes a snapshot captured before the
+   * latest edit.
+   */
+  const getDraftScheduler = useCallback((): DraftScheduler => {
+    if (draftSchedulerRef.current === null) {
+      draftSchedulerRef.current = createDraftScheduler({
+        getTabs: () => stateRef.current.tabs,
+        writeDraft: (draft) => portRef.current.writeDraft(draft),
+        discardDraft: (draftId) => portRef.current.discardDraft(draftId),
+      });
+    }
+    return draftSchedulerRef.current;
+  }, []);
 
   const changeText = useCallback((id: string, text: string) => {
     // Same guard as save: edits reaching the controller while a translation
@@ -977,23 +925,33 @@ export function useAppController(
     const path = added.path;
     const expectedVersion = added.version;
     const closedStatus = closed.status;
-    const generation = lifecycleGenerationRef.current;
+    const request = {
+      tabId: reopeningId,
+      path,
+      expectedVersion,
+      generation: lifecycleGenerationRef.current,
+      purpose: "explicit" as const,
+    };
     void (async () => {
       try {
         const fresh = await port.openPath(path);
-        if (!isCurrent(generation)) return;
-        const latest = stateRef.current.tabs.find(
-          (candidate) => candidate.id === reopeningId,
-        );
+        // Same commit precondition as a guarded external read: a Save As,
+        // rename, save or close in flight must not let this read land on a
+        // tab that moved past the snapshot it was started from.
         if (
-          !latest ||
-          latest.path === null ||
-          normalizePathKey(latest.path, PATH_PLATFORM) !==
-            normalizePathKey(path, PATH_PLATFORM) ||
-          latest.version !== expectedVersion
+          !isReadCommitCurrent(
+            stateRef.current,
+            request,
+            lifecycleGenerationRef.current,
+            PATH_PLATFORM,
+          )
         ) {
           return;
         }
+        // Reopen keeps its own rules, unlike an explicit conflict-dialog
+        // load: a clean snapshot follows any disk difference (including text
+        // changed under an unchanged version), while a dirty snapshot only
+        // surfaces a conflict when the saved version actually moved.
         if (closedStatus === "clean") {
           if (fresh.version !== expectedVersion || fresh.text !== closed.text) {
             dispatch({ type: "externalChanged", id: reopeningId, file: fresh });
@@ -1002,15 +960,13 @@ export function useAppController(
           dispatch({ type: "externalChanged", id: reopeningId, file: fresh });
         }
       } catch (caught) {
-        if (!isCurrent(generation)) return;
-        const latest = stateRef.current.tabs.find(
-          (candidate) => candidate.id === reopeningId,
-        );
         if (
-          !latest ||
-          latest.path === null ||
-          normalizePathKey(latest.path, PATH_PLATFORM) !==
-            normalizePathKey(path, PATH_PLATFORM)
+          !isReadCommitCurrent(
+            stateRef.current,
+            request,
+            lifecycleGenerationRef.current,
+            PATH_PLATFORM,
+          )
         ) {
           return;
         }
@@ -1173,102 +1129,85 @@ export function useAppController(
   }, [addOpenedFiles, openWorkspacePath, port, subscribeToEvents]);
 
   /**
-   * True while the tab still holds the same path and saved version it had
-   * when an asynchronous disk read started — the read's commit precondition.
-   * Save As, rename, a disk move, a close, or a completed save all move the
-   * tab past this check, so a stale read result can never land on a tab that
-   * no longer refers to the path it read.
+   * Watcher-driven reload. The guarded read validates the lifecycle, path and
+   * saved version captured at read start; a self-save echo (`unchanged`) and a
+   * read that lost its tab are ignored, a vanished file marks the tab missing,
+   * and any other read failure stays silent because no user action asked for
+   * this load.
    */
-  const isReadCommitCurrent = useCallback((
-    id: string,
-    path: string,
-    expectedVersion: string | null,
-  ): boolean => {
-    const latest = stateRef.current.tabs.find((candidate) => candidate.id === id);
-    return (
-      latest !== undefined &&
-      latest.path !== null &&
-      normalizePathKey(latest.path, PATH_PLATFORM) ===
-        normalizePathKey(path, PATH_PLATFORM) &&
-      latest.version === expectedVersion
-    );
-  }, []);
-
   const reloadFromDisk = useCallback(async (id: string) => {
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
     if (!tab?.path) return;
-    const generation = lifecycleGenerationRef.current;
-    const path = tab.path;
-    const expectedVersion = tab.version;
-    try {
-      const fresh = await port.openPath(path);
-      // The commit is validated against the generation, the path and the
-      // saved version captured at read start: a read that outlives a Save As,
-      // rename or save on the same tab is stale and must not overwrite the
-      // tab's new content. The reducer then decides atomically: still-clean
-      // tabs reload, anything else becomes a conflict without losing text.
-      if (
-        isCurrent(generation) &&
-        isReadCommitCurrent(id, path, expectedVersion)
-      ) {
-        dispatch({ type: "externalChanged", id, file: fresh });
-      }
-    } catch (caught) {
-      if (!isCurrent(generation)) return;
-      if (!isReadCommitCurrent(id, path, expectedVersion)) return;
-      if (caught instanceof DocumentPortError && caught.code === "not_found") {
-        dispatch({ type: "externalMissing", id });
-      }
+    const outcome = await readCurrentDiskVersion(
+      {
+        tabId: id,
+        path: tab.path,
+        expectedVersion: tab.version,
+        generation: lifecycleGenerationRef.current,
+        purpose: "watch",
+      },
+      {
+        openPath: (path) => portRef.current.openPath(path),
+        getState: () => stateRef.current,
+        getGeneration: () => lifecycleGenerationRef.current,
+        pathPlatform: PATH_PLATFORM,
+      },
+    );
+    if (outcome.kind === "loaded") {
+      // The reducer decides atomically: still-clean tabs reload, anything
+      // else becomes a conflict without losing text.
+      dispatch({ type: "externalChanged", id, file: outcome.file });
+    } else if (outcome.kind === "missing") {
+      dispatch({ type: "externalMissing", id });
     }
-  }, [dispatch, isCurrent, isReadCommitCurrent, port]);
+  }, [dispatch]);
 
   const handleDiskEvent = useCallback((event: DiskEvent) => {
-    if (event.kind === "moved") {
-      const tab = findTabByPath(stateRef.current, event.from);
-      // Dirty/conflicted tabs keep their path (and watch) so the user's
-      // buffer stays saveable at the location it was opened from.
-      if (!tab || tab.status !== "clean" || tab.pendingSave) return;
-      const next = dispatch({
-        type: "externalMoved",
-        from: event.from,
-        to: event.to,
-        pathPlatform: PATH_PLATFORM,
-      });
-      const moved = next.tabs.find((candidate) => candidate.id === tab.id);
-      if (
-        moved &&
-        moved.path !== null &&
-        tab.path !== null &&
-        moved.path !== tab.path
-      ) {
+    const decision = decideDiskEvent(stateRef.current, event, PATH_PLATFORM);
+    switch (decision.kind) {
+      case "ignore":
+        return;
+      case "missing":
+        dispatch({ type: "externalMissing", id: decision.tabId });
+        return;
+      case "reload":
+        // Covers changed events and the target side of an atomic replace.
+        void reloadFromDisk(decision.tabId);
+        return;
+      case "moved": {
+        const next = dispatch({
+          type: "externalMoved",
+          from: decision.from,
+          to: decision.to,
+          pathPlatform: PATH_PLATFORM,
+        });
+        const moved = next.tabs.find((tab) => tab.id === decision.tabId);
+        // Only a reducer that actually changed the tab's path retargets the
+        // consumer; an unchanged path keeps its existing scope and watch.
+        if (
+          moved === undefined ||
+          moved.path === null ||
+          moved.path === decision.previousPath
+        ) {
+          return;
+        }
         // Release the old-path watch only while it is still recorded at the
-        // old path (a concurrent retarget already moved it on, nothing to
-        // drop here), then register the new path under the same consumer id.
-        releaseWatch(moved.id, tab.path);
+        // tab's own previous path (a concurrent retarget already moved it on,
+        // nothing to drop here), then register the new path under the same
+        // consumer id.
+        releaseWatch(moved.id, decision.previousPath);
         // The asset scope grants the document's parent directory, so it only
         // needs a release/re-acquire when the move crossed a directory
         // boundary; a same-parent rename keeps the existing grant, which
         // already covers the new path.
-        if (parentPathKey(moved.path) !== parentPathKey(tab.path)) {
+        if (decision.scopeChanged) {
           releaseScope(moved.id);
           acquireDocumentScope(moved);
         }
         watchConsumer(moved.id, moved.path, "document");
+        return;
       }
-      return;
     }
-
-    const tab = findTabByPath(stateRef.current, event.path);
-    // Events while a save is in flight are suppressed: the write itself is
-    // version-checked, and a reload here could clobber the pending snapshot.
-    if (!tab || tab.pendingSave) return;
-    if (event.kind === "missing") {
-      dispatch({ type: "externalMissing", id: tab.id });
-      return;
-    }
-    // Echoes of our own completed saves carry the version we just wrote.
-    if (tab.version !== null && tab.version === event.version) return;
-    void reloadFromDisk(tab.id);
   }, [acquireDocumentScope, dispatch, releaseScope, releaseWatch, reloadFromDisk, watchConsumer]);
 
   useEffect(() => {
@@ -1288,102 +1227,28 @@ export function useAppController(
     };
   }, [handleDiskEvent, port]);
 
-  // Recovery drafts: while a tab holds content that closing would lose, a
-  // snapshot is persisted 2 seconds after the last change (and at worst
-  // every 5 seconds of continuous typing); once the tab is clean or closed,
-  // its draft is discarded. Each tab's debounce is keyed by its
-  // draft-relevant content (status + text, compared by identity), so typing
-  // in one tab never resets (and thereby starves) another dirty tab's timer.
+  // Recovery drafts: the scheduler reconciles a per-tab 2s debounce (forced at
+  // worst every 5s of continuous typing) with the latest tab snapshots. It
+  // compares draft-relevant metadata by identity, so typing in one tab never
+  // resets (and thereby starves) another dirty tab's timer, and unchanged
+  // content is never rewritten after a completed or failed write.
   useEffect(() => {
-    const needing = new Map(
-      state.tabs
-        .filter(needsRecoveryDraft)
-        .map((tab) => [tab.id, { status: tab.status, text: tab.text }] as const),
-    );
-    for (const id of [...draftSignatures.current.keys()]) {
-      if (!needing.has(id)) {
-        draftSignatures.current.delete(id);
-        draftPendingSince.current.delete(id);
-        const timer = draftTimers.current.get(id);
-        if (timer) {
-          clearTimeout(timer);
-          draftTimers.current.delete(id);
-        }
-      }
-    }
-    for (const id of [...persistedDraftIds.current]) {
-      if (!needing.has(id)) {
-        persistedDraftIds.current.delete(id);
-        // The backend processes draft commands in issue order (the Tauri
-        // command queue is FIFO per client), so this discard can never
-        // overtake the last write issued for the same draft id.
-        void port.discardDraft(draftIdForTab(id)).catch(() => {
-          // Already gone (restored elsewhere or never flushed); harmless.
-        });
-      }
-    }
-    for (const [id, signature] of needing) {
-      const previous = draftSignatures.current.get(id);
-      if (
-        previous &&
-        previous.status === signature.status &&
-        previous.text === signature.text
-      ) {
-        continue;
-      }
-      draftSignatures.current.set(id, signature);
-      const existing = draftTimers.current.get(id);
-      if (existing) clearTimeout(existing);
-      const write = () => {
-        draftTimers.current.delete(id);
-        draftPendingSince.current.delete(id);
-        const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
-        if (!tab || !needsRecoveryDraft(tab)) return;
-        persistedDraftIds.current.add(id);
-        void port.writeDraft(draftFromSnapshot(tab)).catch(() => {
-          persistedDraftIds.current.delete(id);
-          // Drop the signature too, so the next state change re-arms the
-          // debounce instead of starving this tab after a transient failure.
-          draftSignatures.current.delete(id);
-        });
-      };
-      // Every keystroke re-arms the 2s idle timer, so continuous typing must
-      // force a write once the tab has been pending past the maximum window;
-      // otherwise a crash-loss window would grow without bound.
-      const pendingSince = draftPendingSince.current.get(id) ?? Date.now();
-      if (Date.now() - pendingSince >= DRAFT_MAX_PENDING_MS) {
-        write();
-      } else {
-        draftPendingSince.current.set(id, pendingSince);
-        draftTimers.current.set(id, setTimeout(write, DRAFT_DEBOUNCE_MS));
-      }
-    }
-  }, [port, state]);
+    getDraftScheduler().sync(state.tabs);
+  }, [getDraftScheduler, state]);
 
   // Cancel pending debounce timers on unmount; the close-requested flush is
   // the real quit path, an unmounted controller has nothing left to persist.
+  // Mount-only: re-running this cleanup would clear timers the scheduler just
+  // re-armed on every state change.
   useEffect(() => {
-    const timers = draftTimers.current;
-    return () => {
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-    };
-  }, []);
+    const scheduler = getDraftScheduler();
+    return () => scheduler.cancelTimers();
+  }, [getDraftScheduler]);
 
-  const flushDrafts = useCallback(async () => {
-    for (const timer of draftTimers.current.values()) clearTimeout(timer);
-    draftTimers.current.clear();
-    draftPendingSince.current.clear();
-    const writes = stateRef.current.tabs
-      .filter(needsRecoveryDraft)
-      .map((tab) => {
-        persistedDraftIds.current.add(tab.id);
-        return port.writeDraft(draftFromSnapshot(tab)).catch(() => {
-          persistedDraftIds.current.delete(tab.id);
-        });
-      });
-    await Promise.all(writes);
-  }, [port]);
+  const flushDrafts = useCallback(
+    () => getDraftScheduler().flush(),
+    [getDraftScheduler],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -1477,7 +1342,7 @@ export function useAppController(
         }
       }
       if (session?.activePath && explicitOpenVersionRef.current === 0) {
-        const tab = findTabByPath(stateRef.current, session.activePath);
+        const tab = findTabByPath(stateRef.current, session.activePath, PATH_PLATFORM);
         if (tab) dispatch({ type: "activate", id: tab.id });
       }
     })();
@@ -1546,129 +1411,148 @@ export function useAppController(
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
     if (!tab?.path) return;
     const generation = lifecycleGenerationRef.current;
-    const path = tab.path;
-    try {
-      const fresh = await port.openPath(path);
-      // The disk version only lands while the tab still refers to the path
-      // that was read: a Save As or rename in flight must not be overwritten
-      // by the stale read of the old location.
-      if (
-        isCurrent(generation) &&
-        isReadCommitCurrent(id, path, tab.version)
-      ) {
-        dispatch({ type: "diskVersionLoaded", id, file: fresh });
-      }
-    } catch (caught) {
-      if (isCurrent(generation) && isReadCommitCurrent(id, path, tab.version)) {
-        setError(errorMessage(caught));
-      }
+    // `readCurrentDiskVersion` classifies not_found as `missing` without
+    // carrying the error, but the conflict dialog's explicit load predates
+    // that classification and reports the read error while keeping the tab
+    // conflicted. Capture the thrown error on its way through the guarded
+    // read so that behavior survives the extraction.
+    let readError: unknown;
+    // The explicit purpose commits the loaded file even when its version
+    // equals the expected one: this is a user-requested replacement, not a
+    // watcher echo that must be ignored.
+    const outcome = await readCurrentDiskVersion(
+      {
+        tabId: id,
+        path: tab.path,
+        expectedVersion: tab.version,
+        generation,
+        purpose: "explicit",
+      },
+      {
+        openPath: async (path) => {
+          try {
+            return await portRef.current.openPath(path);
+          } catch (error) {
+            readError = error;
+            throw error;
+          }
+        },
+        getState: () => stateRef.current,
+        getGeneration: () => lifecycleGenerationRef.current,
+        pathPlatform: PATH_PLATFORM,
+      },
+    );
+    if (outcome.kind === "loaded") {
+      dispatch({ type: "diskVersionLoaded", id, file: outcome.file });
+    } else if (outcome.kind === "missing") {
+      // A vanished file on an explicit load is reported to the user and the
+      // tab keeps its conflict buffer; only watcher-driven missing events
+      // transition the tab to `missing`.
+      if (isCurrent(generation)) setError(errorMessage(readError));
+    } else if (outcome.kind === "error") {
+      // This load came from the conflict dialog's explicit action, so a
+      // failure must be reported instead of silently ignored.
+      setError(errorMessage(outcome.error));
     }
-  }, [dispatch, isCurrent, isReadCommitCurrent, port]);
+    // `unchanged` never occurs for an explicit read; `stale` means the tab
+    // moved past the read and must be left alone.
+  }, [dispatch, isCurrent]);
 
   const keepLocalVersion = useCallback((id: string) => {
     dispatch({ type: "conflictKeptLocal", id });
   }, [dispatch]);
 
   const restoreDraft = useCallback(async (info: RecoveryDraftInfo) => {
-    const generation = lifecycleGenerationRef.current;
+    // A double click, or a retry while the first transaction is still running,
+    // must not adopt the same recovered text twice: both calls would read the
+    // same leftover and each append a tab. The guard is keyed by draft id and
+    // always released, so a later retry after a refusal or failure still works.
+    if (restoringDraftIds.current.has(info.draftId)) return;
+    restoringDraftIds.current.add(info.draftId);
     try {
-      const draft = await port.readDraft(info.draftId);
-      if (!isCurrent(generation)) return;
-      const id = nextId();
-      const before = stateRef.current;
-      const next = dispatch({
-        type: "documentRestored",
-        id,
-        draft,
+      const outcome = await runRestoreDraft(info, {
+        generation: lifecycleGenerationRef.current,
         pathPlatform: PATH_PLATFORM,
-      });
-      const added = next.tabs.find(
-        (tab) => tab.id === id && !before.tabs.some((tab) => tab.id === id),
-      );
-      if (added) {
-        acquireDocumentScope(added);
-        if (added.path) watchConsumer(added.id, added.path, "document");
-      }
-      // The restored content lands either on the fresh tab (`added`) or, when
-      // the reducer merged it into an already-open tab for the same path, on
-      // that existing tab. Find the owner so the transaction below targets
-      // whichever tab now holds the recovered text.
-      const ownerPath = draft.originalPath;
-      const owner =
-        added ??
-        (ownerPath === null
-          ? undefined
-          : next.tabs.find(
-              (tab) =>
-                tab.path !== null &&
-                normalizePathKey(tab.path, PATH_PLATFORM) ===
-                  normalizePathKey(ownerPath, PATH_PLATFORM) &&
-                tab.text === draft.text,
-            ));
-      // No owner means the text landed nowhere: the reducer refuses to merge
-      // into a tab that is dirty or has a write in flight, and draft ids are
-      // regenerated per session (`draft-document-N` names no tab of this run),
-      // so an id-based match cannot save the copy either. Discarding the
-      // leftover would delete the only copy of the user's unsaved work, and
-      // dropping the dialog entry would hide that it still exists: both stay,
-      // and the refusal is reported instead of silently doing nothing.
-      if (!owner) {
-        setError(RESTORE_REFUSED_MESSAGE);
-        return;
-      }
-      // The recovered text is in a tab; its draft entry needs no further
-      // decision from the user.
-      setRecoveryDrafts((current) =>
-        current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
-      );
-      // Transaction ordering: the owner's own draft must be persisted and its
-      // write confirmed BEFORE the leftover draft is discarded — a crash in
-      // the debounce window must never find the only recovery copy already
-      // deleted. When the owner's draft id equals the leftover's id (a fresh
-      // tab reusing the crashed tab's `document-N` id), a successful write has
-      // replaced the leftover in place, so the discard is skipped entirely —
-      // deleting that id would remove the freshly written copy. A clean owner
-      // (nothing to recover) still discards the leftover, whose content was
-      // fully superseded by the restore.
-      let leftoverDiscardable = true;
-      if (needsRecoveryDraft(owner)) {
-        persistedDraftIds.current.add(owner.id);
-        try {
-          await port.writeDraft(draftFromSnapshot(owner));
-          if (draftIdForTab(owner.id) === info.draftId) {
-            // The fresh copy now occupies the leftover's id; it must survive.
-            leftoverDiscardable = false;
+        isCurrent,
+        createTabId: nextId,
+        readDraft: (draftId) => portRef.current.readDraft(draftId),
+        adoptDraft: (id, draft) => {
+          const before = stateRef.current;
+          const state = dispatch({
+            type: "documentRestored",
+            id,
+            draft,
+            pathPlatform: PATH_PLATFORM,
+          });
+          // The exact snapshot appended by this dispatch, compared against the
+          // tab list before it: a colliding createTabId must not masquerade as
+          // a tab this adoption created.
+          const added = state.tabs.find(
+            (tab) =>
+              tab.id === id && !before.tabs.some((existing) => existing.id === id),
+          );
+          return { state, added };
+        },
+        onOwnerReady: (owner, created) => {
+          // The recovered text is in a tab; its draft entry needs no further
+          // decision from the user. Both a fresh tab and a merge into an open
+          // tab arrive here, before the owner draft is written.
+          setRecoveryDrafts((current) =>
+            current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
+          );
+          // Only a fresh tab needs asset-scope/watch acquisition; a merged
+          // owner already holds both under its existing consumer id.
+          if (created) {
+            acquireDocumentScope(owner);
+            if (owner.path !== null) {
+              watchConsumer(owner.id, owner.path, "document");
+            }
           }
-        } catch {
-          // The immediate write failed: the leftover draft stays as the only
-          // disk copy and resurfaces in the recovery dialog next launch.
-          persistedDraftIds.current.delete(owner.id);
-          leftoverDiscardable = false;
-        }
+        },
+        markPersisted: (tabId) => getDraftScheduler().markPersisted(tabId),
+        unmarkPersisted: (tabId) => getDraftScheduler().unmarkPersisted(tabId),
+        // Deliberately the raw port call: it must reject so the transaction
+        // keeps the leftover draft as the only disk copy and reports
+        // draftWriteFailed instead of dropping the recovered text's backup.
+        writeDraft: (draft) => portRef.current.writeDraft(draft),
+        discardDraft: (draftId) => portRef.current.discardDraft(draftId),
+      });
+
+      switch (outcome.kind) {
+        case "restored":
+          if (outcome.draftWriteFailed) {
+            setError(RESTORE_DRAFT_WRITE_FAILED_MESSAGE);
+          }
+          return;
+        case "refused":
+          // The text landed nowhere: the leftover and its dialog entry stay so
+          // the only copy of the crashed work is still visible and recoverable.
+          setError(RESTORE_REFUSED_MESSAGE);
+          return;
+        case "missing":
+          // Gone from disk (another window restored or discarded it, or the
+          // store was cleaned up). A dead entry must not stay in the dialog
+          // erroring on every click; drop it without a banner.
+          setRecoveryDrafts((current) =>
+            current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
+          );
+          return;
+        case "error":
+          setError(errorMessage(outcome.error));
+          return;
+        case "stale":
+          // The tab state was replaced (unmount/reload); never surface it.
+          return;
       }
-      if (leftoverDiscardable) {
-        void port.discardDraft(info.draftId).catch(() => {});
-      }
-    } catch (caught) {
-      if (!isCurrent(generation)) return;
-      if (caught instanceof DocumentPortError && caught.code === "not_found") {
-        // The draft is gone from disk (another window restored or discarded
-        // it, or the store was cleaned up). A dead entry must not stay in the
-        // dialog erroring on every click: drop it exactly like an explicit
-        // discard, without a banner.
-        setRecoveryDrafts((current) =>
-          current?.filter((entry) => entry.draftId !== info.draftId) ?? current,
-        );
-        return;
-      }
-      setError(errorMessage(caught));
+    } finally {
+      restoringDraftIds.current.delete(info.draftId);
     }
   }, [
     acquireDocumentScope,
     dispatch,
+    getDraftScheduler,
     isCurrent,
     nextId,
-    port,
     watchConsumer,
   ]);
 

@@ -262,6 +262,22 @@ describe("documentReducer", () => {
     expect(state.tabs[0].status).toBe("clean");
   });
 
+  it("detects both different-length and same-length edits back to savedText", () => {
+    const differentLength = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "saved plus" },
+      { type: "textChanged", id: "doc-1", text: "saved" },
+    ]);
+    expect(differentLength.tabs[0].status).toBe("clean");
+
+    const sameLength = reduce([
+      { type: "fileOpened", id: "doc-1", file: openedFile() },
+      { type: "textChanged", id: "doc-1", text: "caved" },
+      { type: "textChanged", id: "doc-1", text: "saved" },
+    ]);
+    expect(sameLength.tabs[0].status).toBe("clean");
+  });
+
   it("derives one immutable write request and passes its exact values to the port", async () => {
     const port = new MemoryDocumentPort(
       new Map([["/notes/a.md", openedFile({ path: "/notes/a.md" })]]),

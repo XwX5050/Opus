@@ -2,7 +2,9 @@ use crate::asset_scope::{AcquiredScope, AssetScopeError, AssetScopeRegistry};
 use crate::document_io::{self, DocumentIoError, Newline};
 use crate::recovery::{DraftInfo, DraftRecord, RecoveryError, RecoveryStore};
 use crate::watch::{WatchError, WatchService};
-use crate::workspace::{self, DirectoryEntry, WorkspaceError, WorkspaceRootInfo};
+use crate::workspace::{
+    self, DirectoryEntry, WorkspaceError, WorkspaceRootInfo, WorkspaceSearchResult,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -360,6 +362,32 @@ pub fn list_directory(
     relative: PathBuf,
 ) -> Result<Vec<DirectoryEntry>, CommandError> {
     list_directory_impl(&anchor, root, relative)
+}
+
+pub fn search_workspace_impl(
+    anchor: &SharedWorkspaceAnchor,
+    root: PathBuf,
+    query: String,
+) -> Result<WorkspaceSearchResult, CommandError> {
+    assert_workspace_anchored(anchor, &root)?;
+    workspace::search_markdown(&root, &query).map_err(map_workspace_error)
+}
+
+#[tauri::command]
+pub async fn search_workspace(
+    anchor: tauri::State<'_, SharedWorkspaceAnchor>,
+    root: PathBuf,
+    query: String,
+) -> Result<WorkspaceSearchResult, CommandError> {
+    assert_workspace_anchored(&anchor, &root)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::search_markdown(&root, &query).map_err(map_workspace_error)
+    })
+    .await
+    .map_err(|error| CommandError {
+        code: "io".into(),
+        message: format!("workspace search failed: {error}"),
+    })?
 }
 
 pub fn create_markdown_file_impl(

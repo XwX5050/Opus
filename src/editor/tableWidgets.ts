@@ -18,6 +18,10 @@ import {
   type MarkdownTable,
   type MarkdownTableCell,
 } from "./markdownTable";
+import {
+  attachTableHorizontalScroll,
+  type TableHorizontalScrollController,
+} from "./tableHorizontalScroll";
 
 export interface TableWidgetsOptions {
   readonly editable: boolean;
@@ -58,6 +62,10 @@ interface ResolvedCell {
 }
 
 const widgetContexts = new WeakMap<HTMLElement, TableWidgetContext>();
+const horizontalScrollControllers = new WeakMap<
+  HTMLElement,
+  TableHorizontalScrollController
+>();
 
 const normalizeLineBreaks = (text: string) =>
   text.replace(/\r\n|\r|\n/g, " ");
@@ -1169,6 +1177,11 @@ export class MarkdownTableWidget extends WidgetType {
   }
 
   toDOM(view?: EditorView) {
+    const frame = document.createElement("div");
+    frame.className = "md-table-frame";
+    frame.contentEditable = "false";
+    frame.setAttribute("contenteditable", "false");
+
     const scroll = document.createElement("div");
     scroll.className = "md-table-scroll";
     scroll.contentEditable = "false";
@@ -1237,22 +1250,44 @@ export class MarkdownTableWidget extends WidgetType {
       });
       addDelegatedListeners(scroll);
     }
-    return scroll;
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "md-table-horizontal-slider";
+    slider.min = "0";
+    slider.max = "0";
+    slider.step = "1";
+    slider.value = "0";
+    slider.setAttribute("aria-label", "横向滚动表格");
+    frame.append(scroll, slider);
+    horizontalScrollControllers.set(
+      frame,
+      attachTableHorizontalScroll(scroll, slider),
+    );
+    return frame;
   }
 
   updateDOM(dom: HTMLElement, view: EditorView) {
+    const scroll = dom.firstElementChild;
+    const slider = dom.lastElementChild;
     if (
-      !dom.classList.contains("md-table-scroll") ||
-      !(dom.firstElementChild instanceof HTMLTableElement) ||
-      !dom.firstElementChild.classList.contains("md-table") ||
-      dom.children.length !== 1
+      !dom.classList.contains("md-table-frame") ||
+      !(scroll instanceof HTMLElement) ||
+      !scroll.classList.contains("md-table-scroll") ||
+      !(scroll.firstElementChild instanceof HTMLTableElement) ||
+      !scroll.firstElementChild.classList.contains("md-table") ||
+      !(slider instanceof HTMLInputElement) ||
+      !slider.classList.contains("md-table-horizontal-slider") ||
+      slider.previousElementSibling !== scroll ||
+      dom.children.length !== 2 ||
+      scroll.children.length !== 1
     ) {
       return false;
     }
     dom.contentEditable = "false";
     dom.setAttribute("contenteditable", "false");
 
-    const tableElement = dom.firstElementChild;
+    const tableElement = scroll.firstElementChild;
     const headRows = tableElement.tHead?.rows;
     const bodyRows = tableElement.tBodies.item(0)?.rows;
     if (
@@ -1282,13 +1317,13 @@ export class MarkdownTableWidget extends WidgetType {
       return false;
     }
 
-    const previous = widgetContexts.get(dom);
+    const previous = widgetContexts.get(scroll);
     const readOnly = this.readOnly || view.state.readOnly;
     const editable = this.editable && !readOnly;
     const composing = editable
       ? previous?.composing ?? new Map()
       : new Map<HTMLElement, CompositionSnapshot>();
-    widgetContexts.set(dom, {
+    widgetContexts.set(scroll, {
       view,
       table: this.table,
       editable: this.editable,
@@ -1329,10 +1364,22 @@ export class MarkdownTableWidget extends WidgetType {
         }
       }
     });
+    horizontalScrollControllers.get(dom)?.sync();
     return true;
   }
 
+  destroy(dom: HTMLElement) {
+    horizontalScrollControllers.get(dom)?.destroy();
+    horizontalScrollControllers.delete(dom);
+  }
+
   ignoreEvent(event: Event) {
+    if (
+      event.target instanceof Element &&
+      event.target.closest(".md-table-horizontal-slider")
+    ) {
+      return true;
+    }
     return nativeCellPointerEvents.has(event.type) ||
       (this.editable && !this.readOnly &&
         (isNativeCellDeletionEvent(event) ||

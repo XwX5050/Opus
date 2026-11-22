@@ -4,9 +4,12 @@ import {
   effectiveMode,
   FULL_MODE_MAX_BYTES,
   FULL_MODE_MAX_LINES,
+  markdownSyntaxFor,
   measureText,
   modeFor,
   modeForText,
+  REDUCED_SYNTAX_EXIT_LENGTH,
+  REDUCED_SYNTAX_MIN_LENGTH,
 } from "./performanceMode";
 
 describe("modeFor thresholds", () => {
@@ -50,6 +53,39 @@ describe("effectiveMode", () => {
 
   it("never degrades small documents even without an override", () => {
     expect(effectiveMode({ bytes: 100, lines: 3 }, false)).toBe("full");
+  });
+});
+
+describe("markdownSyntaxFor", () => {
+  it("uses exactly 8 MiB of UTF-16 text as the enter threshold", () => {
+    expect(REDUCED_SYNTAX_MIN_LENGTH).toBe(8 * 1024 * 1024);
+    expect(markdownSyntaxFor("light", REDUCED_SYNTAX_MIN_LENGTH - 1)).toBe(
+      "full",
+    );
+    expect(markdownSyntaxFor("light", REDUCED_SYNTAX_MIN_LENGTH)).toBe("core");
+  });
+
+  it("keeps the full grammar for regular documents and forced full mode", () => {
+    expect(markdownSyntaxFor("full", 20_000_000)).toBe("full");
+    expect(markdownSyntaxFor("full", 20_000_000, "core")).toBe("full");
+  });
+
+  it("applies exit hysteresis below the enter threshold", () => {
+    expect(REDUCED_SYNTAX_EXIT_LENGTH).toBeLessThan(
+      REDUCED_SYNTAX_MIN_LENGTH,
+    );
+    expect(
+      markdownSyntaxFor("light", REDUCED_SYNTAX_EXIT_LENGTH + 1, "core"),
+    ).toBe("core");
+    expect(
+      markdownSyntaxFor("light", REDUCED_SYNTAX_MIN_LENGTH - 1, "core"),
+    ).toBe("core");
+    expect(markdownSyntaxFor("light", REDUCED_SYNTAX_EXIT_LENGTH, "core")).toBe(
+      "full",
+    );
+    expect(
+      markdownSyntaxFor("light", REDUCED_SYNTAX_MIN_LENGTH - 1, "full"),
+    ).toBe("full");
   });
 });
 

@@ -56,6 +56,23 @@ describe("checkUpdate", () => {
     expect(pluginCheck).not.toHaveBeenCalled();
   });
 
+  it("reports unsupported in the native E2E test build", async () => {
+    vi.stubEnv("DEV", false);
+    vi.stubEnv("MODE", "native-e2e");
+    stubTauriBridge();
+    expect(await checkUpdate()).toEqual({ status: "unsupported" });
+    expect(pluginCheck).not.toHaveBeenCalled();
+  });
+
+  it("does not short-circuit merely because MODE is production", async () => {
+    vi.stubEnv("DEV", false);
+    vi.stubEnv("MODE", "production");
+    stubTauriBridge();
+    vi.mocked(pluginCheck).mockResolvedValue(null);
+    expect(await checkUpdate()).toEqual({ status: "up-to-date" });
+    expect(pluginCheck).toHaveBeenCalledOnce();
+  });
+
   it("reports unsupported when the Tauri bridge is missing", async () => {
     vi.stubEnv("DEV", false);
     expect(await checkUpdate()).toEqual({ status: "unsupported" });

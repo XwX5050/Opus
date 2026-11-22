@@ -2,6 +2,42 @@
 
 All notable changes to Opus are documented in this file.
 
+## [0.2.0] - 2026-11-22
+
+Workspace navigation overhaul, with a more reliable document lifecycle and a
+production-based performance and native-testing foundation.
+
+### Added
+
+- A VS Code-inspired workspace shell: a persistent activity rail, a collapsible
+  Markdown-only file explorer with filtering, horizontal document tabs, and a
+  welcome screen with launch actions and recent files/folders.
+- A dedicated horizontal slider below overflowing Markdown tables, synchronized
+  with native scrolling and operable by pointer and keyboard without changing
+  the document source.
+- A dedicated native E2E build and scenario runner that exercises the real Tauri
+  backend for editing/saving, external changes, and crash recovery.
+- Production-browser performance fixtures and reports alongside packaged-app
+  startup measurements.
+
+### Changed
+
+- Save/save-as, external-change handling, recovery-draft scheduling, and draft
+  restoration now have independent, testable state modules while preserving the
+  existing controller API and document-loss safeguards.
+- Extreme documents retain selection and undo history while switching to a core
+  Markdown grammar with boundary hysteresis, reducing parser work during typing.
+- Document actions live in the right outline toolbar; the unified titlebar keeps
+  native window dragging available outside its controls.
+
+### Fixed
+
+- Left and right sidebars animate independently instead of replaying each
+  other's entrance animation.
+- Tabs, panel connectors, and collapsed-rail corners align without shadows or
+  gaps, and the last-tab create control no longer moves unrelated tabs.
+- Long table content remains reachable in both editing and reading modes.
+
 ## [0.1.17] - 2026-09-23
 
 ### Fixed

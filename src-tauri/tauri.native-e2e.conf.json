@@ -1,0 +1,28 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Opus Native E2E",
+  "identifier": "com.xiongweini.markdown-edit.native-e2e",
+  "build": {
+    "frontendDist": "../test-results/native-e2e/dist",
+    "beforeBuildCommand": "npx tsc -b && npx vite build --mode native-e2e --outDir test-results/native-e2e/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Opus Native E2E",
+        "width": 1080,
+        "height": 760,
+        "minWidth": 680,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 16, "y": 24 },
+        "hiddenTitle": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

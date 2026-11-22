@@ -3,7 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
-import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot } from "./DocumentPort";
+import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot, WorkspaceSearchResult } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
 import {
   normalizeEditorPreferences,
@@ -25,6 +25,10 @@ type OpenDto = { path: string; text: string; has_utf8_bom: boolean; newline: Ope
 type SaveDto = { path: string; modified_unix_ms: number; version: string };
 type WorkspaceRootDto = { path: string; title: string };
 type DirectoryEntryDto = { name: string; path: string; is_directory: boolean };
+type WorkspaceSearchDto = {
+  matches: { path: string; line: number; column: number; text: string; match_length: number }[];
+  truncated: boolean;
+};
 type DiskEventDto =
   | { kind: "changed"; path: string; modified_unix_ms: number; version: string }
   | { kind: "missing"; path: string }
@@ -45,6 +49,16 @@ const opened = (dto: OpenDto): OpenedFile => ({ path: dto.path, text: dto.text, 
 const saved = (dto: SaveDto): SavedFile => ({ path: dto.path, modifiedUnixMs: dto.modified_unix_ms, version: dto.version });
 const workspaceRoot = (dto: WorkspaceRootDto): WorkspaceRoot => ({ path: dto.path, title: dto.title });
 const directoryEntry = (dto: DirectoryEntryDto): DirectoryEntry => ({ name: dto.name, path: dto.path, isDirectory: dto.is_directory });
+const workspaceSearch = (dto: WorkspaceSearchDto): WorkspaceSearchResult => ({
+  matches: dto.matches.map((match) => ({
+    path: match.path,
+    line: match.line,
+    column: match.column,
+    text: match.text,
+    matchLength: match.match_length,
+  })),
+  truncated: dto.truncated,
+});
 const diskEvent = (dto: DiskEventDto): DiskEvent =>
   dto.kind === "changed"
     ? { kind: "changed", path: dto.path, modifiedUnixMs: dto.modified_unix_ms, version: dto.version }
@@ -434,6 +448,9 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     },
     async listDirectory(root: string, relative: string): Promise<ReadonlyArray<DirectoryEntry>> {
       try { return (await invoke<DirectoryEntryDto[]>("list_directory", { root, relative })).map(directoryEntry); } catch (error) { throw failure(error); }
+    },
+    async searchWorkspace(root: string, query: string): Promise<WorkspaceSearchResult> {
+      try { return workspaceSearch(await invoke<WorkspaceSearchDto>("search_workspace", { root, query })); } catch (error) { throw failure(error); }
     },
     async createMarkdownFile(root: string, relative: string): Promise<DirectoryEntry> {
       try { return directoryEntry(await invoke<DirectoryEntryDto>("create_markdown_file", { root, relative })); } catch (error) { throw failure(error); }

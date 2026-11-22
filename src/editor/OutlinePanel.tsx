@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   CollapseAllIcon,
   DisclosureChevronIcon,
@@ -17,6 +17,7 @@ export interface OutlinePanelProps {
   onCollapseAll(): void;
   onExpandAll(): void;
   onNavigate(heading: OutlineHeading): void;
+  readonly actions?: ReactNode;
 }
 
 interface OutlineRowsProps {
@@ -98,6 +99,7 @@ export default function OutlinePanel({
   onCollapseAll,
   onExpandAll,
   onNavigate,
+  actions,
 }: OutlinePanelProps) {
   const parentIds =
     headings === null ? new Set<string>() : collectOutlineParentIds(headings);
@@ -118,6 +120,7 @@ export default function OutlinePanel({
     <>
       <div className="outline-toolbar">
         <h2>大纲</h2>
+        {actions && <div className="outline-document-actions">{actions}</div>}
         <button
           ref={toggleAllRef}
           type="button"

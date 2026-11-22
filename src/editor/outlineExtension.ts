@@ -51,7 +51,16 @@ class OutlinePublisher {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged) this.#schedule(this.#debounceMs);
+    // A language compartment reconfigure (core ↔ full) changes the syntax
+    // tree without a document edit; the outline must be re-extracted from the
+    // new grammar so switching back to full restores advanced headings
+    // immediately.
+    if (
+      update.docChanged ||
+      update.transactions.some((transaction) => transaction.reconfigured)
+    ) {
+      this.#schedule(this.#debounceMs);
+    }
   }
 
   #clearScheduledWork(): void {

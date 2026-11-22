@@ -15,10 +15,14 @@ import {
   observeEditorWidgets,
   playEditorIntro,
 } from "../motion/editorMotion";
-import { editorExtensions } from "./editorExtensions";
+import {
+  editorExtensions,
+  markdownLanguageExtension,
+} from "./editorExtensions";
 import { imagePasteExtension, insertDroppedImages } from "./imagePaste";
 import { imageWidgetsExtension } from "./imageWidgets";
 import { livePreviewExtension } from "./livePreview";
+import { searchMatchOffset } from "./searchNavigation";
 import { mathWidgetsExtension } from "./mathWidgets";
 import {
   extractOutline,
@@ -29,7 +33,11 @@ import {
   DEFAULT_PARSE_SLICE_MS,
   outlinePublisherExtension,
 } from "./outlineExtension";
-import type { PerformanceMode } from "./performanceMode";
+import {
+  markdownSyntaxFor,
+  type MarkdownSyntaxMode,
+  type PerformanceMode,
+} from "./performanceMode";
 import {
   focusMarkdownTableCell,
   runTableCellClipboardCommand,
@@ -92,6 +100,12 @@ export interface OutlineNavigationRequest {
   readonly doc: Text | null;
 }
 
+export interface SearchNavigationRequest {
+  readonly sequence: number;
+  readonly line: number;
+  readonly column: number;
+}
+
 export interface TableFocusRequest extends TableCellEditRequest {
   readonly sequence: number;
 }
@@ -135,6 +149,8 @@ export interface MarkdownEditorProps {
     doc: Text,
   ): void;
   outlineNavigation?: OutlineNavigationRequest | null;
+  searchNavigation?: SearchNavigationRequest | null;
+  onSearchNavigationConsumed?(sequence: number): void;
   onRequestTableEdit?(request: TableCellEditRequest): void;
   tableFocusRequest?: TableFocusRequest | null;
   onTableFocusConsumed?(request: TableFocusRequest): void;
@@ -169,15 +185,23 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
       imageDrop = null,
       onOutlineChange,
       outlineNavigation = null,
+      searchNavigation = null,
+      onSearchNavigationConsumed,
       onRequestTableEdit,
       tableFocusRequest = null,
       onTableFocusConsumed,
       performanceMode = "full",
       onEditorView,
     } = props;
+  const markdownSyntaxRef = useRef<MarkdownSyntaxMode>(
+    markdownSyntaxFor(performanceMode, value.length),
+  );
+  const pendingMarkdownSyntaxRef = useRef<MarkdownSyntaxMode | null>(null);
+  const compositionWaitCleanupRef = useRef<(() => void) | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewCompartmentRef = useRef(new Compartment());
+  const markdownCompartmentRef = useRef(new Compartment());
   const previousPreviewRef = useRef({ viewMode, performanceMode });
   const documentPathRef = useRef(documentPath);
   documentPathRef.current = documentPath;
@@ -187,6 +211,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     onReopenClosed,
     onToggleReading,
     onOutlineChange,
+    onSearchNavigationConsumed,
     onRequestTableEdit,
     onTableFocusConsumed,
   });
@@ -196,6 +221,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     onReopenClosed,
     onToggleReading,
     onOutlineChange,
+    onSearchNavigationConsumed,
     onRequestTableEdit,
     onTableFocusConsumed,
   };
@@ -263,6 +289,9 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
             previewCompartmentRef.current.of(
               previewExtensionsFor(viewMode, performanceMode),
             ),
+            markdownCompartmentRef.current.of(
+              markdownLanguageExtension(markdownSyntaxRef.current),
+            ),
           ),
           imagePasteExtension({
             saveClipboardImage: (input) =>
@@ -291,10 +320,16 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     viewRef.current = view;
     onEditorViewRef.current?.(view);
     requestAnimationFrame(() => {
-      if (import.meta.env.DEV) {
-        // Perf harness hook (scripts/measure-editor.mjs): the first frame
-        // after the editor mounts approximates "open to editable".
+      if (import.meta.env.DEV || import.meta.env.MODE === "perf") {
+        // Perf harness hooks (scripts/measure-editor.mjs): the first frame
+        // after the editor mounts approximates "open to editable", and the
+        // view lets the harness prove the platform document-end shortcut
+        // really reached the end before it samples input latency. The
+        // production perf bundle carries MODE=perf; normal production
+        // builds eliminate these branches entirely.
         performance.mark("markdown-edit:editor-editable");
+        (window as Window & { __OPUS_PERF_EDITOR_VIEW__?: EditorView })
+          .__OPUS_PERF_EDITOR_VIEW__ = view;
       }
       // Process-level hook (scripts/measure-startup.mjs): no-op unless the
       // app was launched with MARKDOWN_EDIT_PERF_MARK set.
@@ -302,7 +337,17 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     });
     return () => {
       viewRef.current = null;
+      clearCompositionWait();
+      pendingMarkdownSyntaxRef.current = null;
       onEditorViewRef.current?.(null);
+      if (import.meta.env.DEV || import.meta.env.MODE === "perf") {
+        const perfWindow = window as Window & {
+          __OPUS_PERF_EDITOR_VIEW__?: EditorView;
+        };
+        if (perfWindow.__OPUS_PERF_EDITOR_VIEW__ === view) {
+          delete perfWindow.__OPUS_PERF_EDITOR_VIEW__;
+        }
+      }
       view.destroy();
     };
     // One EditorView owns this mounted document. Prop changes are synchronized below.
@@ -344,6 +389,98 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     // Preview extensions read live refs; rebuilding them on toggle is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, performanceMode]);
+
+  const clearCompositionWait = () => {
+    compositionWaitCleanupRef.current?.();
+    compositionWaitCleanupRef.current = null;
+  };
+
+  const dispatchMarkdownSyntax = (
+    view: EditorView,
+    mode: MarkdownSyntaxMode,
+  ) => {
+    view.dispatch({
+      effects: markdownCompartmentRef.current.reconfigure(
+        markdownLanguageExtension(mode),
+      ),
+    });
+  };
+
+  /**
+   * A language reconfigure must never dispatch while CodeMirror is composing:
+   * WebKitGTK's fcitx5 composition pins the preedit caret if a transaction
+   * rewrites the DOM selection mid-composition. Keep the latest requested
+   * grammar, wait for compositionend, and poll as a fallback for missed end
+   * events. The actual dispatch happens only after `view.composing` is false.
+   */
+  const deferMarkdownSyntax = (
+    view: EditorView,
+    mode: MarkdownSyntaxMode,
+  ) => {
+    pendingMarkdownSyntaxRef.current = mode;
+    if (compositionWaitCleanupRef.current) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("compositionend", handleCompositionEnd, true);
+      if (timer !== null) clearTimeout(timer);
+      compositionWaitCleanupRef.current = null;
+    };
+    const applyPending = () => {
+      if (done) return;
+      if (viewRef.current !== view) {
+        cleanup();
+        return;
+      }
+      if (view.composing) {
+        timer = setTimeout(applyPending, 50);
+        return;
+      }
+      const next = pendingMarkdownSyntaxRef.current;
+      pendingMarkdownSyntaxRef.current = null;
+      cleanup();
+      if (next !== null) dispatchMarkdownSyntax(view, next);
+    };
+    const handleCompositionEnd = () => {
+      // CodeMirror clears `composing` in its own compositionend handler;
+      // a microtask runs after the event's listeners have all completed.
+      queueMicrotask(applyPending);
+    };
+    window.addEventListener("compositionend", handleCompositionEnd, true);
+    timer = setTimeout(applyPending, 50);
+    compositionWaitCleanupRef.current = cleanup;
+  };
+
+  const requestMarkdownSyntax = (
+    view: EditorView,
+    mode: MarkdownSyntaxMode,
+  ) => {
+    if (view.composing) {
+      deferMarkdownSyntax(view, mode);
+      return;
+    }
+    pendingMarkdownSyntaxRef.current = null;
+    clearCompositionWait();
+    dispatchMarkdownSyntax(view, mode);
+  };
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const next = markdownSyntaxFor(
+      performanceMode,
+      value.length,
+      markdownSyntaxRef.current,
+    );
+    if (next === markdownSyntaxRef.current) return;
+    markdownSyntaxRef.current = next;
+    requestMarkdownSyntax(view, next);
+    // The ref is the current grammar; value.length only participates in the
+    // enter/exit hysteresis decision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [performanceMode, value.length]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -412,6 +549,32 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     });
     if (viewMode === "editing") view.focus();
   }, [outlineNavigation, viewMode]);
+
+  const consumedSearchNavigationRef = useRef(0);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (
+      !view ||
+      !searchNavigation ||
+      searchNavigation.sequence <= consumedSearchNavigationRef.current
+    ) {
+      return;
+    }
+    consumedSearchNavigationRef.current = searchNavigation.sequence;
+    const position = searchMatchOffset(
+      view.state.doc.toString(),
+      searchNavigation.line,
+      searchNavigation.column,
+    );
+    if (position === null) return;
+    view.dispatch({
+      selection: { anchor: position },
+      annotations: [Transaction.addToHistory.of(false)],
+      effects: EditorView.scrollIntoView(position, { y: "center" }),
+    });
+    view.focus();
+    callbacksRef.current.onSearchNavigationConsumed?.(searchNavigation.sequence);
+  }, [searchNavigation]);
 
   // A drop delivered before this editor mounted is stale: only drops with a
   // newer sequence are inserted.

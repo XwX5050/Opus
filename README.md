@@ -4,8 +4,9 @@ Opus is a lightweight Markdown editor for macOS, Windows, and Linux, built for d
 
 ## Features
 
-- Multiple document tabs with unsaved-change protection and session restore
-- Optional folder sidebar with lazy file-tree loading
+- Horizontal document tabs with unsaved-change protection and session restore
+- Persistent folder explorer with lazy file-tree loading and saved-content full-text search
+- Persistent activity rail and a VS Code-style two-column welcome page with recent files/folders
 - Editing and read-only reading modes in one CodeMirror editor
 - Live Markdown rendering, `==highlight==`, syntax-highlighted code, images, and KaTeX formulas
 - Open-with and drag-and-drop from the system file manager, external-change detection, conflict handling, and crash-draft recovery

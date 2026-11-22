@@ -5,6 +5,7 @@ import {
   type DocumentPort,
   type SavedFile,
   type WorkspaceRoot,
+  type WorkspaceSearchMatch,
 } from "./DocumentPort";
 import { normalizePathKey } from "./documentReducer";
 import type {
@@ -433,6 +434,46 @@ export class MemoryDocumentPort implements DocumentPort {
       }))
       .sort(byName);
     return [...directoryEntries, ...files.sort(byName)];
+  }
+
+  async searchWorkspace(root: string, query: string) {
+    const directory = this.#resolveDirectory(root, "");
+    const rootKey = this.#key(directory);
+    const foldedQuery = query.trim().toLowerCase();
+    const matches: WorkspaceSearchMatch[] = [];
+    let truncated = false;
+    if (!foldedQuery) return { matches, truncated };
+    const files = [...this.#files.values()].sort((a, b) =>
+      a.path.localeCompare(b.path),
+    );
+    for (const file of files) {
+      const pathKey = this.#key(file.path);
+      if (!pathKey.startsWith(`${rootKey}/`)) continue;
+      const relative = file.path.slice(directory.length + 1);
+      if (relative.split("/").some((segment) => segment.startsWith("."))) continue;
+      if (!/\.(md|markdown)$/i.test(file.path)) continue;
+      for (const [lineIndex, text] of file.text.split(/\r?\n/).entries()) {
+        const foldedLine = text.toLowerCase();
+        let from = 0;
+        while (from < foldedLine.length) {
+          const found = foldedLine.indexOf(foldedQuery, from);
+          if (found < 0) break;
+          matches.push({
+            path: file.path,
+            line: lineIndex + 1,
+            column: [...foldedLine.slice(0, found)].length,
+            text,
+            matchLength: [...foldedQuery].length,
+          });
+          if (matches.length === 200) {
+            truncated = true;
+            return { matches, truncated };
+          }
+          from = found + foldedQuery.length;
+        }
+      }
+    }
+    return { matches, truncated };
   }
 
   async createMarkdownFile(

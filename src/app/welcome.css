@@ -1,0 +1,200 @@
+/* Launch actions and recent items share a compact, theme-aware column. */
+
+.welcome-screen {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  justify-content: center;
+  width: 100%;
+  min-height: 0;
+  padding: clamp(var(--space-5), 7vh, 72px) var(--space-5) var(--space-5);
+  overflow-y: auto;
+  color: var(--text-secondary);
+}
+
+.welcome-main {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+  width: min(100%, clamp(560px, 68%, 880px));
+  justify-self: center;
+}
+
+.welcome-header {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.welcome-title {
+  margin: 0;
+  font-family: "Snell Roundhand", "Apple Chancery", "Segoe Script", cursive;
+  font-size: clamp(42px, 5vw, 58px);
+  line-height: 1.1;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+
+.welcome-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.welcome-section-title {
+  margin: 0;
+  font-size: var(--font-ui-size-small);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.welcome-actions,
+.welcome-recent-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-actions > li,
+.welcome-recent-list > li {
+  min-width: 0;
+}
+
+.welcome-action,
+.welcome-recent-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: var(--space-1) var(--space-2);
+  border-color: transparent;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.welcome-action:hover:not(:disabled),
+.welcome-recent-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.welcome-action-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.welcome-action-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome-action kbd {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--font-ui-size-small);
+  white-space: nowrap;
+}
+
+.welcome-recent-empty {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-ui-size-small);
+  color: var(--text-muted);
+}
+
+.welcome-recent-item {
+  min-height: 32px;
+  color: var(--text-secondary);
+}
+
+.welcome-recent-text {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: var(--space-5);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.welcome-recent-name,
+.welcome-recent-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome-recent-name {
+  flex: 1 1 auto;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.welcome-recent-path {
+  flex: 0 1 42%;
+  color: var(--text-secondary);
+  text-align: right;
+  font-size: var(--font-ui-size-small);
+}
+
+.welcome-more {
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
+.welcome-more-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-small);
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size-small);
+  list-style: none;
+}
+
+.welcome-more-summary::-webkit-details-marker {
+  display: none;
+}
+
+.welcome-more-summary:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.welcome-more-chevron {
+  display: inline-flex;
+  align-items: center;
+  transition: transform var(--transition-fast);
+}
+
+.welcome-more[open] .welcome-more-chevron {
+  transform: rotate(90deg);
+}
+
+.welcome-more .welcome-recent-list {
+  margin-top: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-more-chevron {
+    transition: none;
+  }
+}

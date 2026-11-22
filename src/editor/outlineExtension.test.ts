@@ -1,15 +1,17 @@
-import { markdown } from "@codemirror/lang-markdown";
-import { EditorState, type Text } from "@codemirror/state";
+import { Compartment, EditorState, type Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markdownLanguageExtension } from "./editorExtensions";
 import type { OutlineHeading } from "./outline";
 import { outlinePublisherExtension } from "./outlineExtension";
+import type { MarkdownSyntaxMode } from "./performanceMode";
 
 describe("outlinePublisherExtension", () => {
   let host: HTMLDivElement;
   let view: EditorView | null;
   let published: ReadonlyArray<ReadonlyArray<OutlineHeading>>;
   let publishedDocs: Text[];
+  let languageCompartment!: Compartment;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -26,13 +28,14 @@ describe("outlinePublisherExtension", () => {
     vi.useRealTimers();
   });
 
-  const createView = (doc: string) => {
+  const createView = (doc: string, syntax: MarkdownSyntaxMode = "full") => {
+    languageCompartment = new Compartment();
     view = new EditorView({
       parent: host,
       state: EditorState.create({
         doc,
         extensions: [
-          markdown(),
+          languageCompartment.of(markdownLanguageExtension(syntax)),
           outlinePublisherExtension(
             (headings, revision) => {
               published = [...published, headings];
@@ -53,6 +56,27 @@ describe("outlinePublisherExtension", () => {
 
     expect(published).toHaveLength(1);
     expect(published[0].map((heading) => heading.text)).toEqual(["One"]);
+  });
+
+  it("recomputes after a core→full language reconfigure without a pseudo Setext heading", async () => {
+    const editor = createView(
+      "---\ntitle: note\n---\n\n# One",
+      "core",
+    );
+    await vi.runAllTimersAsync();
+
+    expect(published.at(-1)?.map((heading) => heading.text)).toEqual(["One"]);
+    published = [];
+
+    editor.dispatch({
+      effects: languageCompartment.reconfigure(
+        markdownLanguageExtension("full"),
+      ),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(published.length).toBeGreaterThan(0);
+    expect(published.at(-1)?.map((heading) => heading.text)).toEqual(["One"]);
   });
 
   it("coalesces rapid document changes and publishes only the latest tree", async () => {

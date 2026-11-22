@@ -41,7 +41,14 @@ let inFlight: Promise<UpdateCheckResult> | null = null;
  * throwing. Concurrent calls while a check is in flight are deduplicated.
  */
 export const checkUpdate = async (): Promise<UpdateCheckResult> => {
-  if (import.meta.env.DEV || import.meta.env.VITE_E2E === "1") {
+  if (
+    import.meta.env.DEV ||
+    import.meta.env.VITE_E2E === "1" ||
+    // The dedicated native test build runs with MODE "native-e2e"; it is
+    // isolated from the user's installation and must never contact the
+    // release channel or offer to restart into a production download.
+    import.meta.env.MODE === "native-e2e"
+  ) {
     return { status: "unsupported" };
   }
   if (!("__TAURI_INTERNALS__" in window)) {
