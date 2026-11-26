@@ -5,12 +5,12 @@
     "memoryBytes": 34359738368,
     "macOS": "27.3",
     "arch": "arm64",
-    "buildSha": "41a97107311f0cda2f8c5ef897a68dd8ab2d40ca",
+    "buildSha": "815ff5c5835b7bfd25d25c27269a430ddab6721d",
     "buildShaDirty": true,
-    "buildShaDirtyFileCount": 50,
-    "gitStateCapturedAt": "2026-11-22T13:41:16.162Z",
+    "buildShaDirtyFileCount": 7,
+    "gitStateCapturedAt": "2026-11-26T19:14:03.153Z",
     "node": "v26.12.1",
-    "measuredAt": "2026-11-22T13:41:27.716Z",
+    "measuredAt": "2026-11-26T19:14:12.714Z",
     "browserChannel": "production",
     "note": "Browser-shell metrics use headless Chromium against the dedicated production perf bundle served by vite preview; they are Chromium-engine numbers, not packaged WKWebView numbers. See docs/performance.md."
   },
@@ -116,9 +116,9 @@
           "sha256": "cf4c32c773b4aec08498fd170b7f74733a695fdbcbb18170413e05c8d64d4848"
         },
         {
-          "path": "dist-perf/assets/dist-9qZI85Yi.js",
-          "bytes": 4871,
-          "sha256": "ab4977e9564a9628c7cc4b60ae7f16973d2f120810a3acbc6a890efee8df699e"
+          "path": "dist-perf/assets/dist-0ojxX9iH.js",
+          "bytes": 3260,
+          "sha256": "f9b7d28b735ef2d282cb58a2261a2ea6c686aa40f8be374ac6f793f86341fc62"
         },
         {
           "path": "dist-perf/assets/dist-B6hqjY9q.js",
@@ -126,19 +126,24 @@
           "sha256": "b74d830b0b85d17074f25363ae1251bd7b5d611c644a0dc23ace59db50c81db0"
         },
         {
-          "path": "dist-perf/assets/dist-BChWyEsJ.js",
-          "bytes": 20926,
-          "sha256": "72b4a409a613b0bf902435542fce39e4b1e0eab40865a070b8ce535421bd161d"
-        },
-        {
           "path": "dist-perf/assets/dist-BGAPERQj.js",
           "bytes": 11520,
           "sha256": "c876a5e1c2e96a7f73e0b6ad20590e46c514dfe3aaac63950fc09a7260d414c1"
         },
         {
+          "path": "dist-perf/assets/dist-Bm3ZtGpI.js",
+          "bytes": 22921,
+          "sha256": "547790d9520db0696fc3b52eece685720ad6fda0d128edd751439067e73cc23c"
+        },
+        {
           "path": "dist-perf/assets/dist-BNENGGj2.js",
           "bytes": 14306,
           "sha256": "dfeca0fbec30b1c156d9457628122b8ec320d96d3f73df2bb30c8e8d337718b5"
+        },
+        {
+          "path": "dist-perf/assets/dist-Bo79P8O1.js",
+          "bytes": 4871,
+          "sha256": "4cb755a4c8402f30f8b533e46694d6320029dac6d8b73bee33743df2245cc79f"
         },
         {
           "path": "dist-perf/assets/dist-BVCXL9Yz.js",
@@ -151,39 +156,34 @@
           "sha256": "84a1cbe58fa2100fc2a486a9a72eb22d17240c505ab9b139d64c10d5c3aaea30"
         },
         {
-          "path": "dist-perf/assets/dist-BzrfN9Wm.js",
-          "bytes": 22921,
-          "sha256": "9033f456ba29e7c405a956f3bb0c8e1915dc817e70543d340553aae382eac68b"
-        },
-        {
-          "path": "dist-perf/assets/dist-CC6q0FP3.js",
-          "bytes": 16197,
-          "sha256": "3b1287c4c97590854a679de100f6e10019663303ddad72a317e8b0fab1cead2c"
-        },
-        {
-          "path": "dist-perf/assets/dist-CjbeJZZ4.js",
-          "bytes": 46925,
-          "sha256": "b2e79f520505c576785b21b0db0474780a44a51a6bab308d9656f32bcdae0033"
-        },
-        {
-          "path": "dist-perf/assets/dist-CKdbJRxO.js",
-          "bytes": 44546,
-          "sha256": "e0efe1ae7e6ba5c2e774846d1cf9e482247a5214625d1f4cf1161637ac45f8ef"
-        },
-        {
-          "path": "dist-perf/assets/dist-CtDqThjN.js",
-          "bytes": 97707,
-          "sha256": "84567f83531c28c89347b9a4a3d184710638efcddead791c07b030ee2c887e7a"
-        },
-        {
-          "path": "dist-perf/assets/dist-DGiwKaMg.js",
-          "bytes": 3260,
-          "sha256": "6778502e805a2b462f01869e50d42198dc6f96a109e5cd1a9cf62f727e17b89f"
-        },
-        {
-          "path": "dist-perf/assets/dist-DHOLmobd.js",
+          "path": "dist-perf/assets/dist-CSmlO4Op.js",
           "bytes": 30689,
-          "sha256": "e5094e2ea42005dba3d8f7479470a40d16e4527592f4911ef9e8b86ac923e4fb"
+          "sha256": "2c5d5486b4b3d17d2908d145075ca4b1583a940d74f57ff6ebae32b20303a3ad"
+        },
+        {
+          "path": "dist-perf/assets/dist-CVdVfgnT.js",
+          "bytes": 46925,
+          "sha256": "156715147708180b6422c644b068c761dc5f5af5ad3034e4e696c4f24d0729fe"
+        },
+        {
+          "path": "dist-perf/assets/dist-CvOSRuzT.js",
+          "bytes": 97707,
+          "sha256": "1d16d1ad10c5ec6674e0e94abd7e86a1d8dda4f2ec8fe58a1d8a2c5e8c9baf2f"
+        },
+        {
+          "path": "dist-perf/assets/dist-Cwks7zTV.js",
+          "bytes": 16197,
+          "sha256": "a039642f0627eb9afff81e05e8324967de1fd64712a9d274cc1716a76bd5b1d9"
+        },
+        {
+          "path": "dist-perf/assets/dist-CzefhZR3.js",
+          "bytes": 20926,
+          "sha256": "1fdab4ea087771cf9f8feb85907fb747d1cb7e8e31e49c2b6ba88461abae84ab"
+        },
+        {
+          "path": "dist-perf/assets/dist-DMufd8mc.js",
+          "bytes": 20672,
+          "sha256": "45a55fe7f182afb4d4ccfcd5cd372afe7eed26af3d6c6fe9a003e1ce54e0fe5c"
         },
         {
           "path": "dist-perf/assets/dist-Dps0g8lG.js",
@@ -201,9 +201,9 @@
           "sha256": "750cccd41644fd29d845ec006425d2ec1c558d45e892303f5bafe20959abd376"
         },
         {
-          "path": "dist-perf/assets/dist-HjapOklN.js",
-          "bytes": 20672,
-          "sha256": "daec2629b857bf0b95f908dfa288cce13f522c6e7edfb1fa92c96d852ba3e0e4"
+          "path": "dist-perf/assets/dist-XK2MC3Pe.js",
+          "bytes": 44546,
+          "sha256": "c46519dcb6e0853df73e0fc4be2ea6d14ea433a095e73be3b30938a92fd51aea"
         },
         {
           "path": "dist-perf/assets/dockerfile-BLkNEvjs.js",
@@ -681,14 +681,14 @@
           "sha256": "2d5e3c493596b6ffcc688ab63c6501d11be92ccb669d92b5c2a36cc876b7acdd"
         },
         {
-          "path": "dist-perf/assets/perf-DcaI3-rF.js",
-          "bytes": 1015060,
-          "sha256": "1ba324176f73765aa9930895b132ac71827cb31b46c583fc686dba543bdb233e"
+          "path": "dist-perf/assets/perf-CBKnNoN6.js",
+          "bytes": 1030247,
+          "sha256": "03b4a3bae2f13c8041e9a1e2cc8a0afa10b2d205d2700b42270c6754c47b9fa6"
         },
         {
-          "path": "dist-perf/assets/perf-wRG0eOnr.css",
-          "bytes": 83152,
-          "sha256": "53128a12805d1c890905ba2218a454441d71422eced757e906b79d4e460d95d7"
+          "path": "dist-perf/assets/perf-CNilWkQ6.css",
+          "bytes": 99988,
+          "sha256": "89ae1e424aae6571e2c3ba97d052d21d48e813cedb5b777cf638ed8a8e6c5696"
         },
         {
           "path": "dist-perf/assets/perl-CdEHsPfU.js",
@@ -908,7 +908,7 @@
         {
           "path": "dist-perf/perf.html",
           "bytes": 477,
-          "sha256": "2e012e45624e1af105c8a6f54ba326306e7be6f513affe93ddc812f85c38b9aa"
+          "sha256": "07bead912b456d1f8ec1ca3ea688229ba3823c37793cdadc4a15db9782ed9d96"
         }
       ],
       "fixtures": [
@@ -936,7 +936,7 @@
       "source": "packaged-app",
       "bundlePath": "src-tauri/target/release/bundle/macos/Opus.app",
       "bundleExists": true,
-      "bundleSha256": "41ee6f78c05c923357fd7a8c256079bb3f25b8aab6648c43704f7e8ef82ac0b0",
+      "bundleSha256": "5507d125636c9cf5ae49fa07ab197a761ea6ffdd53b831d7631c660e0ab4650c",
       "provenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
       "provenanceKind": "adhoc",
       "label": "unsigned dev bundle (ad-hoc signature, not notarized)",
@@ -958,18 +958,18 @@
     "hot_start_ms": {
       "status": "measured",
       "samples": [
-        1808,
-        512,
-        487,
-        480,
-        488
+        1222,
+        379,
+        385,
+        389,
+        411
       ],
       "provenance": "unsigned dev bundle (ad-hoc signature, not notarized)",
-      "bundleSha256": "41ee6f78c05c923357fd7a8c256079bb3f25b8aab6648c43704f7e8ef82ac0b0",
+      "bundleSha256": "5507d125636c9cf5ae49fa07ab197a761ea6ffdd53b831d7631c660e0ab4650c",
       "source": "packaged-app",
       "budgetMs": 1000,
-      "median": 488,
-      "p95": 1548.8,
+      "median": 389,
+      "p95": 1059.8,
       "judgedOn": "median",
       "pass": true
     },
@@ -985,166 +985,166 @@
     "open_to_editor_regular_ms": {
       "status": "measured",
       "samples": [
-        111.90000000596046,
-        109,
-        110.90000000596046,
-        109.30000001192093,
-        109.5
+        112.5,
+        98,
+        97.40000000596046,
+        97.90000000596046,
+        99.09999999403954
       ],
       "source": "browser-production",
       "budgetMs": 1000,
-      "median": 109.5,
-      "p95": 111.7,
+      "median": 98,
+      "p95": 109.82,
       "judgedOn": "median",
       "pass": true
     },
     "open_to_editor_pressure_ms": {
       "status": "measured",
       "samples": [
-        140.69999998807907,
-        139.2999999821186,
-        134.09999999403954,
-        131.7000000178814,
-        133.5
+        119.10000002384186,
+        119.59999999403954,
+        118.89999997615814,
+        118.2000000178814,
+        118.19999998807907
       ],
       "source": "browser-production",
       "budgetMs": 3000,
-      "median": 134.1,
-      "p95": 140.42,
+      "median": 118.9,
+      "p95": 119.5,
       "judgedOn": "median",
       "pass": true
     },
     "input_p95_regular_ms": {
       "status": "measured",
       "samples": [
-        1.6999999999999886,
-        1,
-        1.9999999880790824,
-        2.999999994039513,
-        3.8999999880790597,
-        4.6999999761581535,
-        6.600000000000023,
-        1.2999999880790938,
-        2.7999999761581194,
-        4.499999988079082,
-        6.299999982118607,
-        1,
+        8.299999988079094,
         3.0999999880790483,
-        2.499999994039513,
-        5.199999988079071,
-        7.899999999999977,
-        0.5999999880790483,
-        7.999999976158165,
-        2.6999999940395583,
-        4.399999976158142,
-        6.999999994039513,
-        2.0999999880790483,
-        4.6999999761581535,
-        7.799999988079094,
-        1.9999999761581648,
-        5.399999994039547,
-        4.999999982118595,
-        0,
-        2.999999994039513,
-        4.799999994039524,
-        0,
-        2.5999999940395355,
-        2.199999982118584,
-        4.8999999880791165,
-        7.899999976158142,
+        2.1999999999999886,
+        3.500000005960487,
+        5.000000005960487,
+        0.4000000119209517,
+        4.100000005960453,
+        6.800000011920929,
+        2.4000000059604645,
+        5.399999999999977,
+        1.0999999880790483,
+        1.8999999880790597,
+        4.800000011920929,
+        0.4000000059604645,
+        3.6000000119209403,
+        6.199999999999989,
+        1.7999999940395242,
+        3.1000000000000227,
+        5.999999994039513,
+        1.9999999940395128,
+        5.799999988079094,
+        2.000000005960487,
+        5.699999988079071,
+        2,
+        3.700000011920906,
+        7.100000005960453,
+        3.0000000119209176,
+        5.799999988079094,
+        1.9000000119209517,
+        6.300000005960442,
+        2.3000000059604417,
+        2.299999994039524,
         2.699999988079071,
-        5.799999976158119,
-        0.7999999761581194,
-        3.499999982118652,
-        2.999999994039513
+        5.899999994039547,
+        1.899999994039547,
+        5.799999988079094,
+        2.1000000000000227,
+        5.800000011920929,
+        2.0999999940395355,
+        6.10000001192094
       ],
       "source": "browser-production",
       "budgetMs": 32,
-      "median": 3.05,
-      "p95": 7.9,
+      "median": 3.3,
+      "p95": 6.82,
       "judgedOn": "p95",
       "pass": true
     },
     "input_p95_pressure_ms": {
       "status": "measured",
       "samples": [
-        7.4000000059604645,
-        7.700000011920906,
-        1.100000005960453,
-        3.000000005960487,
-        2.2000000238418806,
-        7.4000000059604645,
-        8.300000023841903,
-        3.000000005960487,
-        3.3000000059604417,
-        3.500000017881348,
-        3.8000000238419034,
-        2.3841835172788706e-8,
-        1.0000000119209744,
-        8.500000011920974,
-        3,
-        5.900000011920952,
-        3.000000017881348,
-        31.33200000596048,
-        31.032000023841874,
-        29.564000011920825,
-        29.296000017881397,
-        30.632000023841783,
-        14.698000000000093,
-        17.13000002384183,
-        26.032000005960526,
-        26.864000005960406,
-        27.396000023841907,
-        29.93200001192099,
-        31.26400001192087,
-        31.29600000000005,
-        14.866000005960359,
-        25.832000017881455,
-        25.963999999999942,
-        26.29600000000005,
-        16.56600001788138,
-        27.5320000119209,
-        28.73199999999997,
-        29.064000000000078,
-        28.395999999999958,
-        31.332000000000107
+        5.4000000059604645,
+        6.999999988079082,
+        4.499999994039513,
+        7.100000005960453,
+        1.4999999821185952,
+        1.0999999940395355,
+        4.199999999999989,
+        4.099999988079048,
+        5.099999988079048,
+        6.000000005960487,
+        7.600000000000023,
+        0.5000000059604872,
+        5.2999999999999545,
+        5.800000005960442,
+        1.799999994039581,
+        5.200000005960419,
+        1.10000000596051,
+        6.60000000596051,
+        30.764000005960497,
+        29.395999988079097,
+        14.861999999999966,
+        10.866000005960359,
+        16.365999982118637,
+        14.765999994039475,
+        11.465999988079147,
+        26.431999994039643,
+        15.566000000000031,
+        12.866000005960359,
+        17.198000005960466,
+        14.065999988079056,
+        11.365999999999985,
+        17.098000005960557,
+        13.465999999999894,
+        11.66599999999994,
+        16.466000005960495,
+        13.765999988079102,
+        10.06599999403943,
+        16.997999988079073,
+        13.365999999999985,
+        15.9979999821187
       ],
       "source": "browser-production",
       "budgetMs": 50,
-      "median": 16.85,
-      "p95": 31.3,
+      "median": 11.12,
+      "p95": 26.58,
       "judgedOn": "p95",
       "pass": true
     },
     "save_pressure_ms": {
       "status": "measured",
       "samples": [
-        4,
         3,
         2,
         2,
+        1,
         2
       ],
       "source": "browser-production",
       "budgetMs": 1000,
       "median": 2,
-      "p95": 3.8,
+      "p95": 2.8,
       "judgedOn": "median",
       "pass": true
     },
     "sidebar_interactive_ms": {
       "status": "measured",
       "samples": [
-        114,
-        17,
-        21,
-        21,
-        21
+        92,
+        22,
+        22,
+        22,
+        22
       ],
       "source": "browser-production",
       "budgetMs": null,
-      "median": 21,
-      "p95": 95.4,
+      "median": 22,
+      "p95": 78,
       "pass": null
     },
     "gatekeeper_first_launch_ms": {

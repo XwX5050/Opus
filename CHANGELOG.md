@@ -2,6 +2,42 @@
 
 All notable changes to Opus are documented in this file.
 
+## [0.2.6] - 2026-11-27
+
+### Changed
+
+- Localized the find/replace panel to Chinese and applied the shared
+  token-driven surface and match colors to its fields, buttons, and close
+  control.
+- Narrow windows now clamp panel widths and auto-hide panels without
+  overwriting saved layout preferences; the document title folds on scroll,
+  and the outline follows the active heading, including when it sits inside a
+  collapsed branch.
+- The explorer marks the open document separately from keyboard focus, the
+  quick switcher keeps global indices across its 更多… disclosure, and the
+  welcome screen uses platform-specific wordmarks and shortcuts, file/folder
+  tags, and aligned rows.
+- Settings use 34 px capsule controls with explicit units, a stable top
+  anchor, compact short sections, and neutral borders; confirmation and
+  recovery dialogs group actions behind filled primary and outline danger
+  buttons.
+- Fenced and inline code sit on the quiet panel surface, heading markers hang
+  out of flow, and presentation slides share the editor's code, inline-code,
+  and frontmatter styling.
+
+### Fixed
+
+- Muted text, primary/danger fills, and focus rings meet contrast targets in
+  both themes, and focus outlines no longer alter control shape.
+- Fenced code blocks no longer stand out as card-like surfaces, and inline
+  code uses a monospace surface instead of the previous italic serif
+  treatment.
+- The search view groups matches by file with consistent row geometry,
+  highlighted hits, and accessible labels; settings no longer jump vertically
+  between sections.
+- A missing translation key is presented as a setup notice with a direct
+  settings action instead of a generic failure alert.
+
 ## [0.2.5] - 2026-11-22
 
 ### Changed
