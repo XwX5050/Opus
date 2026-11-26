@@ -14,6 +14,7 @@ import { MOTION } from "../motion/motionConfig";
 import { prefersReducedMotion } from "../motion/motionRuntime";
 import { FrontMatter } from "./frontmatterExtension";
 import { Highlight, HighlightMark } from "./highlightExtension";
+import "./livePreviewRefinements.css";
 
 export type PlannedDecorationKind =
   | "mark"
@@ -63,7 +64,7 @@ const markerRangeForPreview = (
   const line = state.doc.lineAt(node.to);
   let to = node.to;
   while (to < line.to && /[ \t]/.test(state.sliceDoc(to, to + 1))) to += 1;
-  return { ...node, to };
+  return { from: node.from, to, name: node.name };
 };
 
 const structureNames = new Set([
@@ -208,10 +209,13 @@ const normalizeRanges = (
   return merged;
 };
 
-const quoteLinePlans = (
+type BlockLinePosition = "single" | "first" | "middle" | "last";
+
+const blockLinePlans = (
   state: EditorState,
   structure: Structure,
   requestedRanges: readonly LivePreviewRange[],
+  classNameForPosition: (position: BlockLinePosition) => string,
 ): PlannedDecoration[] => {
   const blockFirst = state.doc.lineAt(structure.node.from);
   const blockLast = state.doc.lineAt(
@@ -232,7 +236,7 @@ const quoteLinePlans = (
       number += 1
     ) {
       const line = state.doc.line(number);
-      const position =
+      const position: BlockLinePosition =
         blockFirst.number === blockLast.number
           ? "single"
           : number === blockFirst.number
@@ -244,13 +248,38 @@ const quoteLinePlans = (
         from: line.from,
         to: line.to,
         kind: "line",
-        className:
-          `cm-live-preview-quote-line cm-live-preview-quote-line-${position}`,
+        className: classNameForPosition(position),
       });
     }
   }
   return plans;
 };
+
+const quoteLinePlans = (
+  state: EditorState,
+  structure: Structure,
+  requestedRanges: readonly LivePreviewRange[],
+): PlannedDecoration[] =>
+  blockLinePlans(
+    state,
+    structure,
+    requestedRanges,
+    (position) =>
+      `cm-live-preview-quote-line cm-live-preview-quote-line-${position}`,
+  );
+
+const codeLinePlans = (
+  state: EditorState,
+  structure: Structure,
+  requestedRanges: readonly LivePreviewRange[],
+): PlannedDecoration[] =>
+  blockLinePlans(
+    state,
+    structure,
+    requestedRanges,
+    (position) =>
+      `cm-live-preview-code-line cm-live-preview-code-line-${position}`,
+  );
 
 export interface LivePreviewOptions {
   /**
@@ -312,6 +341,20 @@ export const planLivePreview = (
     if (structure.node.name === "Blockquote") {
       planned.push(...quoteLinePlans(state, structure, requestedRanges));
     }
+    if (structure.node.name.startsWith("ATXHeading")) {
+      // The heading line stays at least one heading line tall even when its
+      // only content is the hanging marker run. The revealed class reserves
+      // the marker row only on the heading the cursor is actually editing.
+      const firstLine = state.doc.lineAt(structure.node.from);
+      planned.push({
+        from: firstLine.from,
+        to: firstLine.to,
+        kind: "line",
+        className: revealed(structure)
+          ? "cm-live-preview-heading-line cm-live-preview-heading-line-revealed"
+          : "cm-live-preview-heading-line",
+      });
+    }
     const className = classNameFor(structure.node);
     if (className) {
       planned.push({
@@ -322,6 +365,13 @@ export const planLivePreview = (
       });
     }
     if (structure.node.name === "HorizontalRule" && !revealed(structure)) {
+      const ruleLine = state.doc.lineAt(structure.node.from);
+      planned.push({
+        from: ruleLine.from,
+        to: ruleLine.to,
+        kind: "line",
+        className: "cm-live-preview-rule-line",
+      });
       planned.push({
         from: structure.node.from,
         to: structure.node.to,
@@ -329,28 +379,24 @@ export const planLivePreview = (
         className: "cm-live-preview-horizontal-rule",
       });
     }
-    if (structure.node.name === "FencedCode" && !revealed(structure)) {
-      // While the fence is hidden, the language label floats quietly at the
-      // block's top-right; it disappears again once the cursor reveals the
-      // source for editing.
+    if (structure.node.name === "FencedCode") {
+      // The fence lines carry the block's quiet surface while the language
+      // label sits in the top-left corner. The label disappears once the
+      // cursor reveals the source for editing.
       const info = structure.node.getChild("CodeInfo");
-      if (info) {
-        const language = state.sliceDoc(info.from, info.to).trim();
-        if (language) {
-          const firstLine = state.doc.lineAt(structure.node.from);
-          planned.push({
-            from: firstLine.from,
-            to: firstLine.to,
-            kind: "line",
-            className: "cm-live-preview-code-lang-anchor",
-          });
-          planned.push({
-            from: firstLine.to,
-            to: firstLine.to,
-            kind: "code-lang-badge",
-            displayText: language,
-          });
-        }
+      const language = info
+        ? state.sliceDoc(info.from, info.to).trim()
+        : "";
+      const showBadge = !revealed(structure) && language !== "";
+      planned.push(...codeLinePlans(state, structure, requestedRanges));
+      if (showBadge) {
+        const firstLine = state.doc.lineAt(structure.node.from);
+        planned.push({
+          from: firstLine.to,
+          to: firstLine.to,
+          kind: "code-lang-badge",
+          displayText: language,
+        });
       }
     }
   }
@@ -441,11 +487,50 @@ export const planLivePreview = (
           kind: "replace",
         });
       }
+    } else if (
+      owner.node.name.startsWith("ATXHeading") &&
+      node.name === "HeaderMark" &&
+      node.from === owner.node.from
+    ) {
+      // Only the opening marker run hangs into the margin; a closing marker
+      // stays in flow at the end of the line.
+      const previewNode = markerRangeForPreview(state, owner, node);
+      planned.push({
+        from: previewNode.from,
+        to: previewNode.to,
+        kind: "mark",
+        className: "cm-live-preview-heading-mark",
+      });
     }
   }
 
-  const unique = new Map<string, PlannedDecoration>();
+  // Quote and code blocks can nest (a fence inside a blockquote), so their
+  // line decorations land on the same line. Combine the classes into one
+  // decoration per line so both surfaces survive.
+  const mergedLine = new Map<number, PlannedDecoration>();
+  const mergedPlanned: PlannedDecoration[] = [];
   for (const item of planned) {
+    if (item.kind !== "line") {
+      mergedPlanned.push(item);
+      continue;
+    }
+    const existing = mergedLine.get(item.from);
+    if (!existing) {
+      const copy = { ...item };
+      mergedLine.set(item.from, copy);
+      mergedPlanned.push(copy);
+      continue;
+    }
+    const classes = new Set(
+      `${existing.className ?? ""} ${item.className ?? ""}`
+        .split(" ")
+        .filter(Boolean),
+    );
+    existing.className = [...classes].join(" ");
+  }
+
+  const unique = new Map<string, PlannedDecoration>();
+  for (const item of mergedPlanned) {
     // The language badge is a zero-width widget at the fence line's end.
     if (item.from >= 0 && item.to >= item.from && item.to <= state.doc.length) {
       unique.set(
@@ -840,36 +925,9 @@ const livePreviewTheme = EditorView.baseTheme({
   ".cm-live-preview-strong": { fontWeight: "700" },
   ".cm-live-preview-emphasis": { fontStyle: "italic" },
   ".cm-live-preview-strikethrough": { textDecoration: "line-through" },
-  ".cm-live-preview-code-block": {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
-  },
-  // Frontmatter reads as metadata: code-like but muted and smaller.
-  ".cm-live-preview-frontmatter": {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, \"Noto Sans Mono\", Consolas, monospace",
-    fontSize: "0.85em",
-    color: "var(--text-muted)",
-  },
-  // The language badge floats at the top-right of a rendered code block.
-  // The anchor line turns the block's first line into the positioning
-  // context so the absolutely placed span hugs the block corner, not the
-  // viewport.
-  ".cm-live-preview-code-lang-anchor": { position: "relative" },
-  ".cm-live-preview-code-lang-badge": {
-    position: "absolute",
-    top: "0",
-    right: "0",
-    fontSize: "0.7em",
-    lineHeight: "1",
-    color: "var(--text-muted)",
-    padding: "0.1em 0.45em",
-    pointerEvents: "none",
-    whiteSpace: "nowrap",
-  },
-  ".cm-live-preview-inline-code": {
-    fontFamily: "KaTeX_Math, STIX Two Math, Cambria Math, Times New Roman, serif",
-    fontStyle: "italic",
-    backgroundColor: "transparent",
-  },
+  // Code blocks, inline code, frontmatter, and the language badge are styled
+  // in livePreviewRefinements.css so they can override the global shell
+  // styles by specificity instead of injection order.
   ".cm-live-preview-link": { textDecoration: "underline" },
   ".cm-live-preview-reference-definition": { opacity: "0.75" },
   ".cm-live-preview-list-marker": {
@@ -878,11 +936,6 @@ const livePreviewTheme = EditorView.baseTheme({
   },
   ".cm-live-preview-task-checkbox": {
     margin: "0 0.25em 0 0",
-  },
-  ".cm-live-preview-horizontal-rule": {
-    borderTop: "1px solid var(--divider)",
-    display: "inline-block",
-    width: "100%",
   },
 });
 

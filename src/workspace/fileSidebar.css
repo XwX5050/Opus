@@ -1,0 +1,32 @@
+/* File tree selection and left-edge rhythm.
+ *
+ * The selected row is the document currently open in the editor: only that
+ * file row gets the accent wash and inset marker. Folders never carry
+ * aria-selected, so expanding one cannot read as "the current document".
+ * Keyboard focus remains the shared focus ring and never borrows this wash. */
+
+.file-sidebar .file-tree-row[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.file-sidebar .file-tree-row[aria-selected="true"]:hover {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.file-sidebar .file-tree-row[aria-selected="true"] .file-tree-name {
+  font-weight: 500;
+}
+
+.file-sidebar .file-tree-row:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The workspace title shares the explorer section header's 8px text inset;
+ * tree rows then step in through the component's existing 24px depth
+ * rhythm, so heading, title, and rows read as one hierarchy. */
+.file-sidebar .sidebar-title {
+  padding-left: var(--space-2);
+}

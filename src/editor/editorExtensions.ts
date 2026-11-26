@@ -29,6 +29,7 @@ import { frontmatterMarkdownExtension } from "./frontmatterExtension";
 import { highlightMarkdownExtension } from "./highlightExtension";
 import { imeCaretExtension } from "./imeCaret";
 import { mathMarkdownExtension } from "./mathExtension";
+import { searchPanelExtensions } from "./searchPanelTheme";
 
 export interface EditorCommands {
   onSave(): void;
@@ -129,6 +130,10 @@ export const editorExtensions = (
   // Backspace), which this placement guarantees.
   codeBlockAutoClose(),
   search({ top: true }),
+  // zh-CN copy and the token-driven panel skin for the find/replace panel.
+  // Presentation overlays call this factory too; the extension is self-
+  // contained and leaves the read-only slide views untouched.
+  searchPanelExtensions,
   keymap.of([
     {
       key: "Mod-e",

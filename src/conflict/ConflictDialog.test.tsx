@@ -29,6 +29,15 @@ describe("ConflictDialog", () => {
     expect(within(dialog).getByRole("button", { name: "保留当前版本" })).toHaveFocus();
   });
 
+  it("marks the default action primary and the destructive action as danger", () => {
+    renderDialog();
+
+    expect(screen.getByRole("button", { name: "保留当前版本" })).toHaveClass("button-primary");
+    expect(screen.getByRole("button", { name: "载入磁盘版本" })).toHaveClass("button-danger");
+    expect(screen.getByRole("button", { name: "另存为…" })).not.toHaveClass("button-primary");
+    expect(screen.getByRole("button", { name: "另存为…" })).not.toHaveClass("button-danger");
+  });
+
   it("requires an explicit click for the destructive disk-version load", async () => {
     const user = userEvent.setup();
     const props = renderDialog();
@@ -66,8 +75,8 @@ describe("ConflictDialog", () => {
     renderDialog();
 
     const dialog = screen.getByRole("dialog", { name: "文件已在磁盘上更改" });
-    const first = within(dialog).getByRole("button", { name: "载入磁盘版本" });
-    const last = within(dialog).getByRole("button", { name: "另存为…" });
+    const first = within(dialog).getByRole("button", { name: "另存为…" });
+    const last = within(dialog).getByRole("button", { name: "保留当前版本" });
     last.focus();
     await user.tab();
     expect(first).toHaveFocus();

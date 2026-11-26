@@ -7,8 +7,6 @@ import type { ClipboardImageInput, DocumentPort } from "../document/DocumentPort
 import { detectPathPlatform } from "../document/platform";
 import { tauriImagePreviewUrl, type ImageDrop } from "../document/tauriDocumentPort";
 import {
-  clampSidebarWidthToWindow,
-  SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   type DocumentSnapshot,
   type RecentItem,
@@ -70,6 +68,16 @@ import {
   setPanelDividerState,
 } from "../motion/motionRuntime";
 import PresentationOverlay from "../present/PresentationOverlay";
+import {
+  clampPanelResizeWidth,
+  panelMaxWidth,
+  resolvePanelDisplayWidths,
+  SHELL_ACTIVITY_RAIL_WIDTH,
+  useEditorScrollState,
+  usePanelLayoutGuard,
+  useWindowWidth,
+} from "./shellLayout";
+import "./shellRefinements.css";
 
 export type ImageDropSubscriber = (
   onImages: (drop: ImageDrop) => void,
@@ -119,7 +127,13 @@ export interface AppShellProps {
 }
 
 const EMPTY_OUTLINE_IDS: ReadonlySet<string> = new Set();
-const ACTIVITY_RAIL_WIDTH = 36;
+const ACTIVITY_RAIL_WIDTH = SHELL_ACTIVITY_RAIL_WIDTH;
+/**
+ * Message the controller writes when the configured provider has no API key
+ * in the credential store. The shell treats it as a configuration hint (not
+ * a failure) and offers the settings action next to it.
+ */
+const TRANSLATION_KEY_MISSING_MESSAGE = "请先在设置中配置翻译 API";
 
 interface PendingTableFocus extends TableFocusRequest {
   readonly tabId: string;
@@ -327,6 +341,72 @@ export default function AppShell({
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineResizing, setOutlineResizing] = useState(false);
+  // Runtime-only space hide for the explorer. It never writes the persisted
+  // collapse preference, so a restart at a wide window shows the sidebar
+  // again even if the previous session ended on a narrow window.
+  const [sidebarAutoHidden, setSidebarAutoHidden] = useState(false);
+  const windowWidth = useWindowWidth();
+  const panelDisplay = resolvePanelDisplayWidths({
+    windowWidth,
+    sidebarWidth: sidebar.width,
+    sidebarCollapsed: sidebar.collapsed,
+    sidebarAutoHidden,
+    outlineWidth: outline.width,
+    outlineOpen,
+  });
+  const sidebarPanelVisible = panelDisplay.sidebarVisible;
+  // Window-width guard: a narrow window reclaims the outline first and then
+  // the explorer so the reading column never drops below a usable width.
+  // Wide persisted panel preferences are displayed clamped by the resolver
+  // above instead of being persisted back or crushing the editor.
+  const panelLayoutGuard = usePanelLayoutGuard({
+    windowWidth,
+    sidebarWidth: sidebar.width,
+    sidebarCollapsed: sidebar.collapsed,
+    sidebarAutoHidden,
+    outlineWidth: outline.width,
+    outlineOpen,
+    hideSidebar: () => setSidebarAutoHidden(true),
+    showSidebar: () => setSidebarAutoHidden(false),
+    openOutline: () => setOutlineOpen(true),
+    closeOutline: () => setOutlineOpen(false),
+  });
+  // User-initiated panel changes respect the editor floor too: opening the
+  // outline makes the explorer give way when both preferred widths no longer
+  // fit. Expanding the explorer lets the guard close (and remember) the
+  // outline through the same space rule.
+  const openOutlinePanel = () => {
+    panelLayoutGuard.noteManualOutlineToggle();
+    if (
+      panelDisplay.sidebarVisible &&
+      sidebar.width + outline.width > panelDisplay.room
+    ) {
+      setSidebarAutoHidden(true);
+    }
+    setOutlineOpen(true);
+  };
+  const revealSidebarPanel = () => {
+    setSidebarAutoHidden(false);
+    setSidebar((current) =>
+      current.collapsed ? { ...current, collapsed: false } : current,
+    );
+  };
+  const toggleSidebarPanel = () => {
+    if (sidebarPanelVisible) {
+      setSidebarAutoHidden(false);
+      setSidebar((current) => ({ ...current, collapsed: true }));
+      return;
+    }
+    revealSidebarPanel();
+  };
+  const toggleOutlinePanel = () => {
+    if (outlineOpen) {
+      panelLayoutGuard.noteManualOutlineToggle();
+      setOutlineOpen(false);
+      return;
+    }
+    openOutlinePanel();
+  };
   // Drag-resize writes the live width straight to the panel and header instead
   // of re-rendering the whole shell on every pointermove; the final width is
   // committed to the preferences (which persist the session) once, on
@@ -355,6 +435,8 @@ export default function AppShell({
       railRef: RefObject<HTMLDivElement | null>;
       panelRef: RefObject<HTMLElement | null>;
       startWidth: number;
+      /** Widest this panel may become without breaking the editor floor. */
+      maxWidth: number;
       direction: 1 | -1;
       setResizing: (resizing: boolean) => void;
       onLiveWidthChange?: (width: number) => void;
@@ -362,6 +444,7 @@ export default function AppShell({
     },
   ) => {
     if (event.button !== 0) return;
+    if (options.maxWidth < SIDEBAR_MIN_WIDTH) return;
     // Without this the press can start a text-selection gesture in WebKit
     // before the resizing body class lands; selecting editor text mid-drag is
     // never desirable on a resize handle. (Focus still reaches the handle
@@ -405,9 +488,9 @@ export default function AppShell({
       }
       options.dragRef.current = null;
       options.setResizing(false);
-      if (commit) {
+      if (commit && drag.lastWidth !== drag.startWidth) {
         options.commit(drag.lastWidth);
-      } else {
+      } else if (!commit) {
         // A cancelled drag puts the committed width back: the live writes
         // went straight to the DOM, so React never knew about them.
         applyWidth(drag.startWidth);
@@ -424,9 +507,9 @@ export default function AppShell({
         finish(true);
         return;
       }
-      drag.lastWidth = clampSidebarWidthToWindow(
+      drag.lastWidth = clampPanelResizeWidth(
         drag.startWidth + options.direction * (move.clientX - drag.startX),
-        window.innerWidth,
+        options.maxWidth,
       );
       scheduleFlush();
     };
@@ -470,13 +553,25 @@ export default function AppShell({
       outlineDrag.current?.cleanup();
     };
   }, []);
+  const sidebarResizeLimit = (): number =>
+    panelMaxWidth(
+      window.innerWidth,
+      outlineOpen ? panelDisplay.outlineWidth : 0,
+    );
+  const outlineResizeLimit = (): number =>
+    panelMaxWidth(
+      window.innerWidth,
+      sidebarPanelVisible ? panelDisplay.sidebarWidth : 0,
+    );
   const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const committed = sidebar.width;
+    const maxWidth = sidebarResizeLimit();
+    if (maxWidth < SIDEBAR_MIN_WIDTH) return;
     beginPanelResize(event, {
       dragRef: sidebarResizeRef,
       railRef: sidebarRailRef,
       panelRef: sidebarRef,
-      startWidth: committed,
+      startWidth: panelDisplay.sidebarWidth,
+      maxWidth,
       direction: 1,
       setResizing: setSidebarResizing,
       onLiveWidthChange: (width) => {
@@ -486,9 +581,9 @@ export default function AppShell({
         );
       },
       commit: (width) => {
-        if (width !== committed) {
-          setSidebar((current) => ({ ...current, width }));
-        }
+        setSidebar((current) =>
+          current.width === width ? current : { ...current, width },
+        );
       },
     });
   };
@@ -496,41 +591,57 @@ export default function AppShell({
     const step = 16;
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
+    const maxWidth = sidebarResizeLimit();
+    if (maxWidth < SIDEBAR_MIN_WIDTH) return;
     const delta = event.key === "ArrowRight" ? step : -step;
-    setSidebar((current) => ({
-      ...current,
-      width: clampSidebarWidthToWindow(current.width + delta, window.innerWidth),
-    }));
+    const next = clampPanelResizeWidth(
+      panelDisplay.sidebarWidth + delta,
+      maxWidth,
+    );
+    if (next === panelDisplay.sidebarWidth) return;
+    setSidebar((current) => ({ ...current, width: next }));
   };
   const startOutlineResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const committed = outline.width;
+    const maxWidth = outlineResizeLimit();
+    if (maxWidth < SIDEBAR_MIN_WIDTH) return;
     beginPanelResize(event, {
       dragRef: outlineResizeRef,
       railRef: outlineRailRef,
       panelRef: outlineRef,
-      startWidth: committed,
+      startWidth: panelDisplay.outlineWidth,
+      maxWidth,
       direction: -1,
       setResizing: setOutlineResizing,
       commit: (width) => {
-        if (width !== committed) {
-          setOutline({ width });
-        }
+        setOutline((current) =>
+          current.width === width ? current : { width },
+        );
       },
     });
   };
   const onOutlineResizerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
+    const maxWidth = outlineResizeLimit();
+    if (maxWidth < SIDEBAR_MIN_WIDTH) return;
     const delta = event.key === "ArrowLeft" ? 16 : -16;
-    setOutline((current) => ({
-      width: clampSidebarWidthToWindow(current.width + delta, window.innerWidth),
-    }));
+    const next = clampPanelResizeWidth(
+      panelDisplay.outlineWidth + delta,
+      maxWidth,
+    );
+    if (next === panelDisplay.outlineWidth) return;
+    setOutline({ width: next });
   };
-  // The resizers' ARIA max follows the same window-aware clamp used while
-  // dragging, so the keyboard range matches what a drag can reach.
-  const windowSidebarMaxWidth = clampSidebarWidthToWindow(
-    SIDEBAR_MAX_WIDTH,
-    window.innerWidth,
+  // The resizers' ARIA max follows the same layout-aware cap used while
+  // dragging: the activity rail, the other visible panel and the editor floor
+  // all constrain what a drag or key press can reach.
+  const sidebarResizeMaxWidth = panelMaxWidth(
+    windowWidth,
+    outlineOpen ? panelDisplay.outlineWidth : 0,
+  );
+  const outlineResizeMaxWidth = panelMaxWidth(
+    windowWidth,
+    sidebarPanelVisible ? panelDisplay.sidebarWidth : 0,
   );
   // While dragging, force the resize cursor and block text selection
   // anywhere under the pointer.
@@ -556,6 +667,9 @@ export default function AppShell({
   // The live EditorView of the active tab, fed by MarkdownEditor's
   // onEditorView prop; the translation viewport provider reads it on demand.
   const activeEditorViewRef = useRef<EditorView | null>(null);
+  // The same view as state, so the scroll-derived title/outline state
+  // re-attaches when a tab's view is created or destroyed.
+  const [activeEditorView, setActiveEditorView] = useState<EditorView | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const pendingTabFocusRef = useRef<"close" | "reopen" | null>(null);
   const active = controller.state.tabs.find(
@@ -605,6 +719,18 @@ export default function AppShell({
   if (activeTranslation?.state.phase === "translating") translationLabel = "取消翻译";
   else if (translationReady) translationLabel = "显示原文";
   else if (activeTranslation?.state.phase === "ready") translationLabel = "显示译文";
+  // While the outline is collapsed, the reading/translation state would be
+  // invisible (both controls live in the outline toolbar). A slim status bar
+  // above the editor keeps the state visible and offers an exit action.
+  const editorStateAction =
+    activeTranslation?.state.phase === "translating"
+      ? "取消翻译"
+      : translationReady
+        ? "显示原文"
+        : "返回编辑";
+  const showEditorStateBar = Boolean(
+    active && !outlineOpen && (translationShown || viewMode === "reading"),
+  );
   // The translation scheduler picks batches nearest the visible character
   // range of the active editor. The range is provided on demand — the getter
   // is read fresh at every batch pick, so no scroll listener is needed — and
@@ -663,6 +789,26 @@ export default function AppShell({
   const activeCollapsedOutlineIds = active
     ? collapsedOutlineIdsByTab.get(active.id) ?? EMPTY_OUTLINE_IDS
     : EMPTY_OUTLINE_IDS;
+  // Scroll-derived shell state: the title folds away once the document is
+  // scrolled, and the outline highlights the section holding the viewport.
+  // An open inline title editor pins the title expanded.
+  const editorScrollState = useEditorScrollState(activeEditorView, activeOutline);
+  // The title must never be made inert/aria-hidden while it owns focus: a
+  // wheel scroll with the title button focused would otherwise drop focus to
+  // the body and strand the user. Focus inside the title keeps it expanded.
+  const titleRef = useRef<HTMLDivElement>(null);
+  const [titleHasFocus, setTitleHasFocus] = useState(false);
+  const titleCompact =
+    editorScrollState.titleCompact && titleEditing === null && !titleHasFocus;
+  // Closing the inline title editor removes the focused input; browsers move
+  // focus to the body without a React blur in that case, so clear the flag
+  // unless focus really stayed inside the title.
+  useEffect(() => {
+    if (titleEditing !== null) return;
+    if (!titleRef.current?.contains(document.activeElement)) {
+      setTitleHasFocus(false);
+    }
+  }, [titleEditing]);
   const publishOutline = (
     tabId: string,
     headings: ReadonlyArray<OutlineHeading>,
@@ -799,6 +945,10 @@ export default function AppShell({
   const anyDialogOpen = Boolean(
     closing || saveErrorOpen || recoveryOpen || conflictTab || settingsOpen || updateOpen,
   );
+  // The app-wide alert channel. A missing translation key is a setup hint,
+  // not a failure: it gets a quieter accent tone and a direct settings action.
+  const alertMessage = renameError ?? controller.error ?? externalError;
+  const translationKeyHint = alertMessage === TRANSLATION_KEY_MISSING_MESSAGE;
 
   useGSAP(
     () => {
@@ -817,7 +967,7 @@ export default function AppShell({
   // a preview of the collapse/expand they trigger.
   const panelDividerStateRef = useRef({ leftCollapsed: true, rightCollapsed: true });
   panelDividerStateRef.current = {
-    leftCollapsed: sidebar.collapsed,
+    leftCollapsed: !sidebarPanelVisible,
     rightCollapsed: !outlineOpen,
   };
   useGSAP(
@@ -881,14 +1031,14 @@ export default function AppShell({
       const root = shellRef.current;
       if (!root) return;
       const leftToggle = root.querySelector<HTMLElement>(".sidebar-toggle");
-      if (leftToggle) setPanelDividerState(leftToggle, "left", sidebar.collapsed);
+      if (leftToggle) setPanelDividerState(leftToggle, "left", !sidebarPanelVisible);
       const rightToggle = root.querySelector<HTMLElement>(".right-sidebar-toggle");
       if (rightToggle) setPanelDividerState(rightToggle, "right", !outlineOpen);
     },
     {
       scope: shellRef,
       dependencies: [
-        sidebar.collapsed,
+        sidebarPanelVisible,
         outlineOpen,
         sidebarAvailable,
         Boolean(active),
@@ -942,9 +1092,11 @@ export default function AppShell({
   useEffect(() => {
     if (!workspacePath || !revealSidebarOnOpenRef.current) return;
     revealSidebarOnOpenRef.current = false;
-    setSidebar((current) =>
-      current.collapsed ? { ...current, collapsed: false } : current,
-    );
+    revealSidebarPanel();
+    // The reveal helper is recreated with the current panel widths; the ref
+    // guard above keeps the effect from acting on anything but an explicit
+    // workspace open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspacePath, setSidebar]);
 
   useEffect(() => {
@@ -1061,7 +1213,7 @@ export default function AppShell({
     error instanceof Error ? error.message : String(error);
 
   /** The document title shown above the editor: file name without its
-   *  Markdown extension (Untitled documents carry no extension at all). */
+   *  Markdown extension (the default 未命名 title carries no extension). */
   const titleBaseName = (title: string): string =>
     title.replace(/\.(md|markdown)$/i, "");
 
@@ -1317,7 +1469,6 @@ export default function AppShell({
         {
           id: "close",
           label: "关闭标签",
-          danger: true,
           onSelect: () => closeTab(tabId),
         },
       ],
@@ -1679,12 +1830,12 @@ export default function AppShell({
         ref={headerRef}
         aria-label="应用标题栏"
         className="app-header"
-        data-sidebar-collapsed={sidebar.collapsed}
+        data-sidebar-collapsed={sidebarPanelVisible ? "false" : "true"}
         data-tauri-drag-region
         onMouseDown={onHeaderMouseDown}
         onDoubleClick={onHeaderDoubleClick}
         style={{
-          "--header-leading-width": `${ACTIVITY_RAIL_WIDTH + (sidebarAvailable && !sidebar.collapsed ? sidebar.width : 0)}px`,
+          "--header-leading-width": `${ACTIVITY_RAIL_WIDTH + (sidebarAvailable && sidebarPanelVisible ? panelDisplay.sidebarWidth : 0)}px`,
         } as CSSProperties}
       >
         <div className="app-header-leading">
@@ -1747,16 +1898,11 @@ export default function AppShell({
           <button
             type="button"
             className="icon-button sidebar-toggle"
-            aria-expanded={!sidebar.collapsed}
+            aria-expanded={sidebarPanelVisible}
             aria-controls="app-sidebar"
-            aria-label={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
-            title={sidebar.collapsed ? "展开侧栏" : "收起侧栏"}
-            onClick={() =>
-              setSidebar((current) => ({
-                ...current,
-                collapsed: !current.collapsed,
-              }))
-            }
+            aria-label={sidebarPanelVisible ? "收起侧栏" : "展开侧栏"}
+            title={sidebarPanelVisible ? "收起侧栏" : "展开侧栏"}
+            onClick={toggleSidebarPanel}
           >
             <PanelLeftIcon />
           </button>
@@ -1801,7 +1947,7 @@ export default function AppShell({
                 aria-controls="app-outline"
                 aria-label={outlineOpen ? "收起右侧栏" : "展开右侧栏"}
                 title={outlineOpen ? "收起右侧栏" : "展开右侧栏"}
-                onClick={() => setOutlineOpen((current) => !current)}
+                onClick={toggleOutlinePanel}
               >
                 <PanelRightIcon />
               </button>
@@ -1818,7 +1964,7 @@ export default function AppShell({
         <nav
           className="activity-rail"
           aria-label="活动栏"
-          data-sidebar-collapsed={sidebar.collapsed}
+          data-sidebar-collapsed={sidebarPanelVisible ? "false" : "true"}
         >
           <div className="activity-rail-top">
             <button
@@ -1828,9 +1974,9 @@ export default function AppShell({
               title="文件"
               aria-haspopup="dialog"
               onClick={() => {
-                if (sidebarView !== "files" || sidebar.collapsed) {
+                if (sidebarView !== "files" || !sidebarPanelVisible) {
                   setSidebarView("files");
-                  setSidebar((current) => ({ ...current, collapsed: false }));
+                  revealSidebarPanel();
                 } else {
                   setFileSwitcherOpen(true);
                 }
@@ -1848,7 +1994,7 @@ export default function AppShell({
                 aria-controls="app-sidebar"
                 onClick={() => {
                   setSidebarView((current) => current === "search" ? "files" : "search");
-                  setSidebar((current) => ({ ...current, collapsed: false }));
+                  revealSidebarPanel();
                 }}
               >
                 <SearchIcon size={16} />
@@ -1862,17 +2008,19 @@ export default function AppShell({
             ref={sidebarRailRef}
             className="sidebar-rail"
             data-motion-panel="sidebar"
-            data-collapsed={sidebar.collapsed}
-            style={{ width: sidebar.collapsed ? 0 : sidebar.width }}
+            data-collapsed={sidebarPanelVisible ? "false" : "true"}
+            style={{ width: sidebarPanelVisible ? panelDisplay.sidebarWidth : 0 }}
           >
           <aside
             ref={sidebarRef}
             id="app-sidebar"
             aria-label="侧栏"
-            aria-hidden={sidebar.collapsed ? true : undefined}
-            inert={sidebar.collapsed ? true : undefined}
+            aria-hidden={!sidebarPanelVisible ? true : undefined}
+            inert={!sidebarPanelVisible ? true : undefined}
             className="sidebar"
-            style={{ width: sidebar.width }}
+            style={{
+              width: sidebarPanelVisible ? panelDisplay.sidebarWidth : sidebar.width,
+            }}
           >
             {sidebarView === "search" ? (
               <WorkspaceSearch
@@ -1905,6 +2053,7 @@ export default function AppShell({
                         <FileSidebar
                           root={controller.workspace}
                           port={port}
+                          activePath={active?.path ?? null}
                           onOpenFile={(path) => void controller.openPath(path)}
                           onCloseWorkspace={controller.closeWorkspace}
                         />
@@ -1933,14 +2082,14 @@ export default function AppShell({
             </div>
           </aside>
           </div>
-          {!sidebar.collapsed && (
+          {sidebarPanelVisible && (
           <div
             role="slider"
             aria-orientation="vertical"
             aria-label="调整侧栏宽度"
-            aria-valuenow={sidebar.width}
+            aria-valuenow={panelDisplay.sidebarWidth}
             aria-valuemin={SIDEBAR_MIN_WIDTH}
-            aria-valuemax={windowSidebarMaxWidth}
+            aria-valuemax={sidebarResizeMaxWidth}
             tabIndex={0}
             className="sidebar-resizer"
             onPointerDown={startSidebarResize}
@@ -1962,7 +2111,19 @@ export default function AppShell({
           onContextMenu={openEditorAreaContextMenu}
         >
         {active && (
-          <div className="document-title">
+          <div
+            ref={titleRef}
+            className="document-title"
+            data-compact={titleCompact ? "true" : undefined}
+            inert={titleCompact ? true : undefined}
+            aria-hidden={titleCompact ? true : undefined}
+            onFocus={() => setTitleHasFocus(true)}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setTitleHasFocus(false);
+              }
+            }}
+          >
             {titleEditing?.tabId === active.id && titleEditableFor(active) ? (
               <InlineNameInput
                 key={titleEditing.sequence}
@@ -2004,6 +2165,37 @@ export default function AppShell({
               <span className="document-title-static">
                 {titleBaseName(active.title)}
               </span>
+            )}
+          </div>
+        )}
+        {showEditorStateBar && active && (
+          <div className="editor-state-bar" role="group" aria-label="视图状态">
+            <button
+              type="button"
+              className="editor-state-chip"
+              title="展开大纲"
+              aria-label={`${
+                translationShown ? "正在查看译文" : "阅读模式"
+              }，打开大纲`}
+              onClick={openOutlinePanel}
+            >
+              <BookOpenIcon />
+              <span>
+                {translationShown ? "正在查看译文" : "阅读模式"}
+              </span>
+            </button>
+            {activeTranslation?.state.phase !== "translating" && (
+              <button
+                type="button"
+                className="editor-state-exit"
+                onClick={() =>
+                  translationShown
+                    ? controller.toggleTranslation(active.id)
+                    : controller.toggleReading(active.id)
+                }
+              >
+                {editorStateAction}
+              </button>
             )}
           </div>
         )}
@@ -2108,6 +2300,7 @@ export default function AppShell({
             performanceMode={lightMode ? "light" : "full"}
             onEditorView={(view) => {
               activeEditorViewRef.current = view;
+              setActiveEditorView(view);
             }}
           />
         ) : (
@@ -2128,9 +2321,9 @@ export default function AppShell({
                 role="slider"
                 aria-orientation="vertical"
                 aria-label="调整大纲宽度"
-                aria-valuenow={outline.width}
+                aria-valuenow={panelDisplay.outlineWidth}
                 aria-valuemin={SIDEBAR_MIN_WIDTH}
-                aria-valuemax={windowSidebarMaxWidth}
+                aria-valuemax={outlineResizeMaxWidth}
                 tabIndex={0}
                 className="outline-resizer"
                 onPointerDown={startOutlineResize}
@@ -2143,7 +2336,7 @@ export default function AppShell({
               data-motion-panel="outline"
               data-collapsed={!outlineOpen}
               style={{
-                width: outlineOpen ? outline.width : 0,
+                width: outlineOpen ? panelDisplay.outlineWidth : 0,
               }}
             >
               <aside
@@ -2153,7 +2346,9 @@ export default function AppShell({
                 aria-hidden={!outlineOpen ? true : undefined}
                 inert={!outlineOpen ? true : undefined}
                 className="outline-sidebar"
-                style={{ width: outline.width }}
+                style={{
+                  width: outlineOpen ? panelDisplay.outlineWidth : outline.width,
+                }}
               >
                 <OutlinePanel
                   actions={
@@ -2173,10 +2368,14 @@ export default function AppShell({
                         className="icon-button view-mode-toggle"
                         aria-pressed={viewMode === "reading"}
                         aria-label={viewMode === "reading" ? "阅读模式" : "编辑模式"}
-                        title={viewMode === "reading" ? "阅读模式" : "编辑模式"}
+                        title={
+                          viewMode === "reading"
+                            ? "切换到编辑模式"
+                            : "切换到阅读模式"
+                        }
                         onClick={() => controller.toggleReading(active.id)}
                       >
-                        {viewMode === "reading" ? <BookOpenIcon /> : <PencilLineIcon />}
+                        {viewMode === "reading" ? <PencilLineIcon /> : <BookOpenIcon />}
                       </button>
                       <button
                         type="button"
@@ -2191,6 +2390,7 @@ export default function AppShell({
                     </>
                   }
                   headings={activeOutline}
+                  activeId={editorScrollState.activeHeadingId}
                   collapsedIds={activeCollapsedOutlineIds}
                   onToggle={(id) => toggleOutlineBranch(active.id, id)}
                   onCollapseAll={() =>
@@ -2209,8 +2409,25 @@ export default function AppShell({
       </div>
 
       {(controller.error || externalError || renameError) && (
-        <div role="alert" className="app-alert" data-motion-panel="alert">
-          <span>{renameError ?? controller.error ?? externalError}</span>
+        <div
+          role="alert"
+          className="app-alert"
+          data-motion-panel="alert"
+          data-tone={translationKeyHint ? "notice" : "danger"}
+        >
+          <span>{alertMessage}</span>
+          {translationKeyHint && (
+            <button
+              type="button"
+              className="app-alert-action"
+              onClick={(event) => {
+                controller.dismissError();
+                openSettingsFrom(event.currentTarget);
+              }}
+            >
+              打开设置
+            </button>
+          )}
           {renameError ? (
             <button
               type="button"
@@ -2263,12 +2480,20 @@ export default function AppShell({
           <button
             ref={saveButtonRef}
             type="button"
+            className="button-primary"
             disabled={controller.closeSaving}
             onClick={() => void controller.confirmClose("save")}
           >
             {controller.closeSaving ? "保存中…" : "保存"}
           </button>
-          <button type="button" disabled={controller.closeSaving} onClick={() => void controller.confirmClose("discard")}>放弃</button>
+          <button
+            type="button"
+            className="button-danger"
+            disabled={controller.closeSaving}
+            onClick={() => void controller.confirmClose("discard")}
+          >
+            放弃
+          </button>
           <button type="button" disabled={controller.closeSaving} onClick={() => void controller.confirmClose("cancel")}>取消</button>
           </div>
         </div>
@@ -2287,7 +2512,14 @@ export default function AppShell({
           <h2 id="save-error-dialog-title">保存失败</h2>
           <p>{controller.saveError.message}</p>
           <div className="dialog-actions">
-          <button ref={retryButtonRef} type="button" onClick={controller.retrySave}>重试</button>
+          <button
+            ref={retryButtonRef}
+            type="button"
+            className="button-primary"
+            onClick={controller.retrySave}
+          >
+            重试
+          </button>
           <button type="button" onClick={controller.saveErrorSaveAs}>另存为…</button>
           <button type="button" onClick={controller.dismissSaveError}>取消</button>
           </div>
@@ -2351,6 +2583,7 @@ export default function AppShell({
           <button
             ref={updateButtonRef}
             type="button"
+            className="button-primary"
             disabled={updateDownloading}
             onClick={installUpdate}
           >

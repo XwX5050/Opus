@@ -243,7 +243,7 @@ export const documentReducer = (
       const document: DocumentSnapshot = {
         id: action.id,
         path: null,
-        title: action.title ?? "Untitled",
+        title: action.title ?? "未命名",
         text: "",
         savedText: "",
         hasUtf8Bom: false,

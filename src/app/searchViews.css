@@ -1,0 +1,194 @@
+/* Search surfaces loaded after the global sheet: the full-text results adopt
+   the explorer's row geometry, and both search fields stay single-layer
+   instead of nesting a native field inside the styled container. */
+
+/* ---------- Workspace full-text search ---------- */
+
+/* Global form-control styles are more specific than the plain descendant
+   rules in app.css, so the field itself must be flattened here. */
+.workspace-search .workspace-search-form input[type="search"] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+}
+
+.workspace-search .workspace-search-form input[type="search"]::-webkit-search-decoration,
+.workspace-search .workspace-search-form input[type="search"]::-webkit-search-cancel-button,
+.workspace-search .workspace-search-form input[type="search"]::-webkit-search-results-button,
+.workspace-search .workspace-search-form input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* One frame on focus: the container outline, never border plus outline. */
+.workspace-search .workspace-search-form:focus-within {
+  border-color: var(--divider);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.workspace-search-dedicated .workspace-search-form:focus-within {
+  outline: none;
+}
+
+.workspace-search-dedicated .workspace-search-form input[type="search"] {
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+}
+
+.workspace-search-dedicated .workspace-search-form input[type="search"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.workspace-search .workspace-search-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-2);
+}
+
+.workspace-search .workspace-search-group {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.workspace-search .workspace-search-file {
+  padding: var(--space-2) var(--space-2) 0;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size-small);
+  font-weight: 600;
+}
+
+.workspace-search .workspace-search-match {
+  min-height: 30px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-medium);
+  transition:
+    background-color var(--anim-fast) ease,
+    color var(--anim-fast) ease;
+}
+
+.workspace-search .workspace-search-match:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.workspace-search .workspace-search-match[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.workspace-search .workspace-search-line mark.workspace-search-hit {
+  padding: 0 1px;
+  border-radius: var(--radius-small);
+  background: var(--search-match);
+  color: var(--text-primary);
+}
+
+/* On the tinted selection row an orange hit would fight the background;
+   emphasize with weight and an underline instead. */
+.workspace-search .workspace-search-match[aria-selected="true"] .workspace-search-hit {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}
+
+.workspace-search .workspace-search-match[aria-selected="true"] .workspace-search-line-number {
+  color: var(--text-secondary);
+}
+
+/* ---------- Native file quick-switcher ---------- */
+
+.file-switcher-dialog .file-switcher-input-row input[type="text"] {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.file-switcher-dialog .file-switcher-input-row:focus-within {
+  border-bottom-color: var(--accent);
+}
+
+.file-switcher-dialog .file-switcher-option {
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.file-switcher-dialog .file-switcher-option-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-switcher-dialog .file-switcher-option-dir {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-switcher-dialog .file-switcher-option[aria-selected="true"] .file-switcher-option-dir {
+  color: var(--text-secondary);
+}
+
+.file-switcher-dialog .file-switcher-option mark {
+  padding: 0 1px;
+  border-radius: var(--radius-small);
+  background: var(--search-match);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.file-switcher-dialog .file-switcher-option[aria-selected="true"] mark {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}
+
+/* Neutral chip: 12px copy needs >= 4.5:1 on its own fill, and the violet
+   accent-soft pair could not deliver that on the selected row. */
+.file-switcher-dialog .file-switcher-option-badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-small);
+  background: var(--surface-active);
+  color: var(--text-primary);
+  font-size: var(--font-ui-size-small);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.file-switcher-dialog .file-switcher-shortcut {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.file-switcher-dialog .file-switcher-shortcut kbd {
+  min-width: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-small);
+  background: var(--canvas);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}

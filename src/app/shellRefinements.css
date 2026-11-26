@@ -1,0 +1,139 @@
+/*
+ * AppShell-owned refinements kept out of src/theme/app.css so shell layout
+ * changes can evolve without colliding with theme-level edits. Rules here
+ * only adjust shell geometry, the shell's own status bar and alert tone.
+ *
+ * Selectors are scoped tightly enough not to depend on stylesheet order
+ * (this file can be emitted before or after the global app styles).
+ */
+
+/* ---------- Reading column: keep it usable beside both panels ---------- */
+
+/* Scoped above the global `.editor-column` rule so it does not depend on
+   stylesheet order (the shell stylesheet may be emitted before app.css). */
+.app-shell .editor-column {
+  /* The resize guard reclaims panels before this floor is reached; the floor
+     itself is the last line of defence, so a panel that is momentarily open
+     can never crush the editor into an unreadable strip. Capped at the body
+     width so an extremely narrow window does not overflow sideways. */
+  min-width: min(320px, 100%);
+}
+
+/* ---------- Document title: aligned with body text, folds on scroll ---------- */
+
+.editor-area > .document-title {
+  /* .markdown-editor .cm-line reserves 2px of inline padding (--space-0-5)
+     inside the reading column; the title uses the same 2px inset and drops
+     the button's own horizontal padding, so its text starts on the same
+     vertical line as the body text. */
+  padding: var(--space-3) 2px var(--space-1) 2px;
+  max-height: 72px;
+  overflow: hidden;
+  transition:
+    max-height var(--anim-moderate) var(--anim-easing),
+    padding var(--anim-moderate) var(--anim-easing),
+    opacity var(--anim-fast) ease;
+}
+
+.editor-area > .document-title[data-compact="true"] {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor-area > .document-title .document-title-button,
+.editor-area > .document-title .document-title-static,
+.editor-area > .document-title input {
+  /* Never louder than the document's own H1 (1.6em of the body size). */
+  font-size: calc(var(--editor-body-size) * 1.5);
+}
+
+.editor-area > .document-title .document-title-button {
+  /* The container already provides the 2px body inset (matching .cm-line);
+     any further padding would push the title out of alignment. */
+  padding: var(--space-1) 0;
+}
+
+.editor-area > .document-title input {
+  padding: var(--space-1) 0;
+}
+
+/* ---------- Compact state bar while the outline is collapsed ---------- */
+
+.editor-state-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  width: 100%;
+  max-width: min(
+    clamp(
+      var(--editor-content-width),
+      68%,
+      calc(var(--editor-content-width) * 1.6)
+    ),
+    calc(100% - var(--space-5) * 2)
+  );
+  margin-inline: auto;
+  padding: 0 2px var(--space-1) 2px;
+}
+
+.editor-state-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size-small);
+  white-space: nowrap;
+}
+
+.editor-state-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.editor-state-chip:hover:not(:disabled) {
+  border-color: var(--divider);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.editor-state-exit {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--font-ui-size-small);
+  white-space: nowrap;
+}
+
+.editor-state-exit:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--accent);
+}
+
+/* ---------- Alert tone: setup hints are not failures ---------- */
+
+.app-alert[data-tone="notice"] {
+  border-left-color: var(--accent);
+}
+
+.app-alert[data-tone="notice"] .app-alert-action {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.app-alert[data-tone="notice"] .app-alert-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--accent);
+}

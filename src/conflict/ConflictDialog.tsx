@@ -67,9 +67,20 @@ export default function ConflictDialog({
       <p>
         {path ?? title} 已被其他程序修改。载入磁盘版本会放弃当前未保存的修改。
       </p>
-      <button type="button" onClick={onLoadDisk}>载入磁盘版本</button>
-      <button ref={keepButtonRef} type="button" onClick={onKeepLocal}>保留当前版本</button>
-      <button type="button" onClick={onSaveAs}>另存为…</button>
+      <div className="dialog-actions">
+        <button type="button" onClick={onSaveAs}>另存为…</button>
+        <button type="button" className="button-danger" onClick={onLoadDisk}>
+          载入磁盘版本
+        </button>
+        <button
+          ref={keepButtonRef}
+          type="button"
+          className="button-primary"
+          onClick={onKeepLocal}
+        >
+          保留当前版本
+        </button>
+      </div>
     </div>
   );
 }

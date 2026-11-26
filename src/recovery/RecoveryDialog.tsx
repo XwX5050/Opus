@@ -98,15 +98,29 @@ export default function RecoveryDialog({
           <li key={info.draftId}>
             <strong>{info.title}</strong>
             {info.originalPath && <span> {info.originalPath}</span>}
-            <button type="button" onClick={() => onRestore(info)}>恢复</button>
-            <button
-              type="button"
-              aria-expanded={expandedId === info.draftId}
-              onClick={() => toggleSource(info.draftId)}
-            >
-              查看源码
-            </button>
-            <button type="button" onClick={() => onDiscard(info)}>丢弃</button>
+            <div className="recovery-draft-actions">
+              <button
+                type="button"
+                className="button-primary"
+                onClick={() => onRestore(info)}
+              >
+                恢复
+              </button>
+              <button
+                type="button"
+                aria-expanded={expandedId === info.draftId}
+                onClick={() => toggleSource(info.draftId)}
+              >
+                查看源码
+              </button>
+              <button
+                type="button"
+                className="button-danger"
+                onClick={() => onDiscard(info)}
+              >
+                丢弃
+              </button>
+            </div>
             {expandedId === info.draftId && (
               <pre aria-label={`${info.title} 的草稿源码`}>
                 {source?.draftId === info.draftId ? source.text : "载入中…"}

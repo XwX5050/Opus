@@ -2,14 +2,14 @@ import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClipboardImageInput, DirectoryEntry, DocumentPort, SavedFile, WorkspaceRoot } from "../document/DocumentPort";
 import { DocumentPortError } from "../document/DocumentPort";
 import {
   MemoryDocumentPort,
   pseudoTranslate,
 } from "../document/memoryDocumentPort";
-import type { OpenedFile, PendingWriteRequest, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
+import type { OpenedFile, PendingWriteRequest, PersistedSession, RecoveryDraft, RecoveryDraftInfo, SaveTarget } from "../document/types";
 import type { TranslationSettings } from "../translate/types";
 import type { TranslationTextRange } from "../translate/translate";
 import { checkUpdate, type UpdateCheckResult } from "./updates";
@@ -128,7 +128,8 @@ class InspectablePort implements DocumentPort {
   async readDraft(): Promise<RecoveryDraft> { throw new DocumentPortError("not_found", "no drafts"); }
   async writeDraft(): Promise<RecoveryDraftInfo> { throw new DocumentPortError("io", "not supported"); }
   async discardDraft() {}
-  async loadSession() { return null; }
+  sessionToLoad: Promise<PersistedSession | null> | null = null;
+  async loadSession() { return this.sessionToLoad; }
   async saveSession() {}
   async flushSession() {}
   async onCloseRequested() { return () => {}; }
@@ -164,7 +165,7 @@ describe("AppShell", () => {
 
     const empty = screen.getByRole("region", { name: "空白状态" });
     expect(within(empty).getByRole("heading", { level: 1, name: "Opus" })).toBeVisible();
-    expect(within(empty).getByText("新建文件…")).toBeVisible();
+    expect(within(empty).getByText("新建文件")).toBeVisible();
     expect(within(empty).getByText("打开文件…")).toBeVisible();
     expect(within(empty).getByText("打开文件夹…")).toBeVisible();
     expect(screen.getByRole("button", { name: "新建" })).toBeVisible();
@@ -402,9 +403,10 @@ describe("AppShell", () => {
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 950, buttons: 1 });
     await waitFor(() => expect(outline).toHaveStyle({ width: "350px" }));
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 0, buttons: 1 });
-    // The upper bound shrank with the jsdom window (1024px → 50% = 512px);
-    // drags beyond it stop at the window-aware cap instead of 1200.
-    await waitFor(() => expect(outline).toHaveStyle({ width: "512px" }));
+    // The layout cap reserves the activity rail, the explorer (260px) and the
+    // 320px editor floor: 1024 - 36 - 260 - 320 = 408px, below the 512px
+    // window-fraction cap.
+    await waitFor(() => expect(outline).toHaveStyle({ width: "408px" }));
     fireEvent.pointerMove(resizer, { pointerId: 2, clientX: 2000, buttons: 1 });
     await waitFor(() => expect(outline).toHaveStyle({ width: "120px" }));
     fireEvent.pointerUp(resizer, { pointerId: 2 });
@@ -678,11 +680,17 @@ describe("AppShell", () => {
       "true",
     );
 
-    // Closing the outline removes both toggles from the DOM entirely.
+    // Closing the outline removes the toolbar toggles from the interactive
+    // tree; reading mode stays visible as the compact status chip above the
+    // editor, which is how the state is exited or the outline reopened.
     await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
-    expect(
-      screen.queryByRole("button", { name: /^(阅读|编辑)模式$/ }),
-    ).not.toBeInTheDocument();
+    const readingChip = screen.getByRole("button", {
+      name: "阅读模式，打开大纲",
+    });
+    expect(readingChip).toHaveAttribute("title", "展开大纲");
+    expect(screen.getByRole("group", { name: "视图状态" })).toContainElement(
+      readingChip,
+    );
     expect(screen.queryByRole("button", { name: "翻译文档" })).not.toBeInTheDocument();
 
     // Reopening restores them with the per-tab state intact.
@@ -783,7 +791,7 @@ describe("AppShell", () => {
     act(() => replaceEditorText("draft"));
     editor().focus();
     await user.keyboard("{Control>}s{/Control}");
-    expect(cancelled.chosenTitles).toEqual(["Untitled"]);
+    expect(cancelled.chosenTitles).toEqual(["未命名"]);
     expect(cancelled.writes).toHaveLength(0);
 
     const collision = new InspectablePort(
@@ -792,7 +800,7 @@ describe("AppShell", () => {
     );
     rerender(<AppShell port={collision} />);
     await user.click(screen.getByRole("button", { name: "打开文件" }));
-    await user.click(screen.getByRole("tab", { name: /Untitled/ }));
+    await user.click(screen.getByRole("tab", { name: /未命名/ }));
     await user.click(editor());
     await user.keyboard("{Control>}s{/Control}");
     expect(collision.writes).toHaveLength(0);
@@ -919,6 +927,12 @@ describe("AppShell", () => {
 
     const dialog = screen.getByRole("dialog", { name: "保存更改" });
     expect(within(dialog).getByRole("button", { name: "保存" })).toHaveFocus();
+    expect(within(dialog).getByRole("button", { name: "保存" })).toHaveClass(
+      "button-primary",
+    );
+    expect(within(dialog).getByRole("button", { name: "放弃" })).toHaveClass(
+      "button-danger",
+    );
     expect(screen.getByTestId("app-background")).toHaveAttribute("inert");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
     expect(screen.getByRole("dialog", { name: "保存更改" })).toBeVisible();
@@ -971,10 +985,10 @@ describe("AppShell", () => {
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "新建" }));
     act(() => replaceEditorText("draft"));
-    await user.click(screen.getByRole("button", { name: "关闭 Untitled" }));
+    await user.click(screen.getByRole("button", { name: "关闭 未命名" }));
     await user.click(within(screen.getByRole("dialog", { name: "保存更改" })).getByRole("button", { name: "保存" }));
 
-    expect(port.chosenTitles).toEqual(["Untitled"]);
+    expect(port.chosenTitles).toEqual(["未命名"]);
     expect(port.writes).toHaveLength(0);
     expect(screen.getByRole("dialog", { name: "保存更改" })).toBeVisible();
     expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
@@ -1823,6 +1837,9 @@ describe("AppShell conflict and save-failure dialogs", () => {
     const dialog = await screen.findByRole("dialog", { name: "保存失败" });
     expect(dialog).toHaveTextContent("disk full");
     expect(within(dialog).getByRole("button", { name: "重试" })).toHaveFocus();
+    expect(within(dialog).getByRole("button", { name: "重试" })).toHaveClass(
+      "button-primary",
+    );
     expect(screen.getByTestId("app-background")).toHaveAttribute("inert");
     expect(screen.getByRole("tab", { hidden: true, name: /a\.md.*未保存/ })).toBeInTheDocument();
     expect(
@@ -1956,7 +1973,7 @@ describe("AppShell conflict and save-failure dialogs", () => {
 
       menu.emit("menu.new");
 
-      expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+      expect(await screen.findByRole("tab", { name: /未命名/ })).toBeVisible();
     });
 
     it("opens files on menu.open_files", async () => {
@@ -2302,10 +2319,16 @@ describe("AppShell document translation", () => {
 
     await user.click(screen.getByRole("button", { name: "翻译文档" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "请先在设置中配置翻译 API",
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("请先在设置中配置翻译 API");
+    // A missing key is a setup hint, not a failure: quiet accent tone and a
+    // direct route into the settings dialog.
+    expect(alert).toHaveAttribute("data-tone", "notice");
     expect(port.translationCallCount).toBe(0);
+
+    await user.click(within(alert).getByRole("button", { name: "打开设置" }));
+    expect(await screen.findByRole("dialog", { name: "设置" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("registers a viewport-range provider over the live editor and unregisters it on cleanup", async () => {
@@ -2399,6 +2422,66 @@ describe("AppShell document translation", () => {
     expect(calls.at(-1)).toBe(provider);
     // The registered getter still answers (jsdom reports zero geometry).
     expect(provider()).toBeNull();
+  });
+
+  it("keeps the translation state visible with an exit action after the outline collapses", async () => {
+    const user = userEvent.setup();
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    port.translateSegments = async (_settings, segments) =>
+      segments.map(pseudoTranslate);
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+    await screen.findByRole("button", { name: "显示原文" });
+
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+    const status = screen.getByRole("group", { name: "视图状态" });
+    expect(
+      within(status).getByRole("button", { name: "正在查看译文，打开大纲" }),
+    ).toBeVisible();
+
+    await user.click(within(status).getByRole("button", { name: "显示原文" }));
+    expect(editor()).toHaveTextContent("hello world");
+    expect(screen.queryByRole("group", { name: "视图状态" })).not.toBeInTheDocument();
+  });
+
+  it("does not duplicate the translating banner's cancel action in the state bar", async () => {
+    const user = userEvent.setup();
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    const pending: {
+      segments: string[];
+      resolve: (value: string[]) => void;
+    }[] = [];
+    port.translateSegments = (_settings: TranslationSettings, segments: string[]) =>
+      new Promise<string[]>((resolve) => pending.push({ segments, resolve }));
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+    expect(screen.getByRole("status")).toHaveTextContent("正在翻译…");
+
+    // With the outline collapsed the state chip stays visible, but only the
+    // banner carries the cancel action.
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+    const status = screen.getByRole("group", { name: "视图状态" });
+    expect(
+      within(status).getByRole("button", { name: "阅读模式，打开大纲" }),
+    ).toBeVisible();
+    expect(within(status).queryByRole("button", { name: "取消翻译" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "取消" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "取消翻译" })).toBeNull();
+
+    act(() => pending[0].resolve(["ｈｅｌｌｏ ｗｏｒｌｄ"]));
+    await waitFor(() =>
+      expect(
+        within(status).getByRole("button", { name: "显示原文" }),
+      ).toBeVisible(),
+    );
+    expect(
+      within(status).getByRole("button", { name: "正在查看译文，打开大纲" }),
+    ).toBeVisible();
   });
 });
 
@@ -2633,7 +2716,7 @@ describe("AppShell context menus and document title", () => {
     ]);
 
     await user.click(menuItem("新建"));
-    expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: /未命名/ })).toBeVisible();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
@@ -2650,6 +2733,8 @@ describe("AppShell context menus and document title", () => {
       "保存",
       "关闭标签",
     ]);
+    // Closing a tab is a normal action, not a destructive one.
+    expect(menuItem("关闭标签")).not.toHaveClass("context-menu-item-danger");
     // A clean tab has nothing to save; the command is disabled.
     expect(menuItem("保存")).toBeDisabled();
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
@@ -2680,7 +2765,7 @@ describe("AppShell context menus and document title", () => {
     await user.click(screen.getByRole("button", { name: "新建" }));
 
     // An untitled document has no file to rename; 重命名 routes to Save As.
-    const tab = screen.getByRole("tab", { name: /Untitled/ });
+    const tab = screen.getByRole("tab", { name: /未命名/ });
     fireEvent.contextMenu(tab, { clientX: 100, clientY: 100 });
     expect(menuItem("重命名")).toBeEnabled();
     await user.click(menuItem("重命名"));
@@ -2703,7 +2788,7 @@ describe("AppShell context menus and document title", () => {
     render(<AppShell port={port} />);
     await user.click(screen.getByRole("button", { name: "新建" }));
 
-    await user.click(screen.getByRole("button", { name: "Untitled" }));
+    await user.click(screen.getByRole("button", { name: "未命名" }));
     await waitFor(() => expect(port.writes).toHaveLength(1));
     expect(port.writes[0]).toMatchObject({ targetPath: "/notes/named.md" });
   });
@@ -2934,5 +3019,495 @@ describe("withAssetScopeForSavedImage", () => {
       "tab-1",
       "/tmp/notes/images/paste.png",
     );
+  });
+});
+
+describe("AppShell window layout and scrolling title", () => {
+  const originalInnerWidth = window.innerWidth;
+  const resizeWindow = (width: number) => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  };
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+    });
+  });
+
+  const openDocument = async (user: ReturnType<typeof userEvent.setup>) => {
+    render(
+      <AppShell
+        port={
+          new InspectablePort([
+            file("/notes/layout.md", "# Alpha\n\nfirst\n\n## Beta\n\nsecond"),
+          ])
+        }
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+  };
+
+  it("reclaims the outline before the explorer and restores both when widened", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    expect(screen.getByRole("button", { name: "收起右侧栏" })).toBeInTheDocument();
+
+    // 680px with both panels open: the outline folds away, the explorer and
+    // an editor column of 384px remain.
+    resizeWindow(680);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "展开右侧栏" }),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument();
+
+    // A little narrower the explorer stays visible but clamped; below 120px
+    // of panel room it folds too, rather than crushing the editor.
+    resizeWindow(560);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument(),
+    );
+    resizeWindow(470);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "展开侧栏" })).toBeInTheDocument(),
+    );
+
+    // Widening restores the automatically collapsed panels (explorer first).
+    resizeWindow(1200);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "收起右侧栏" })).toBeInTheDocument(),
+    );
+  });
+
+  it("makes room for a manually opened outline instead of crushing the editor", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    resizeWindow(680);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument(),
+    );
+
+    // Opening the outline here would leave an 84px editor; the explorer gives
+    // way instead, and the outline still opens.
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "展开侧栏" })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "收起右侧栏" })).toBeInTheDocument();
+  });
+
+  it("folds the document title after scrolling and restores it at the top", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+    const title = document.querySelector<HTMLElement>(".document-title");
+    if (!title) throw new Error("document title not found");
+
+    act(() => {
+      view.scrollDOM.scrollTop = 240;
+      view.scrollDOM.dispatchEvent(new Event("scroll"));
+    });
+    await waitFor(() => expect(title).toHaveAttribute("data-compact", "true"));
+    expect(title).toHaveAttribute("inert");
+
+    act(() => {
+      view.scrollDOM.scrollTop = 0;
+      view.scrollDOM.dispatchEvent(new Event("scroll"));
+    });
+    await waitFor(() =>
+      expect(title).not.toHaveAttribute("data-compact"),
+    );
+    expect(title).not.toHaveAttribute("inert");
+  });
+
+  it("marks the heading at the top of the viewport as the outline's current location", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+
+    // At the document top the first heading owns the viewport.
+    await waitFor(() => {
+      const row = screen.getByRole("treeitem", { name: "Alpha" });
+      expect(row).toHaveAttribute("aria-current", "location");
+    });
+    expect(
+      screen.getByRole("treeitem", { name: "Beta" }),
+    ).not.toHaveAttribute("aria-current");
+  });
+
+  it("shows the reading state and a way out while the outline is collapsed", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+
+    const status = screen.getByRole("group", { name: "视图状态" });
+    expect(
+      within(status).getByRole("button", { name: "阅读模式，打开大纲" }),
+    ).toBeVisible();
+    await user.click(within(status).getByRole("button", { name: "返回编辑" }));
+
+    expect(screen.queryByRole("group", { name: "视图状态" })).not.toBeInTheDocument();
+    expect(editor()).toHaveAttribute("contenteditable", "true");
+  });
+
+  it("opens the outline from the collapsed state chip", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await user.click(screen.getByRole("button", { name: "编辑模式" }));
+    await user.click(screen.getByRole("button", { name: "收起右侧栏" }));
+
+    await user.click(
+      screen.getByRole("button", { name: "阅读模式，打开大纲" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "收起右侧栏" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "视图状态" })).not.toBeInTheDocument();
+  });
+
+  it("clamps a restored 600px explorer at 680px instead of crushing the editor", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 680,
+    });
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+          sidebar: {
+            collapsed: false,
+            tabsSectionCollapsed: false,
+            filesSectionCollapsed: false,
+            width: 600,
+          },
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await screen.findByRole("tab", { name: /a\.md/ });
+    const rail = document.querySelector(".sidebar-rail");
+    if (!rail) throw new Error("sidebar rail not found");
+
+    // 680 - 36 (activity rail) - 320 (editor floor) = 324px of panel room.
+    await waitFor(() => expect(rail).toHaveStyle({ width: "324px" }));
+    expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument();
+    expect(port.session?.sidebar).toMatchObject({
+      collapsed: false,
+      width: 600,
+    });
+  });
+
+  it("re-settles when session preferences arrive after mount", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 680,
+    });
+    const pending = deferred<PersistedSession | null>();
+    const port = new InspectablePort([file("/notes/late.md", "# Late")]);
+    port.sessionToLoad = pending.promise;
+    const user = userEvent.setup();
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    const rail = document.querySelector(".sidebar-rail");
+    if (!rail) throw new Error("sidebar rail not found");
+    await waitFor(() => expect(rail).toHaveStyle({ width: "260px" }));
+
+    act(() =>
+      pending.resolve({
+        recent: [],
+        openPaths: [],
+        activePath: null,
+        workspacePath: null,
+        sidebar: {
+          collapsed: false,
+          tabsSectionCollapsed: false,
+          filesSectionCollapsed: false,
+          width: 600,
+        },
+      }),
+    );
+
+    // The late 600px preference is clamped to the room, not persisted back
+    // and never reduces the editor below its floor.
+    await waitFor(() => expect(rail).toHaveStyle({ width: "324px" }));
+    expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument();
+    expect(port.sessionToLoad).not.toBeNull();
+  });
+
+  it("clamps a manually expanded 600px explorer at 680px", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 680,
+    });
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+          sidebar: {
+            collapsed: true,
+            tabsSectionCollapsed: false,
+            filesSectionCollapsed: false,
+            width: 600,
+          },
+        },
+      },
+    );
+    const user = userEvent.setup();
+    render(<AppShell port={port} />);
+    await screen.findByRole("tab", { name: /a\.md/ });
+
+    await user.click(screen.getByRole("button", { name: "展开侧栏" }));
+    const rail = document.querySelector(".sidebar-rail");
+    if (!rail) throw new Error("sidebar rail not found");
+    await waitFor(() => expect(rail).toHaveStyle({ width: "324px" }));
+    expect(port.session?.sidebar).toMatchObject({
+      collapsed: false,
+      width: 600,
+    });
+  });
+
+  it("clamps a manually opened 600px outline and makes the explorer give way", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 680,
+    });
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+          outline: { width: 600 },
+        },
+      },
+    );
+    const user = userEvent.setup();
+    render(<AppShell port={port} />);
+    await screen.findByRole("tab", { name: /a\.md/ });
+    const outline = document.querySelector(".outline-sidebar");
+    if (!outline) throw new Error("outline not found");
+    await waitFor(() => expect(outline).toHaveStyle({ width: "600px" }));
+
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    // 600px cannot fit beside the explorer; the explorer yields and the
+    // outline displays at the 324px room limit, leaving the 320px floor.
+    await waitFor(() => expect(outline).toHaveStyle({ width: "324px" }));
+    expect(screen.getByRole("button", { name: "展开侧栏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起右侧栏" })).toBeInTheDocument();
+  });
+
+  it("caps a dragged panel by the other panel and the editor floor", async () => {
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/drag.md", file("/notes/drag.md", "# Drag")]]),
+      {
+        workspace: { path: "/notes", title: "notes" },
+        session: {
+          recent: [],
+          openPaths: ["/notes/drag.md"],
+          activePath: "/notes/drag.md",
+          workspacePath: "/notes",
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+    await screen.findByRole("tab", { name: /drag\.md/ });
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+
+    const sidebar = screen.getByRole("complementary", { name: "侧栏" });
+    const resizer = screen.getByRole("slider", { name: "调整侧栏宽度" });
+    // 1024 - 36 - 320 (editor) - 300 (outline) = 368px.
+    expect(resizer).toHaveAttribute("aria-valuemax", "368");
+    fireEvent.pointerDown(resizer, { pointerId: 12, button: 0, clientX: 300 });
+    fireEvent.pointerMove(resizer, { pointerId: 12, clientX: 3000, buttons: 1 });
+    await waitFor(() => expect(sidebar).toHaveStyle({ width: "368px" }));
+    fireEvent.pointerUp(resizer, { pointerId: 12 });
+    await waitFor(() => expect(port.session?.sidebar?.width).toBe(368));
+    expect(1024 - 36 - 368 - 300).toBe(320);
+
+    // At the cap the keyboard cannot grow the panel any further, and the
+    // outline cannot widen past the room the sidebar leaves it.
+    fireEvent.keyDown(resizer, { key: "ArrowRight" });
+    expect(sidebar).toHaveStyle({ width: "368px" });
+    const outline = screen.getByRole("complementary", { name: "大纲侧栏" });
+    const outlineResizer = screen.getByRole("slider", { name: "调整大纲宽度" });
+    expect(outlineResizer).toHaveAttribute("aria-valuemax", "300");
+    fireEvent.keyDown(outlineResizer, { key: "ArrowLeft" });
+    expect(outline).toHaveStyle({ width: "300px" });
+  });
+
+  it("does not persist an automatic explorer hide and restores it on a wide restart", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1200,
+    });
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+          sidebar: {
+            collapsed: false,
+            tabsSectionCollapsed: false,
+            filesSectionCollapsed: false,
+            width: 600,
+          },
+        },
+      },
+    );
+    const first = render(<AppShell port={port} />);
+    await screen.findByRole("tab", { name: /a\.md/ });
+    const rail = document.querySelector(".sidebar-rail");
+    if (!rail) throw new Error("sidebar rail not found");
+    await waitFor(() => expect(rail).toHaveStyle({ width: "600px" }));
+
+    // 470 leaves 114px of panel room, below the 120px explorer minimum.
+    resizeWindow(470);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "展开侧栏" })).toBeInTheDocument(),
+    );
+    expect(port.session?.sidebar).toMatchObject({
+      collapsed: false,
+      width: 600,
+    });
+
+    resizeWindow(1200);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument(),
+    );
+    await waitFor(() => expect(rail).toHaveStyle({ width: "600px" }));
+
+    first.unmount();
+    render(<AppShell port={port} />);
+    // The persisted preference was never rewritten to collapsed: a restart
+    // at a wide window shows the explorer again.
+    await waitFor(() =>
+      expect(document.querySelector(".sidebar-rail")).toHaveStyle({
+        width: "600px",
+      }),
+    );
+    expect(screen.getByRole("button", { name: "收起侧栏" })).toBeInTheDocument();
+  });
+
+  it("keeps a focused document title expanded while the editor scrolls", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+    const title = document.querySelector<HTMLElement>(".document-title");
+    if (!title) throw new Error("document title not found");
+    const titleButton = screen.getByRole("button", { name: "layout" });
+
+    act(() => titleButton.focus());
+    expect(titleButton).toHaveFocus();
+    act(() => {
+      view.scrollDOM.scrollTop = 240;
+      view.scrollDOM.dispatchEvent(new Event("scroll"));
+    });
+    await waitFor(() => expect(title).not.toHaveAttribute("data-compact"));
+    expect(title).not.toHaveAttribute("inert");
+    expect(titleButton).toHaveFocus();
+
+    // Once focus leaves the title it may fold again.
+    act(() => titleButton.blur());
+    act(() => {
+      view.scrollDOM.dispatchEvent(new Event("scroll"));
+    });
+    await waitFor(() => expect(title).toHaveAttribute("data-compact", "true"));
+  });
+
+  it("keeps the title folded across outline republications inside the hysteresis band", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    const view = EditorView.findFromDOM(editor());
+    if (!view) throw new Error("EditorView not found");
+    const title = document.querySelector<HTMLElement>(".document-title");
+    if (!title) throw new Error("document title not found");
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+
+    act(() => {
+      view.scrollDOM.scrollTop = 240;
+      view.scrollDOM.dispatchEvent(new Event("scroll"));
+    });
+    await waitFor(() => expect(title).toHaveAttribute("data-compact", "true"));
+
+    // Move into the 16–72px hysteresis band without a scroll event, then
+    // edit a heading: the outline republishes, but the title must stay folded.
+    act(() => {
+      view.scrollDOM.scrollTop = 40;
+      replaceEditorText("# Alpha\n\nfirst typed\n\n## Beta\n\nsecond");
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("treeitem", { name: "Alpha" })).toBeInTheDocument(),
+    );
+    expect(title).toHaveAttribute("data-compact", "true");
+  });
+
+  it("refreshes the active outline heading when the outline republishes", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await waitFor(() =>
+      expect(screen.getByRole("treeitem", { name: "Alpha" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      ),
+    );
+
+    act(() =>
+      replaceEditorText("# Gamma\n\n# Alpha\n\n## Beta\n\nsecond"),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("treeitem", { name: "Gamma" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      ),
+    );
+    expect(
+      screen.getByRole("treeitem", { name: "Alpha" }),
+    ).not.toHaveAttribute("aria-current");
+  });
+
+  it("switches the view-mode button label and icon to the mode a click will reach", async () => {
+    const user = userEvent.setup();
+    await openDocument(user);
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+
+    const editing = screen.getByRole("button", { name: "编辑模式" });
+    expect(editing).toHaveAttribute("title", "切换到阅读模式");
+    expect(editing.querySelector('[data-view-icon="book"]')).not.toBeNull();
+
+    await user.click(editing);
+    const reading = screen.getByRole("button", { name: "阅读模式" });
+    expect(reading).toHaveAttribute("title", "切换到编辑模式");
+    expect(reading.querySelector('[data-view-icon="pencil"]')).not.toBeNull();
   });
 });

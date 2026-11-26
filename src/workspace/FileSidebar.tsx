@@ -22,12 +22,15 @@ import {
   visibleRows,
   type VisibleTreeRow,
 } from "./treeReducer";
+import "./fileSidebar.css";
 
 export interface FileSidebarProps {
   root: WorkspaceRoot;
   port: DocumentPort;
   onOpenFile: (path: string) => void;
   onCloseWorkspace: () => void;
+  /** Path of the document currently shown in the editor, if any. */
+  activePath?: string | null;
 }
 
 type Editing =
@@ -92,9 +95,12 @@ export default function FileSidebar({
   port,
   onOpenFile,
   onCloseWorkspace,
+  activePath = null,
 }: FileSidebarProps) {
   const [state, dispatch] = useReducer(treeReducer, initialTreeState);
-  const [activePath, setActivePath] = useState<string | null>(null);
+  // Keyboard focus is deliberately separate from the open document: the
+  // focused row only owns the roving tab stop, never the selected styling.
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [rootMenu, setRootMenu] = useState<RootMenuState | null>(null);
@@ -126,7 +132,7 @@ export default function FileSidebar({
     inFlightRef.current.clear();
     rowRefs.current.clear();
     dispatch({ type: "workspaceOpened", root });
-    setActivePath(null);
+    setFocusedPath(null);
     setEditing(null);
     setMenu(null);
     setRootMenu(null);
@@ -193,16 +199,38 @@ export default function FileSidebar({
   }, [port, root.path, state.root]);
 
   const rows = visibleRows(state);
-  const activeRow =
-    rows.find((row) => row.entry.path === activePath) ?? rows[0] ?? null;
+  // Only a visible file row can be the open document; an unmatched or
+  // directory path never falls back to rows[0] and never looks selected.
+  const selectedRow =
+    activePath === null
+      ? null
+      : (rows.find(
+          (row) => !row.entry.isDirectory && row.entry.path === activePath,
+        ) ?? null);
+  // One row keeps the tree's roving tab stop: the last keyboard-focused row
+  // while it is still visible, otherwise the open document, otherwise the
+  // first row. Focus alone must not imply that a document is selected.
+  const focusedRow =
+    rows.find((row) => row.entry.path === focusedPath) ??
+    selectedRow ??
+    rows[0] ??
+    null;
 
-  const focusRow = (row: VisibleTreeRow) => {
-    setActivePath(row.entry.path);
+  // Reveal the open document when its row is rendered but scrolled out of
+  // the tree viewport. "nearest" keeps an already visible row still.
+  const selectedPath = selectedRow?.entry.path ?? null;
+  useEffect(() => {
+    if (selectedPath === null) return;
+    rowRefs.current.get(selectedPath)?.scrollIntoView?.({ block: "nearest" });
+  }, [selectedPath]);
+
+  const moveFocus = (row: VisibleTreeRow) => {
+    setFocusedPath(row.entry.path);
     rowRefs.current.get(row.entry.path)?.focus();
   };
 
   const activate = (entry: DirectoryEntry) => {
-    setActivePath(entry.path);
+    setFocusedPath(entry.path);
     if (entry.isDirectory) dispatch({ type: "directoryToggled", path: entry.path });
     else onOpenFile(entry.path);
   };
@@ -210,12 +238,12 @@ export default function FileSidebar({
   const onTreeKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
     const target = event.target as HTMLElement;
     if (target.tagName === "INPUT" || target.closest("button")) return;
-    if (!activeRow) return;
-    const index = rows.findIndex((row) => row.entry.path === activeRow.entry.path);
+    if (!focusedRow) return;
+    const index = rows.findIndex((row) => row.entry.path === focusedRow.entry.path);
     const move = (next: VisibleTreeRow | undefined) => {
       if (next) {
         event.preventDefault();
-        focusRow(next);
+        moveFocus(next);
       }
     };
     switch (event.key) {
@@ -233,9 +261,9 @@ export default function FileSidebar({
         break;
       case "ArrowRight":
         event.preventDefault();
-        if (activeRow.entry.isDirectory) {
-          if (!activeRow.isExpanded) {
-            dispatch({ type: "directoryToggled", path: activeRow.entry.path });
+        if (focusedRow.entry.isDirectory) {
+          if (!focusedRow.isExpanded) {
+            dispatch({ type: "directoryToggled", path: focusedRow.entry.path });
           } else {
             move(rows[index + 1]);
           }
@@ -243,17 +271,17 @@ export default function FileSidebar({
         break;
       case "ArrowLeft": {
         event.preventDefault();
-        if (activeRow.entry.isDirectory && activeRow.isExpanded) {
-          dispatch({ type: "directoryToggled", path: activeRow.entry.path });
+        if (focusedRow.entry.isDirectory && focusedRow.isExpanded) {
+          dispatch({ type: "directoryToggled", path: focusedRow.entry.path });
           break;
         }
-        const parent = parentPathOf(activeRow.entry.path);
+        const parent = parentPathOf(focusedRow.entry.path);
         move(rows.find((row) => row.entry.path === parent));
         break;
       }
       case "Enter":
         event.preventDefault();
-        activate(activeRow.entry);
+        activate(focusedRow.entry);
         break;
     }
   };
@@ -275,10 +303,10 @@ export default function FileSidebar({
     const parent =
       editing?.kind === "create" && editing.parent !== undefined
         ? editing.parent
-        : activeRow?.entry.isDirectory && state.children[activeRow.entry.path]
-          ? activeRow.entry.path
-          : activeRow
-            ? parentPathOf(activeRow.entry.path)
+        : focusedRow?.entry.isDirectory && state.children[focusedRow.entry.path]
+          ? focusedRow.entry.path
+          : focusedRow
+            ? parentPathOf(focusedRow.entry.path)
             : root.path;
     const parentRelative = parent === root.path ? "" : relativeOf(parent);
     const relative = parentRelative ? `${parentRelative}/${name}` : name;
@@ -346,7 +374,7 @@ export default function FileSidebar({
   }
 
   return (
-    <div className="sidebar-panel">
+    <div className="sidebar-panel file-sidebar">
       {/* The header carries only the workspace title; its actions (new file,
           close folder) live in the title row's right-click menu. The handler
           stops propagation so the shell fallback menu stays out of it. */}
@@ -388,7 +416,8 @@ export default function FileSidebar({
       >
         {rows.map((row, index) => {
           const { entry, depth } = row;
-          const isActive = row === activeRow;
+          const isSelected = row === selectedRow;
+          const isFocused = row === focusedRow;
           const renaming = editing?.kind === "rename" && editing.path === entry.path;
           return (
             <Fragment key={entry.path}>
@@ -411,8 +440,8 @@ export default function FileSidebar({
                 aria-label={entry.name}
                 aria-level={depth}
                 aria-expanded={entry.isDirectory ? row.isExpanded : undefined}
-                aria-selected={isActive}
-                tabIndex={isActive ? 0 : -1}
+                aria-selected={entry.isDirectory ? undefined : isSelected}
+                tabIndex={isFocused ? 0 : -1}
                 className="file-tree-row"
                 data-motion-item="file"
                 ref={(element) => {
@@ -491,7 +520,7 @@ export default function FileSidebar({
                     label: "在此新建文件",
                     onSelect: () => {
                       setError(null);
-                      setActivePath(menu.path);
+                      setFocusedPath(menu.path);
                       if (!state.expanded.has(menu.path)) {
                         dispatch({ type: "directoryToggled", path: menu.path });
                       }

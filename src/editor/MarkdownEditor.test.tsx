@@ -1106,4 +1106,156 @@ describe("MarkdownEditor", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(undoDepth(view.state)).toBe(0);
   });
+
+  describe("search panel", () => {
+    const openPanel = async (
+      user: ReturnType<typeof userEvent.setup>,
+      value = "alpha beta alpha",
+    ) => {
+      renderEditor({ value });
+      content().focus();
+      await user.keyboard("{Control>}f{/Control}");
+      const panel = document.querySelector<HTMLElement>(".cm-panel.cm-search");
+      if (!panel) throw new Error("search panel not found");
+      const field = (name: string) => {
+        const input = panel.querySelector<HTMLInputElement>(
+          `input[name="${name}"]`,
+        );
+        if (!input) throw new Error(`search field ${name} not found`);
+        return input;
+      };
+      const button = (name: string) => {
+        const control = panel.querySelector<HTMLButtonElement>(
+          `button[name="${name}"]`,
+        );
+        if (!control) throw new Error(`search button ${name} not found`);
+        return control;
+      };
+      return { panel, field, button };
+    };
+
+    it("localizes every control and overrides CodeMirror's compact base styles", async () => {
+      const user = userEvent.setup();
+      const { panel, field, button } = await openPanel(user);
+
+      expect(field("search")).toHaveAttribute("placeholder", "查找");
+      expect(field("search")).toHaveAccessibleName("查找");
+      expect(field("replace")).toHaveAttribute("placeholder", "替换");
+      expect(field("replace")).toHaveAccessibleName("替换");
+      expect(button("next")).toHaveTextContent("下一个");
+      expect(button("prev")).toHaveTextContent("上一个");
+      expect(button("select")).toHaveTextContent("全选");
+      expect(button("replace")).toHaveTextContent("替换");
+      expect(button("replaceAll")).toHaveTextContent("全部替换");
+      expect(button("close")).toHaveAccessibleName("关闭");
+      expect(field("case").closest("label")).toHaveTextContent("区分大小写");
+      expect(field("re").closest("label")).toHaveTextContent("正则表达式");
+      expect(field("word").closest("label")).toHaveTextContent("全字匹配");
+
+      // These assertions compare the computed cascade, not the raw CSS text:
+      // CodeMirror's base theme would otherwise leave 70% (≈9 px) field and
+      // button text, a white field and gradient buttons in place.
+      expect(getComputedStyle(panel).backgroundColor).toBe("var(--surface)");
+      expect(getComputedStyle(panel).color).toBe("var(--text-primary)");
+      expect(getComputedStyle(panel).fontSize).toBe("13px");
+      // The strip wrapper carries CodeMirror's own light/dark panel colors
+      // (`.cm-panels`); the theme rule must win over those literals too.
+      expect(getComputedStyle(panel.parentElement!).backgroundColor).toBe(
+        "var(--surface)",
+      );
+      expect(getComputedStyle(field("search")).backgroundColor).toBe(
+        "var(--canvas)",
+      );
+      expect(getComputedStyle(field("search")).color).toBe("var(--text-primary)");
+      expect(getComputedStyle(field("search")).fontSize).toBe("13px");
+      expect(getComputedStyle(field("search")).height).toBe("28px");
+      expect(getComputedStyle(button("next")).backgroundColor).toBe(
+        "var(--surface-hover)",
+      );
+      expect(getComputedStyle(button("next")).backgroundImage).toBe("none");
+      expect(getComputedStyle(button("next")).fontSize).toBe("12px");
+      expect(getComputedStyle(button("next")).height).toBe("26px");
+      expect(getComputedStyle(button("next")).minWidth).toBe("26px");
+      expect(getComputedStyle(button("close")).width).toBe("26px");
+      expect(getComputedStyle(button("close")).height).toBe("26px");
+      expect(getComputedStyle(button("close")).fontSize).toBe("18px");
+      expect(getComputedStyle(button("close")).color).toBe(
+        "var(--text-secondary)",
+      );
+      expect(getComputedStyle(field("case")).width).toBe("15px");
+      expect(getComputedStyle(field("case")).height).toBe("15px");
+      expect(getComputedStyle(field("case")).accentColor).toBe("var(--accent)");
+      expect(getComputedStyle(field("case").closest("label")!).minHeight).toBe(
+        "24px",
+      );
+    });
+
+    it("uses tokens only, so switching the document theme leaves no stale skin", async () => {
+      const user = userEvent.setup();
+      const { panel, field } = await openPanel(user);
+      const view = editorView();
+      await user.keyboard("alpha");
+      await waitFor(() =>
+        expect(document.querySelectorAll(".cm-searchMatch")).toHaveLength(2),
+      );
+      const match = document.querySelector<HTMLElement>(".cm-searchMatch");
+      if (!match) throw new Error("search match not rendered");
+      expect(getComputedStyle(match).backgroundColor).toBe("var(--search-match)");
+
+      // The panel rules must resolve every color through a token and carry no
+      // light/dark branch: theme switches repaint through `[data-theme]`
+      // without a reconfigure, so a baked color would linger.
+      const css = [...document.head.querySelectorAll("style")]
+        .map((tag) => tag.textContent ?? "")
+        .join("\n");
+      const escape = (name: string) =>
+        name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rulesFor = (name: string) =>
+        css.match(
+          new RegExp(`[^{}]*\\.${escape(name)}[^{}]*\\{[^}]*\\}`, "g"),
+        ) ?? [];
+      const themeClass = view.themeClasses
+        .split(/\s+/)
+        .find((name) =>
+          rulesFor(name).some(
+            (rule) =>
+              rule.includes(".cm-panel.cm-search") &&
+              rule.includes("var(--surface)"),
+          ),
+        );
+      expect(themeClass).toBeDefined();
+      const themeRules = rulesFor(themeClass!);
+      expect(themeRules.length).toBeGreaterThan(0);
+      expect(
+        themeRules.some((rule) =>
+          /#[0-9a-f]{3,8}\b|rgba?\(|linear-gradient/i.test(rule),
+        ),
+      ).toBe(false);
+      expect(
+        themeRules.some((rule) => /\.cm-(?:light|dark)\b/.test(rule)),
+      ).toBe(false);
+
+      const root = document.documentElement;
+      const previousTheme = root.getAttribute("data-theme");
+      try {
+        for (const theme of ["light", "dark"]) {
+          root.dataset.theme = theme;
+          expect(editorView()).toBe(view);
+          expect(document.querySelector(".cm-panel.cm-search")).toBe(panel);
+          expect(getComputedStyle(panel).backgroundColor).toBe(
+            "var(--surface)",
+          );
+          expect(getComputedStyle(field("search")).backgroundColor).toBe(
+            "var(--canvas)",
+          );
+          expect(getComputedStyle(match).backgroundColor).toBe(
+            "var(--search-match)",
+          );
+        }
+      } finally {
+        if (previousTheme === null) delete root.dataset.theme;
+        else root.dataset.theme = previousTheme;
+      }
+    });
+  });
 });

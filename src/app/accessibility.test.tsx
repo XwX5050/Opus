@@ -167,7 +167,9 @@ describe("accessibility: roles and names", () => {
     expect(outline).toHaveAttribute("aria-orientation", "vertical");
     expect(outline).toHaveAttribute("aria-valuenow", "300");
     expect(outline).toHaveAttribute("aria-valuemin", "120");
-    expect(outline).toHaveAttribute("aria-valuemax", "512");
+    // The cap reserves the 260px explorer, the activity rail and the 320px
+    // editor floor: 1024 - 36 - 260 - 320 = 408px.
+    expect(outline).toHaveAttribute("aria-valuemax", "408");
   });
 
   it("exposes the workspace tree with a name and levelled items", async () => {
@@ -431,6 +433,19 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(appCss).toMatch(/--focus-ring/);
   });
 
+  it("uses a solid accent focus ring without changing control shape", () => {
+    const focusBlock = appCss.match(/:focus-visible\s*\{([^}]*)\}/s)?.[1] ?? "";
+    expect(focusBlock).toContain("outline: 2px solid var(--focus-ring);");
+    expect(focusBlock).not.toContain("border-radius");
+    expect(tokensCss).toMatch(/--focus-ring:\s*#7f6df2;/);
+    expect(tokensCss).toMatch(/--focus-ring:\s*#6c56d9;/);
+  });
+
+  it("prefers the platform UI font over an unbundled Inter", () => {
+    expect(tokensCss).toMatch(/--font-ui:\s*system-ui,/);
+    expect(tokensCss).not.toMatch(/--font-ui:[^;]*\bInter\b/);
+  });
+
   it("uses a tokenized layout-stable focus ring for editable table cells", () => {
     expect(appCss).toMatch(
       /\.md-table \[contenteditable="true"\]:focus-visible\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\);/s,
@@ -453,6 +468,81 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(tokensCss).toContain('[data-theme="light"]');
     // The dialog backdrop is themed too (used by .dialog-overlay).
     expect(tokensCss).toMatch(/--backdrop:/);
+  });
+
+  // Tokens are declared dark-first, light-second; index picks the theme.
+  const tokenHex = (name: string, themeIndex: 0 | 1): string => {
+    const matches = [
+      ...tokensCss.matchAll(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6});`, "g")),
+    ];
+    return matches[themeIndex]?.[1] ?? "";
+  };
+  const relativeLuminance = (hex: string): number => {
+    const channel = (offset: number) => {
+      const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+      return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+  };
+  const contrastRatio = (foreground: string, background: string): number => {
+    const [lighter, darker] = [
+      relativeLuminance(foreground),
+      relativeLuminance(background),
+    ].sort((a, b) => b - a);
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  it("keeps muted text at 4.5:1 on the quiet surfaces in both themes", () => {
+    expect(tokenHex("text-muted", 0)).toBe("#84858f");
+    expect(tokenHex("text-muted", 1)).toBe("#686a73");
+    for (const themeIndex of [0, 1] as const) {
+      const muted = tokenHex("text-muted", themeIndex);
+      for (const surface of ["canvas", "surface-panel", "surface", "surface-hover"]) {
+        expect(
+          contrastRatio(muted, tokenHex(surface, themeIndex)),
+          `${surface} ${themeIndex === 0 ? "dark" : "light"}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("defines primary and danger button hierarchy with legible fills", () => {
+    expect(appCss).toMatch(
+      /\.button-primary\s*\{[^}]*background:\s*var\(--accent-strong\);[^}]*color:\s*var\(--text-on-accent\);/s,
+    );
+    expect(appCss).toMatch(
+      /\.button-danger\s*\{[^}]*background:\s*transparent;[^}]*color:\s*var\(--danger-strong\);/s,
+    );
+    for (const themeIndex of [0, 1] as const) {
+      for (const fill of [
+        "accent-strong",
+        "accent-strong-hover",
+        "accent-strong-active",
+      ]) {
+        expect(
+          contrastRatio(tokenHex("text-on-accent", themeIndex), tokenHex(fill, themeIndex)),
+          `${fill} ${themeIndex === 0 ? "dark" : "light"}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      expect(
+        contrastRatio(
+          tokenHex("danger-strong", themeIndex),
+          tokenHex("surface", themeIndex),
+        ),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(
+          tokenHex("danger-strong", themeIndex),
+          tokenHex("danger-soft", themeIndex),
+        ),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("separates context-menu groups with a hairline", () => {
+    expect(appCss).toMatch(
+      /\.context-menu-separator\s*\{[^}]*height:\s*1px;[^}]*background:\s*var\(--divider\);/s,
+    );
   });
 
   it("defines Obsidian-style highlight colors for both themes", () => {
@@ -486,13 +576,41 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
-  it("uses math-like inline code typography without a chip background", () => {
+  it("leaves live-preview code typography to the editor refinements", () => {
+    expect(appCss).not.toContain(".cm-live-preview-inline-code");
+    expect(appCss).not.toContain(".cm-live-preview-code-block");
+    expect(appCss).not.toContain("KaTeX_Math");
+  });
+
+  it("owns the per-tab create reveal and hover margin again", () => {
     expect(appCss).toMatch(
-      /\.cm-live-preview-inline-code\s*\{[^}]*font-family:\s*"KaTeX_Math"[^;}]*;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;/s,
+      /\.tab-item\s*\{[^}]*transition:\s*margin-right var\(--anim-fast\) var\(--anim-easing\);/s,
     );
     expect(appCss).toMatch(
-      /\.cm-live-preview-highlight \.cm-live-preview-inline-code,\s*\.cm-live-preview-inline-code\.cm-live-preview-highlight\s*\{[^}]*background:\s*var\(--highlight\);/s,
+      /\.tab-item:has\(\.tab-create\):hover,\s*\.tab-item:has\(\.tab-create\):focus-within\s*\{[^}]*margin-right:\s*28px;/s,
     );
+    expect(appCss).toMatch(
+      /\.tab-item \.tab-close,\s*\.tab-item \.tab-create\s*\{[^}]*opacity:\s*0;/s,
+    );
+    expect(appCss).toMatch(
+      /\.tab-item \.tab-create\s*\{[^}]*pointer-events:\s*none;/s,
+    );
+    expect(appCss).toMatch(
+      /\.tab-create\s*\{[^}]*position:\s*absolute;[^}]*left:\s*100%;/s,
+    );
+    expect(appCss).toMatch(
+      /\.tab-item:hover \.tab-create,\s*\.tab-item:focus-within \.tab-create\s*\{[^}]*transform:\s*translate\(0, -50%\) scale\(1\);/s,
+    );
+    expect(appCss).toMatch(
+      /@supports \(animation-timing-function: linear\(0, 1\)\)\s*\{\s*\.tab-create\s*\{/s,
+    );
+  });
+
+  it("leaves search-panel and hover-shadow ownership to their modules", () => {
+    expect(appCss).not.toMatch(/\.cm-panels\s*\{/);
+    expect(appCss).not.toMatch(/\.cm-panel\.cm-search\s*\{/);
+    expect(appCss).not.toMatch(/\.cm-searchMatch(?:-selected)?\s*\{/);
+    expect(tokensCss).not.toMatch(/--shadow-hover:/);
   });
 
   it("keeps the titlebar fixed while the body and sidebar fill the viewport", () => {
@@ -717,11 +835,10 @@ describe("accessibility: stylesheet guarantees", () => {
       /button:active:not\(:disabled\),\s*\.icon-button:active:not\(:disabled\)\s*\{[^}]*transform:\s*scale\(0\.96\);/s,
     );
     expect(appCss).toMatch(/\.file-tree-row:active,\s*\.tab:active\s*\{[^}]*opacity:\s*0\.8;/s);
-    expect(appCss).toMatch(
-      /\.icon-button:hover:not\(:disabled\)\s*\{[^}]*box-shadow:\s*var\(--shadow-hover\);/s,
+    // Hover feedback stays flat: no icon-only shadow lift.
+    expect(appCss).not.toMatch(
+      /\.icon-button:hover:not\(:disabled\)\s*\{[^}]*box-shadow:/s,
     );
-    expect(tokensCss).toMatch(/--shadow-hover:\s*0 6px 16px -4px rgba\(0,\s*0,\s*0,\s*0\.4\);/);
-    expect(tokensCss).toMatch(/--shadow-hover:\s*0 6px 16px -4px rgba\(0,\s*0,\s*0,\s*0\.18\);/);
   });
 
   it("hooks the entry animations and keeps collapsed rails intact", () => {

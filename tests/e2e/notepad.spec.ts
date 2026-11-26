@@ -232,7 +232,7 @@ test("opens two files, switches tabs, edits, and saves with Cmd+S", async ({
   await expect(create).toHaveCSS("opacity", "1");
   await expect(inactiveItem).toHaveCSS("margin-right", "28px");
   await create.click();
-  await expect(page.getByRole("tab", { name: "Untitled" })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "未命名" })).toHaveAttribute(
     "aria-selected",
     "true",
   );

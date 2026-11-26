@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useId,
   useMemo,
@@ -7,11 +8,19 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { detectPathPlatform } from "../document/platform";
 import type {
   DocumentPort,
   WorkspaceRoot,
 } from "../document/DocumentPort";
-import { collectWorkspaceFiles, normalizeNewMarkdownPath } from "./fileSwitcher";
+import {
+  collectWorkspaceFiles,
+  highlightSegments,
+  normalizeNewMarkdownPath,
+  quickSwitcherShortcuts,
+  splitDisplayPath,
+} from "./fileSwitcher";
+import "./searchViews.css";
 
 interface FileQuickSwitcherProps {
   readonly open: boolean;
@@ -23,7 +32,12 @@ interface FileQuickSwitcherProps {
 }
 
 type SwitcherOption =
-  | { readonly kind: "open"; readonly path: string; readonly label: string }
+  | {
+      readonly kind: "open";
+      readonly path: string;
+      readonly relative: string;
+      readonly label: string;
+    }
   | { readonly kind: "create"; readonly relative: string; readonly label: string };
 
 export default function FileQuickSwitcher({
@@ -97,16 +111,25 @@ export default function FileQuickSwitcher({
       : path;
   };
 
+  const shortcuts = useMemo(
+    () => quickSwitcherShortcuts(detectPathPlatform() === "macos"),
+    [],
+  );
+
   const options = useMemo<SwitcherOption[]>(() => {
     const folded = query.trim().toLocaleLowerCase();
     const filtered = paths
       .filter((path) => relativeOf(path).toLocaleLowerCase().includes(folded))
       .slice(0, 50)
-      .map((path): SwitcherOption => ({
-        kind: "open",
-        path,
-        label: workspace ? `${workspace.title}/${relativeOf(path)}` : path,
-      }));
+      .map((path): SwitcherOption => {
+        const relative = relativeOf(path);
+        return {
+          kind: "open",
+          path,
+          relative,
+          label: workspace ? `${workspace.title}/${relative}` : path,
+        };
+      });
     const relative = normalizeNewMarkdownPath(query);
     if (!workspace || !relative) return filtered;
     const exists = paths.some(
@@ -182,20 +205,40 @@ export default function FileQuickSwitcher({
     );
   };
 
-  const renderOption = (option: SwitcherOption, index: number) => (
-    <div
-      id={`${listId}-${index}`}
-      key={option.kind === "open" ? option.path : option.relative}
-      role="option"
-      aria-selected={index === activeIndex}
-      className="file-switcher-option"
-      onMouseDown={(event) => event.preventDefault()}
-      onMouseMove={() => setActiveIndex(index)}
-      onClick={() => void activate(option)}
-    >
-      {option.label}
-    </div>
-  );
+  const renderHighlighted = (text: string) =>
+    highlightSegments(text, query).map((segment, segmentIndex) =>
+      segment.match ? (
+        <mark key={segmentIndex}>{segment.text}</mark>
+      ) : (
+        <Fragment key={segmentIndex}>{segment.text}</Fragment>
+      ),
+    );
+
+  const renderOption = (option: SwitcherOption, index: number) => {
+    const { dir, name } = splitDisplayPath(option.relative);
+    return (
+      <div
+        id={`${listId}-${index}`}
+        key={option.kind === "open" ? option.path : option.relative}
+        role="option"
+        aria-selected={index === activeIndex}
+        aria-label={option.label}
+        title={option.label}
+        className="file-switcher-option"
+        onMouseDown={(event) => event.preventDefault()}
+        onMouseMove={() => setActiveIndex(index)}
+        onClick={() => void activate(option)}
+      >
+        {option.kind === "create" && (
+          <span className="file-switcher-option-badge">创建</span>
+        )}
+        <span className="file-switcher-option-name">{renderHighlighted(name)}</span>
+        {dir && (
+          <span className="file-switcher-option-dir">{renderHighlighted(dir)}</span>
+        )}
+      </div>
+    );
+  };
 
   return (
     <dialog
@@ -258,16 +301,24 @@ export default function FileQuickSwitcher({
                 onToggle={(event) => setMoreOpen(event.currentTarget.open)}
               >
                 <summary>更多…</summary>
-                {options.slice(6).map(renderOption)}
+                {/* Keep option indices global so ids, aria-selected and
+                    aria-activedescendant agree across the disclosure. */}
+                {options.slice(6).map((option, index) => renderOption(option, index + 6))}
               </details>
             )}
           </div>
         )}
       </div>
       <div className="file-switcher-footer" aria-hidden="true">
-        <span>↵ 打开</span>
-        <span>⇧↵ 创建</span>
-        <span>esc 关闭</span>
+        {shortcuts.map((shortcut) => (
+          <span
+            key={`${shortcut.key}:${shortcut.label}`}
+            className="file-switcher-shortcut"
+          >
+            <kbd>{shortcut.key}</kbd>
+            {shortcut.label}
+          </span>
+        ))}
       </div>
     </dialog>
   );

@@ -13,7 +13,7 @@
 :root {
   /* Typography */
   --font-ui:
-    Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
     "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
     "WenQuanYi Micro Hei", "Microsoft YaHei", sans-serif;
   --font-ui-size: 13px;
@@ -83,7 +83,8 @@
   --surface-quote: #131419;
   --text-primary: #e8e8ec;
   --text-secondary: #aaacb5;
-  --text-muted: #757680;
+  /* Muted copy stays >= 4.5:1 on canvas, panel, surface and hover. */
+  --text-muted: #84858f;
   --divider: rgba(255, 255, 255, 0.08);
   --resize-indicator-core: #d0d0d4;
   --resize-indicator-glow:
@@ -91,15 +92,22 @@
     0 0 16px rgba(208, 208, 212, 0.18);
   --accent: #7f6df2;
   --accent-soft: rgba(127, 109, 242, 0.18);
+  /* Filled primary controls: deep enough for white text (>= 4.5:1) while
+     keeping the accent hue. Hover lightens, press deepens. */
+  --accent-strong: #6f5de6;
+  --accent-strong-hover: #7361e8;
+  --accent-strong-active: #6653d8;
   --text-on-accent: #ffffff;
   --danger: #e5534b;
+  /* Danger text/actions need one step more luminance than the status dot. */
+  --danger-strong: #ea6259;
+  --danger-soft: #2b1b1e;
   /* Windows caption close-button hover; same literal in both themes. */
   --window-close-hover: #e81123;
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.45);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.6);
-  --shadow-hover: 0 6px 16px -4px rgba(0, 0, 0, 0.4);
   --backdrop: rgba(0, 0, 0, 0.6);
-  --focus-ring: rgba(127, 109, 242, 0.45);
+  --focus-ring: #7f6df2;
   --selection: rgba(127, 109, 242, 0.3);
   --search-match: rgba(224, 175, 104, 0.4);
   --highlight: #796a32;
@@ -132,7 +140,8 @@
   --surface-quote: #f1f1f5;
   --text-primary: #26262c;
   --text-secondary: #55575f;
-  --text-muted: #8a8c94;
+  /* Muted copy stays >= 4.5:1 on canvas, panel, surface and hover. */
+  --text-muted: #686a73;
   --divider: rgba(0, 0, 0, 0.08);
   --resize-indicator-core: #b8b8be;
   --resize-indicator-glow:
@@ -140,14 +149,19 @@
     0 0 16px rgba(184, 184, 190, 0.2);
   --accent: #6c56d9;
   --accent-soft: rgba(108, 86, 217, 0.12);
+  --accent-strong: #6c56d9;
+  --accent-strong-hover: #5f4acb;
+  --accent-strong-active: #5540bd;
   --text-on-accent: #ffffff;
   --danger: #cf3f38;
+  /* Darker than the status-dot red so small danger text stays legible. */
+  --danger-strong: #b4302b;
+  --danger-soft: #f6e8e9;
   --window-close-hover: #e81123;
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.1);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
-  --shadow-hover: 0 6px 16px -4px rgba(0, 0, 0, 0.18);
   --backdrop: rgba(0, 0, 0, 0.3);
-  --focus-ring: rgba(108, 86, 217, 0.4);
+  --focus-ring: #6c56d9;
   --selection: rgba(108, 86, 217, 0.15);
   --search-match: rgba(230, 180, 80, 0.45);
   --highlight: #ffec99;

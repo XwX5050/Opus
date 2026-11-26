@@ -13,6 +13,7 @@ import type {
   WorkspaceSearchMatch,
   WorkspaceSearchResult,
 } from "../document/DocumentPort";
+import "./searchViews.css";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -47,7 +48,9 @@ function MatchingLine({ match }: { readonly match: WorkspaceSearchMatch }) {
   const after = characters.slice(match.column + match.matchLength).join("");
   return (
     <span className="workspace-search-line">
-      {before}<mark>{highlighted}</mark>{after}
+      {before}
+      <mark className="workspace-search-hit">{highlighted}</mark>
+      {after}
     </span>
   );
 }
@@ -225,26 +228,36 @@ export default function WorkspaceSearch({
               </div>
               {matches.length > 0 && (
                 <div role="listbox" aria-label="全文搜索结果" className="workspace-search-list">
-                  {groups.map((group) => (
-                    <div role="group" aria-label={root ? pathLabel(root, group.path) : group.path} key={group.path}>
-                      <div className="workspace-search-file">{root ? pathLabel(root, group.path) : group.path}</div>
-                      {group.entries.map(({ match, index }) => (
-                        <div
-                          id={`${resultsId}-${index}`}
-                          role="option"
-                          aria-selected={index === activeIndex}
-                          className="workspace-search-match"
-                          key={`${match.path}:${match.line}:${match.column}:${index}`}
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => openMatch(match)}
-                          onMouseMove={() => setActiveIndex(index)}
-                        >
-                          <span className="workspace-search-line-number">{match.line}</span>
-                          <MatchingLine match={match} />
-                        </div>
-                      ))}
-                    </div>
-                  ))}
+                  {groups.map((group) => {
+                    const fileLabel = root ? pathLabel(root, group.path) : group.path;
+                    return (
+                      <div
+                        role="group"
+                        aria-label={fileLabel}
+                        className="workspace-search-group"
+                        key={group.path}
+                      >
+                        <div className="workspace-search-file">{fileLabel}</div>
+                        {group.entries.map(({ match, index }) => (
+                          <div
+                            id={`${resultsId}-${index}`}
+                            role="option"
+                            aria-selected={index === activeIndex}
+                            aria-label={`${fileLabel} 第 ${match.line} 行：${match.text}`}
+                            title={match.text}
+                            className="workspace-search-match"
+                            key={`${match.path}:${match.line}:${match.column}:${index}`}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => openMatch(match)}
+                            onMouseMove={() => setActiveIndex(index)}
+                          >
+                            <span className="workspace-search-line-number">{match.line}</span>
+                            <MatchingLine match={match} />
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </>

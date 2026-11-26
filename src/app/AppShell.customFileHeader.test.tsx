@@ -160,7 +160,7 @@ describe("AppShell custom file header", () => {
 
     fireEvent.keyDown(window, { key: "n", ctrlKey: true });
 
-    expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: /未命名/ })).toBeVisible();
   });
 
   it("opens the file menu with focus on the first item", async () => {
@@ -190,7 +190,7 @@ describe("AppShell custom file header", () => {
       within(screen.getByRole("menu")).getByRole("menuitem", { name: "新建" }),
     );
 
-    expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: /未命名/ })).toBeVisible();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(fileMenuToggle()).toHaveFocus();
   });
@@ -262,7 +262,7 @@ describe("AppShell custom file header", () => {
     );
 
     fireEvent.keyDown(window, { key: "n", ctrlKey: true });
-    expect(await screen.findByRole("tab", { name: /Untitled/ })).toBeVisible();
+    expect(await screen.findByRole("tab", { name: /未命名/ })).toBeVisible();
 
     fireEvent.keyDown(window, { key: "o", ctrlKey: true });
     expect(await screen.findByRole("tab", { name: /a\.md/ })).toBeVisible();
@@ -305,7 +305,7 @@ describe("AppShell custom file header", () => {
     // Menu accelerators are gated while a modal dialog is up, like the
     // native menu handler.
     fireEvent.keyDown(window, { key: "n", ctrlKey: true });
-    expect(screen.queryByRole("tab", { name: /Untitled/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /未命名/ })).not.toBeInTheDocument();
   });
 
   it("saves exactly once on Ctrl+S with the editor focused", async () => {

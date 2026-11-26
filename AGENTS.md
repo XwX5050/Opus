@@ -101,9 +101,14 @@ Rust/Tauri backend.
   (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings
   dialog (`SettingsDialog.tsx` — a dual-pane dialog with vertical 外观/编辑器/
   翻译/关于 tabs on the left, the active panel on the right with descriptive
-  labels, hairline rows and transparent controls (plain number fields and
-  capsule select/text fields), roving-tabindex
-  ArrowUp/ArrowDown/Home/End navigation, and a compact icon rail below 700 px;
+  labels, hairline rows and one 34 px capsule control family on
+  `--surface-inset` (240/300/360 px width steps, 108 px numeric fields with a
+  visible px/倍/个 unit suffix, the API endpoint full width) with one neutral
+  1 px border at >= 3:1 in both themes, roving-tabindex
+  ArrowUp/ArrowDown/Home/End navigation, a compact icon rail below 700 px,
+  field+action rows stacked below 900 px and every row below 560 px;
+  the dialog keeps a stable top anchor while 外观 and 关于 size to their
+  content and 编辑器/翻译 keep the fixed form height;
   its API Key field is write-only: it never
   echoes a stored key, shows an 已保存 placeholder when the addressed slot has
   one, commits on blur/Enter straight to the credential store, and offers a
@@ -125,19 +130,23 @@ Rust/Tauri backend.
   vertical centerline, tabs remain flush with its bottom edge, and both
   panel-toggle icons are 16 px inside 32 px targets. `WelcomeScreen.tsx` (styles in
   `welcome.css`) renders the empty editor area as a single-column welcome page:
-  a script `Opus` wordmark with no subtitle, accent-colored 启动/最近 headings,
-  launch actions with the real
-  platform shortcuts, and the first five recent files/folders plus a native
+  a script `Opus` wordmark on macOS and a plain UI-font wordmark elsewhere (no
+  subtitle), quiet 启动/最近 headings, launch actions with the real
+  platform shortcuts (⌘N/⌘O/⇧⌘O on macOS, Ctrl+N/Ctrl+O/Ctrl+Shift+O
+  elsewhere), and the first five recent files/folders plus a native
   `<details>` 更多… disclosure. Recent activation goes through the controller's
   `openRecent`; opening a recent folder sets the existing reveal-sidebar flag,
   while session restores keep their persisted collapse state. Each recent row
-  is a native button without a file icon; its accessible name and native
-  tooltip carry the full path. The visible name is accent-colored, followed by
+  is a native button without a file icon; its accessible name (打开文件/打开文件夹
+  + name + full path) and native tooltip carry the full path. The visible name is
+  primary-colored with a muted 文件/文件夹 type tag, followed by
   a right-aligned compact parent directory separated by 24 px (`~` replaces
   the usual macOS/Linux/Windows home prefix, and files do not repeat their
   basename),
   with CSS-only overflow
-  ellipsis. The header is platform-specific:
+  ellipsis. Rows bleed their hover surface with negative inline margins so
+  the wordmark, section headings, row icons, and recent names share one left
+  edge. The header is platform-specific:
   macOS keeps the native menu bar (so the header stays minimal) while Linux
   and Windows native builds get a file-icon dropdown in the header plus
   frontend keybindings
@@ -162,14 +171,31 @@ Rust/Tauri backend.
   the file tree even in the empty state; it never contains
   the document tab list. The translate, view-mode, and presentation toggles
   live in the outline toolbar while the panel is open — hiding it never resets
-  per-tab translation or view-mode state. `ContextMenu.tsx`
+  per-tab translation or view-mode state. When the outline is collapsed while
+  a translation is on screen or the reading view is active, a compact state
+  bar above the editor keeps that state visible with a
+  返回编辑/显示原文/取消翻译 action and a chip that reopens the outline. A
+  missing translation key surfaces as a notice (not a danger alert) with a
+  direct 打开设置 action.
+  Panel widths are display-clamped so the editor keeps its 320 px floor: a
+  wide persisted width is shown narrower, never written back. A runtime
+  `sidebarAutoHidden` flag hides the explorer without touching the persisted
+  collapse preference, and the guard reclaims the outline first and then the
+  explorer; a wide restart restores an auto-hidden explorer. The guard
+  restores hidden panels only on the window-width path (initial settle and
+  resizes), with a 32 px hysteresis; panel drags never do. Opening a panel by hand makes room
+  by hiding the other when both preferred widths would break the floor.
+  `ContextMenu.tsx`
   is the shared right-click menu (portal, keyboard navigation, edge flip)
   used by the editor area, the top tab list, the file tree, and the
   shell-level fallback menu; selecting an item closes the menu itself, so
   item handlers must not close it again. The editable document title above
-  the editor toolbar renames the underlying file through
+  the editor toolbar aligns with the reading column's 2 px inline inset,
+  folds away after the editor scrolls (72 px down, 16 px back), stays
+  expanded while focus is inside it or the inline editor is open, and renames
+  the underlying file through
   `controller.renameDocument` (backend `rename_document`, no workspace anchor
-  required); for untitled documents — which have no file yet — the title and
+  required); for a new 未命名 document — which has no file yet — the title and
   the tab menu's rename entry route to Save As instead.
   `InlineNameInput.tsx` is the shared inline rename input also
   used by the file tree. `demoPort.ts` constructs the fixture-seeded
@@ -184,11 +210,18 @@ Rust/Tauri backend.
   `WorkspaceSearch.tsx` is the reusable, unit-tested saved-Markdown search
   component and `DocumentPort.searchWorkspace` keeps its backend contract; in
   dedicated mode it fills the left sidebar with a single pill-shaped search
-  field. `FileQuickSwitcher.tsx` uses a native `<dialog>` with combobox
+  field. Results are grouped per file, each match row carries its line number
+  and a full accessible label, the selected row uses an accent wash, and the
+  hit is emphasized with weight/underline on that wash (`searchViews.css`).
+  `FileQuickSwitcher.tsx` uses a native `<dialog>` with combobox
   keyboard navigation, recursively collected Markdown paths, and Shift+Enter
-  creation through `createMarkdownFile`. It shows six options before a
-  更多… disclosure (auto-opening for keyboard selection), has no close icon,
-  and closes on an outside pointer press or Escape.
+  creation through `createMarkdownFile`. Options split the file name from its
+  parent directory and highlight query tokens; creation rows carry a 创建
+  badge. Option indices stay global across the six-item list and its
+  更多… disclosure, so ids, `aria-selected`, and `aria-activedescendant`
+  agree; the disclosure auto-opens for keyboard selection. The footer spells
+  platform keycaps (↵/⇧↵/esc on macOS, Enter/Shift+Enter/Esc elsewhere). It
+  has no close icon and closes on an outside pointer press or Escape.
 - `src/perf/`: `main.tsx` is the production performance entry loaded by
   `perf.html`. It injects the shared demo port through
   `createApp(port, { browserShell: true })` under React's production runtime;
@@ -198,7 +231,10 @@ Rust/Tauri backend.
   `PresentationOverlay.tsx` renders the active document's ORIGINAL text
   (never the translation) one slide at a time through the same reading-mode
   CodeMirror preview extensions as the editor, with images resolved via
-  `tauriImagePreviewUrl`. `presentationPlan.ts` plans slides: explicit `---`
+  `tauriImagePreviewUrl`; the slide host shares the token-driven code,
+  inline-code, and frontmatter skin from `livePreviewRefinements.css` without
+  taking the editor's `.markdown-editor` layout class.
+  `presentationPlan.ts` plans slides: explicit `---`
   separators win when present (`splitManualSlides`), otherwise natural blocks
   are greedily packed by measured rendered height (`splitNaturalBlocks` +
   `packBlocksByHeight`). Open state is per tab on the controller
@@ -261,8 +297,16 @@ Rust/Tauri backend.
   slider keyboard/input events out of editor and cell handling. Math
   rendering (`mathExtension.ts`, `mathWidgets.ts`), image widgets, image
   paste/drop, outline publishing (`outline.ts`, `outlineExtension.ts`,
-  `OutlinePanel.tsx`), search (wired in `editorExtensions.ts` via
-  `@codemirror/search`), frontmatter, highlight markers, performance (light)
+  `OutlinePanel.tsx` — its `activeId` marks the heading under the viewport
+  with `aria-current="location"`; a hidden heading is represented by its
+  nearest visible collapsed ancestor, whose accessible name appends 包含当前标题,
+  instead of auto-expanding, and only the active row or marked ancestor is
+  scrolled into view when that state changes),
+  search (wired in `editorExtensions.ts` via
+  `@codemirror/search`; `searchPanelTheme.ts` localizes the find/replace
+  panel through `EditorState.phrases` and skins it with design tokens, shared
+  by the document editor and presentation previews), frontmatter, highlight
+  markers, performance (light)
   mode (`performanceMode.ts`), and fenced-code-block typing assists
   (`codeBlockAutoClose.ts` — auto-closing fences plus bracket/quote pairing,
   stepping over, wrapping, and pair deletion, strictly gated on the syntax
@@ -284,7 +328,15 @@ Rust/Tauri backend.
   (`LIGHT_MODE_TABLE_CELL_LIMIT`) applies only with the full grammar, and
   core produces no table widgets at all. `viewMode.ts` defines the
   per-tab modes: `editing` (live preview, selection reveals source) and
-  `reading` (read-only, fully rendered). On Linux (WebKitGTK), IME
+  `reading` (read-only, fully rendered). `livePreviewRefinements.css` owns the
+  rendered typography: fenced blocks and inline code sit on `--surface-panel`
+  (one step above the canvas, never a card), the language label sits at the
+  block's top-left, fixed 8/16 px fenced-block insets and 8/4 px radii are
+  shared by the editor and presentation slide host, and a heading's `#` run
+  hangs in the left margin (tucked above the heading below 960 px) so
+  revealing it never shifts the text; quote and code line decorations merge
+  when blocks nest.
+  On Linux (WebKitGTK), IME
   compositions are protected by a patch-package patch
   (`patches/@codemirror+view+*.patch`,
   applied via the `postinstall` script) that stops CodeMirror from rewriting
@@ -315,7 +367,12 @@ Rust/Tauri backend.
   24 px indentation per depth level, a rotating disclosure chevron for folders,
   and no file icon;
   an invisible spacer keeps file and folder labels aligned at
-  `--font-ui-size-large`. Rows have no inline action buttons; the right-click
+  `--font-ui-size-large`. The shell passes the open document's `activePath`;
+  only a visible file row matching it is selected (accent wash plus a 2 px
+  inset marker), while a separate `focusedPath` owns the roving tab stop, so
+  keyboard focus never implies selection and an unmatched or directory path
+  never falls back to the first row for selection; folder rows carry no
+  `aria-selected`. Rows have no inline action buttons; the right-click
   context menu (rename / move to trash; folders additionally offer creating a
   file inside) is built on `src/app/ContextMenu.tsx` and owns those editing
   operations. The Rust
@@ -388,7 +445,15 @@ Rust/Tauri backend.
   `--canvas` must stay a plain hex (the native window background in
   `window_background.rs` parses it as a solid color) and carries no glow or
   texture overlays; side panels use the flat `--surface-panel` tone, one step
-  above the canvas.
+  above the canvas. Primary actions use `.button-primary` (filled
+  `--accent-strong` with white text); destructive actions use `.button-danger`
+  (outline `--danger-strong` on `--danger-soft`). `--text-muted` stays at or
+  above 4.5:1 on canvas/panel/surface/hover, `--focus-ring` is a solid accent
+  hex, and the UI font starts at `system-ui` (no bundled Inter). Component
+  sheets refine their own surfaces — `searchViews.css`,
+  `settingsRefinements.css`, `shellRefinements.css`, `fileSidebar.css`,
+  `outlinePanel.css`, and `livePreviewRefinements.css` — while app.css keeps
+  the shared primitives.
 - `src/conflict/`: the external-change conflict dialog and its choices
   (load disk version / keep current / save as).
 - `src-tauri/src/native_e2e.rs`: compiled only with the `native-e2e` Cargo

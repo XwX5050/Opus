@@ -490,11 +490,123 @@ describe("planLivePreview", () => {
           from: 0,
           to: 9,
           kind: "line",
-          className: "cm-live-preview-code-lang-anchor",
+          className:
+            "cm-live-preview-code-line cm-live-preview-code-line-first",
         },
         { from: 9, to: 9, kind: "code-lang-badge", displayText: "python" },
       ]),
     );
+  });
+
+  it("plans quiet first, middle, and last surface lines for a code block", () => {
+    const doc = "```ts\nconst value = 1;\n```\n\nafter";
+    const state = createState(doc, [{ anchor: doc.length }]);
+
+    expect(
+      planLivePreview(state)
+        .filter(({ kind }) => kind === "line")
+        .map(({ from, to, className }) => ({ from, to, className })),
+    ).toEqual([
+      {
+        from: 0,
+        to: 5,
+        className:
+          "cm-live-preview-code-line cm-live-preview-code-line-first",
+      },
+      {
+        from: 6,
+        to: 22,
+        className: "cm-live-preview-code-line cm-live-preview-code-line-middle",
+      },
+      {
+        from: 23,
+        to: 26,
+        className: "cm-live-preview-code-line cm-live-preview-code-line-last",
+      },
+    ]);
+  });
+
+  it("plans a single surface line for an unclosed fence at the document end", () => {
+    const doc = "```ts";
+    const state = createState(doc, [{ anchor: doc.length }]);
+
+    expect(
+      planLivePreview(state)
+        .filter(({ kind }) => kind === "line")
+        .map(({ className }) => className),
+    ).toEqual(["cm-live-preview-code-line cm-live-preview-code-line-single"]);
+  });
+
+  it("combines quote and code line surfaces for a fence inside a blockquote", () => {
+    const doc = "> ```ts\n> let x = 1;\n> ```\n\nafter";
+    const state = createState(doc, [{ anchor: doc.length }]);
+
+    const lines = planLivePreview(state).filter(
+      ({ kind }) => kind === "line",
+    );
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(line.className).toContain("cm-live-preview-quote-line");
+      expect(line.className).toContain("cm-live-preview-code-line");
+    }
+  });
+
+  it("hangs only the opening heading marker while editing the heading", () => {
+    const doc = "### Heading ###\n\nParagraph";
+    const state = createState(doc, [{ anchor: 2 }]);
+
+    const markers = markedAs(
+      planLivePreview(state),
+      "cm-live-preview-heading-mark",
+    );
+    expect(markers).toHaveLength(1);
+    expect(state.sliceDoc(markers[0].from, markers[0].to)).toBe("### ");
+  });
+
+  it("keeps the heading marker hidden and unhung outside the heading", () => {
+    const doc = "### Heading\n\nParagraph";
+    const state = createState(doc, [{ anchor: doc.length }]);
+    const plan = planLivePreview(state);
+
+    expect(markedAs(plan, "cm-live-preview-heading-mark")).toEqual([]);
+    expect(hiddenSource(state, plan)).toContain("### ");
+    expect(
+      plan
+        .filter(({ kind }) => kind === "line")
+        .map(({ className }) => className),
+    ).toEqual(["cm-live-preview-heading-line"]);
+  });
+
+  it("reserves the heading row only on the heading being edited", () => {
+    const doc = "### Heading\n\nParagraph";
+    const editing = createState(doc, [{ anchor: 2 }]);
+    const elsewhere = createState(doc, [{ anchor: doc.length }]);
+
+    expect(
+      planLivePreview(editing)
+        .filter(({ kind }) => kind === "line")
+        .map(({ className }) => className),
+    ).toEqual([
+      "cm-live-preview-heading-line cm-live-preview-heading-line-revealed",
+    ]);
+    expect(
+      planLivePreview(elsewhere)
+        .filter(({ kind }) => kind === "line")
+        .map(({ className }) => className),
+    ).toEqual(["cm-live-preview-heading-line"]);
+  });
+
+  it("plans a padded line around a rendered horizontal rule", () => {
+    const state = createState("---\n\nafter", [{ anchor: 8 }]);
+
+    expect(linesMarkedAs(planLivePreview(state), "cm-live-preview-rule-line")).toEqual([
+      {
+        from: 0,
+        to: 3,
+        kind: "line",
+        className: "cm-live-preview-rule-line",
+      },
+    ]);
   });
 
   it("plans no language badge for fenced code without an info string", () => {
@@ -563,6 +675,22 @@ describe("livePreviewExtension", () => {
     expect(
       view.contentDOM.querySelector<HTMLElement>(".cm-line")?.textContent,
     ).toBe("### Heading");
+    expect(view.contentDOM.querySelector(".cm-line")).toHaveClass(
+      /cm-live-preview-heading-line-revealed/,
+    );
+    const marker = view.dom.querySelector(".cm-live-preview-heading-mark");
+    expect(marker?.textContent).toBe("### ");
+    expect(view.dom.querySelector(".cm-live-preview-heading-3")?.textContent).toBe(
+      "### Heading",
+    );
+    view.destroy();
+  });
+
+  it("renders no hanging heading marker in reading mode", () => {
+    const view = createView("### Heading\n\nParagraph", true);
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(view.dom.querySelector(".cm-live-preview-heading-mark")).toBeNull();
+    expect(view.contentDOM.textContent).not.toContain("###");
     view.destroy();
   });
 
@@ -803,6 +931,22 @@ describe("livePreviewExtension", () => {
     expect(
       firstLine?.querySelector(".cm-live-preview-code-lang-badge"),
     ).not.toBeNull();
+    view.destroy();
+  });
+
+  it("renders first, middle, and last surface classes on code fence lines", () => {
+    const view = createView("```ts\nconst n = 1;\n```\n\nafter");
+    const lines = [...view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")];
+    expect(lines[0]).toHaveClass(/cm-live-preview-code-line-first/);
+    expect(lines[1]).toHaveClass(/cm-live-preview-code-line-middle/);
+    expect(lines[2]).toHaveClass(/cm-live-preview-code-line-last/);
+    view.destroy();
+  });
+
+  it("gives a rendered horizontal rule its own padded line", () => {
+    const view = createView("---\n\nafter");
+    const rule = view.dom.querySelector(".cm-live-preview-horizontal-rule");
+    expect(rule?.parentElement).toHaveClass(/cm-live-preview-rule-line/);
     view.destroy();
   });
 

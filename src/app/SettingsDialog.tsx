@@ -28,6 +28,7 @@ import { prefersReducedMotion } from "../motion/motionRuntime";
 import type { UpdateCheckState } from "./updates";
 import { InfoIcon, PencilLineIcon, SunIcon, TranslateIcon } from "./icons";
 import { version as APP_VERSION } from "../../package.json";
+import "./settingsRefinements.css";
 
 gsap.registerPlugin(useGSAP);
 
@@ -127,7 +128,9 @@ function FieldLabel({
   return (
     <span className="settings-field-label">
       <label htmlFor={id}>{label}</label>
-      <span className="settings-field-description">{description}</span>
+      <span id={`${id}-description`} className="settings-field-description">
+        {description}
+      </span>
     </span>
   );
 }
@@ -138,6 +141,8 @@ interface NumberFieldProps {
   readonly min: number;
   readonly max: number;
   readonly step?: number;
+  /** Visible unit suffix (px, 倍, 个…) inside the capsule. */
+  readonly unit: string;
   readonly onCommit: (value: number) => void;
 }
 
@@ -148,7 +153,15 @@ interface NumberFieldProps {
  * instead; the controller then clamps once. Invalid drafts snap back to the
  * last committed value.
  */
-function NumberField({ id, value, min, max, step, onCommit }: NumberFieldProps) {
+function NumberField({
+  id,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  onCommit,
+}: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
 
   const commit = (raw: string) => {
@@ -159,22 +172,28 @@ function NumberField({ id, value, min, max, step, onCommit }: NumberFieldProps) 
   };
 
   return (
-    <input
-      id={id}
-      type="number"
-      min={min}
-      max={max}
-      step={step}
-      value={draft ?? String(value)}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={(event) => commit(event.target.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          commit(event.currentTarget.value);
-        }
-      }}
-    />
+    <span className="settings-number">
+      <input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        aria-describedby={`${id}-description ${id}-unit`}
+        value={draft ?? String(value)}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={(event) => commit(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit(event.currentTarget.value);
+          }
+        }}
+      />
+      <span id={`${id}-unit`} className="settings-number-unit">
+        {unit}
+      </span>
+    </span>
   );
 }
 
@@ -183,6 +202,12 @@ interface TextFieldProps {
   readonly value: string;
   readonly type?: "text" | "password";
   readonly placeholder?: string;
+  /** Extra classes for the width rule (settings-control-*). */
+  readonly className?: string;
+  /** Native tooltip exposing the full value of a long field. */
+  readonly title?: string;
+  /** Extra description element appended after the row description. */
+  readonly extraDescriptionId?: string;
   readonly onCommit: (value: string) => void;
 }
 
@@ -198,6 +223,9 @@ function TextField({
   value,
   type = "text",
   placeholder,
+  className,
+  title,
+  extraDescriptionId,
   onCommit,
 }: TextFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -213,6 +241,13 @@ function TextField({
       id={id}
       type={type}
       placeholder={placeholder}
+      className={className}
+      title={title}
+      aria-describedby={
+        extraDescriptionId === undefined
+          ? `${id}-description`
+          : `${id}-description ${extraDescriptionId}`
+      }
       value={draft ?? value}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={(event) => commit(event.target.value)}
@@ -367,6 +402,7 @@ function SearchableField({
         aria-expanded={options === null ? undefined : listVisible}
         aria-controls={listVisible ? `${id}-listbox` : undefined}
         aria-activedescendant={listVisible ? activeOptionId : undefined}
+        aria-describedby={`${id}-description`}
         placeholder={options === null ? fallbackPlaceholder : searchPlaceholder}
         value={value}
         onChange={(event) => {
@@ -749,6 +785,20 @@ export default function SettingsDialog({
     (section) => section.id === activeSection,
   ) ?? SETTINGS_SECTIONS[0];
 
+  // 外观 and 关于 hold one or two rows; a fixed 640px dialog would leave them
+  // mostly empty. The translation/editor panes keep the fixed workspace so
+  // their long forms scroll inside the body.
+  const compactLayout = activeSection === "appearance" || activeSection === "about";
+
+  const clearKeyReason =
+    port === undefined
+      ? "当前环境不支持管理 API Key"
+      : keyBusy
+        ? "正在处理 API Key"
+        : keyPresent
+          ? "当前服务商已保存 API Key，可使用清除按钮删除"
+          : "当前服务商尚未保存 API Key，清除按钮不可用";
+
   return (
     <div
       ref={dialogRef}
@@ -756,7 +806,7 @@ export default function SettingsDialog({
       tabIndex={-1}
       aria-modal="true"
       aria-labelledby="settings-dialog-title"
-      className="settings-dialog"
+      className={`settings-dialog${compactLayout ? " settings-dialog-compact" : ""}`}
       onKeyDown={onKeyDown}
     >
       <div className="settings-layout">
@@ -818,6 +868,8 @@ export default function SettingsDialog({
             <select
               id="settings-theme"
               ref={firstControlRef}
+              className="settings-control"
+              aria-describedby="settings-theme-description"
               value={theme}
               onChange={(event) =>
                 onThemeChange(event.target.value as ThemePreference)
@@ -848,6 +900,7 @@ export default function SettingsDialog({
               min={limits.bodySizePx.min}
               max={limits.bodySizePx.max}
               value={editorPreferences.bodySizePx}
+              unit="px"
               onCommit={(value) => update({ bodySizePx: value })}
             />
           </div>
@@ -860,6 +913,7 @@ export default function SettingsDialog({
               max={limits.lineHeight.max}
               step={0.05}
               value={editorPreferences.lineHeight}
+              unit="倍"
               onCommit={(value) => update({ lineHeight: value })}
             />
           </div>
@@ -872,6 +926,7 @@ export default function SettingsDialog({
               max={limits.contentWidthPx.max}
               step={10}
               value={editorPreferences.contentWidthPx}
+              unit="px"
               onCommit={(value) => update({ contentWidthPx: value })}
             />
           </div>
@@ -880,6 +935,8 @@ export default function SettingsDialog({
             <FieldLabel id="settings-font" label="字体" description="选择编辑和阅读时使用的字体" />
             <select
               id="settings-font"
+              className="settings-control"
+              aria-describedby="settings-font-description"
               value={customSelected ? "custom" : editorPreferences.fontFamily}
               onChange={(event) => {
                 const value = event.target.value;
@@ -929,6 +986,8 @@ export default function SettingsDialog({
             <FieldLabel id="settings-translation-preset" label="服务商预设" description={matchedPreset?.note ?? "快速填入服务商的接口与模型配置"} />
             <select
               id="settings-translation-preset"
+              className="settings-control settings-control-wide"
+              aria-describedby="settings-translation-preset-description"
               value={matchedPreset?.id ?? CUSTOM_PRESET_VALUE}
               onChange={(event) => {
                 const id = event.target.value;
@@ -961,10 +1020,12 @@ export default function SettingsDialog({
             </select>
           </div>
 
-          <div className="settings-row" data-settings-row>
+          <div className="settings-row settings-row-stacked" data-settings-row>
             <FieldLabel id="settings-translation-endpoint" label="API 端点" description="OpenAI 兼容的聊天补全接口地址" />
             <TextField
               id="settings-translation-endpoint"
+              className="settings-control settings-control-fill settings-control-mono"
+              title={translationSettings.endpoint}
               value={translationSettings.endpoint}
               onCommit={(value) => updateTranslation({ endpoint: value })}
             />
@@ -984,17 +1045,31 @@ export default function SettingsDialog({
               <TextField
                 id="settings-translation-api-key"
                 type="password"
+                className="settings-control settings-control-grow"
                 placeholder={keyPresent ? "已保存" : "sk-..."}
+                extraDescriptionId="settings-translation-api-key-clear-reason"
                 value=""
                 onCommit={(value) => void saveTranslationKey(value)}
               />
               <button
                 type="button"
+                className="settings-key-clear"
                 disabled={port === undefined || !keyPresent || keyBusy}
+                title={clearKeyReason}
+                aria-describedby="settings-translation-api-key-clear-reason"
                 onClick={() => void clearTranslationKey()}
               >
                 清除
               </button>
+              {/* A disabled button leaves the tab order; the state stays
+                  available to assistive technology through the description
+                  shared by the field and the button. */}
+              <span
+                id="settings-translation-api-key-clear-reason"
+                className="visually-hidden"
+              >
+                {clearKeyReason}
+              </span>
               {keyHint !== null && (
                 <span role="status" className="settings-update-hint">
                   {keyHint}
@@ -1008,6 +1083,8 @@ export default function SettingsDialog({
             <div className="settings-update-controls">
               <select
                 id="settings-translation-model"
+                className="settings-control settings-control-grow"
+                aria-describedby="settings-translation-model-description"
                 value={translationSettings.model}
                 onChange={(event) =>
                   updateTranslation({ model: event.target.value })
@@ -1037,23 +1114,32 @@ export default function SettingsDialog({
           <div className="settings-row" data-settings-row>
             <FieldLabel id="settings-translation-concurrency" label="并发数" description="同时翻译的段落数，范围 1-32，默认 10；调太高可能被服务商限流。" />
             <div className="settings-update-controls">
-              <input
-                id="settings-translation-concurrency"
-                type="number"
-                min={1}
-                max={32}
-                step={1}
-                value={translationSettings.concurrency}
-                onChange={(event) => {
-                  const raw = event.target.value.trim();
-                  // An emptied field is ignored; the stored value stands.
-                  if (raw === "") return;
-                  const parsed = Number.parseInt(raw, 10);
-                  if (Number.isNaN(parsed)) return;
-                  // The controller clamps to 1-32 on write-back.
-                  updateTranslation({ concurrency: parsed });
-                }}
-              />
+              <span className="settings-number">
+                <input
+                  id="settings-translation-concurrency"
+                  type="number"
+                  min={1}
+                  max={32}
+                  step={1}
+                  aria-describedby="settings-translation-concurrency-description settings-translation-concurrency-unit"
+                  value={translationSettings.concurrency}
+                  onChange={(event) => {
+                    const raw = event.target.value.trim();
+                    // An emptied field is ignored; the stored value stands.
+                    if (raw === "") return;
+                    const parsed = Number.parseInt(raw, 10);
+                    if (Number.isNaN(parsed)) return;
+                    // The controller clamps to 1-32 on write-back.
+                    updateTranslation({ concurrency: parsed });
+                  }}
+                />
+                <span
+                  id="settings-translation-concurrency-unit"
+                  className="settings-number-unit"
+                >
+                  个
+                </span>
+              </span>
             </div>
           </div>
 
@@ -1082,6 +1168,8 @@ export default function SettingsDialog({
             <FieldLabel id="settings-translation-target-language" label="目标语言" description="设置译文使用的语言" />
             <select
               id="settings-translation-target-language"
+              className="settings-control"
+              aria-describedby="settings-translation-target-language-description"
               value={translationSettings.targetLanguage}
               onChange={(event) =>
                 updateTranslation({ targetLanguage: event.target.value })
@@ -1095,7 +1183,7 @@ export default function SettingsDialog({
             </select>
           </div>
         </div>
-        <p>翻译结果会缓存在本机，原文不变时不重复调用 API。</p>
+        <p className="settings-section-note">翻译结果会缓存在本机，原文不变时不重复调用 API。</p>
       </section>
       )}
 

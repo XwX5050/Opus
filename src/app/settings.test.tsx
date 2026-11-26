@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import type { Update } from "@tauri-apps/plugin-updater";
@@ -72,6 +73,10 @@ describe("settings: category navigation", () => {
     expect(within(dialog).getAllByRole("tabpanel")).toHaveLength(1);
     expect(within(dialog).getByRole("tabpanel", { name: "外观" })).toBeVisible();
     expect(within(dialog).getByLabelText("主题")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("主题")).toHaveAttribute(
+      "aria-describedby",
+      "settings-theme-description",
+    );
 
     await user.click(within(tablist).getByRole("tab", { name: "编辑器" }));
     expect(within(dialog).getByRole("tabpanel", { name: "编辑器" })).toBeVisible();
@@ -109,6 +114,25 @@ describe("settings: category navigation", () => {
     fireEvent.keyDown(about, { key: "Home" });
     expect(appearance).toHaveAttribute("aria-selected", "true");
     expect(appearance).toHaveFocus();
+  });
+
+  it("tightens the dialog for short categories and keeps form categories scrollable", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={new MemoryDocumentPort(new Map())} />);
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const tab = (name: string) => within(dialog).getByRole("tab", { name });
+
+    // 外观 and 关于 hold one or two rows: the dialog follows their content
+    // instead of reserving the full 640px form height.
+    expect(dialog).toHaveClass("settings-dialog-compact");
+
+    await user.click(tab("编辑器"));
+    expect(dialog).not.toHaveClass("settings-dialog-compact");
+    await user.click(tab("翻译"));
+    expect(dialog).not.toHaveClass("settings-dialog-compact");
+    await user.click(tab("关于"));
+    expect(dialog).toHaveClass("settings-dialog-compact");
   });
 });
 
@@ -218,6 +242,38 @@ describe("settings: theme and editor preferences", () => {
     );
     expect(style.getPropertyValue("--editor-content-width")).toBe(
       `${DEFAULT_EDITOR_PREFERENCES.contentWidthPx}px`,
+    );
+  });
+
+  it("shows each numeric preference as a capsule with a semantic unit", async () => {
+    const user = userEvent.setup();
+    render(<AppShell port={new MemoryDocumentPort(new Map())} />);
+
+    await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    await user.click(within(dialog).getByRole("tab", { name: "编辑器" }));
+
+    const bodySize = within(dialog).getByLabelText("正文字号");
+    expect(bodySize.parentElement).toHaveClass("settings-number");
+    expect(bodySize.parentElement).toHaveTextContent("px");
+    expect(bodySize).toHaveAttribute(
+      "aria-describedby",
+      "settings-body-size-description settings-body-size-unit",
+    );
+
+    const lineHeight = within(dialog).getByLabelText("行高");
+    expect(lineHeight.parentElement).toHaveClass("settings-number");
+    expect(lineHeight.parentElement).toHaveTextContent("倍");
+
+    const contentWidth = within(dialog).getByLabelText("内容宽度");
+    expect(contentWidth.parentElement).toHaveClass("settings-number");
+    expect(contentWidth.parentElement).toHaveTextContent("px");
+    // Two pixel preferences share the same visible unit.
+    expect(within(dialog).getAllByText("px")).toHaveLength(2);
+
+    expect(within(dialog).getByLabelText("字体")).toHaveAttribute(
+      "aria-describedby",
+      "settings-font-description",
     );
   });
 
@@ -385,6 +441,10 @@ describe("settings: installed font enumeration", () => {
     const input = within(dialog).getByLabelText("自定义字体");
     expect(input).not.toHaveAttribute("list");
     expect(input).not.toHaveAttribute("role");
+    expect(input).toHaveAttribute(
+      "aria-describedby",
+      "settings-font-custom-description",
+    );
     fireEvent.change(input, { target: { value: "Ping" } });
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
@@ -870,25 +930,61 @@ describe("settings: translation", () => {
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual(["设置", "翻译"]);
-    expect(within(dialog).getByLabelText("API 端点")).toHaveValue(
-      DEFAULT_TRANSLATION_SETTINGS.endpoint,
+    const endpoint = within(dialog).getByLabelText("API 端点");
+    expect(endpoint).toHaveValue(DEFAULT_TRANSLATION_SETTINGS.endpoint);
+    expect(endpoint).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-endpoint-description",
+    );
+    expect(within(dialog).getByLabelText("服务商预设")).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-preset-description",
     );
     const apiKey = within(dialog).getByLabelText("API Key");
     // Write-only: the field starts empty and never shows a stored key.
     expect(apiKey).toHaveValue("");
     expect(apiKey).toHaveAttribute("type", "password");
     expect(apiKey).toHaveAttribute("placeholder", "sk-...");
+    expect(apiKey).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-api-key-description settings-translation-api-key-clear-reason",
+    );
+    const clear = within(dialog).getByRole("button", { name: "清除" });
+    expect(clear).toBeDisabled();
+    // The disabled reason is exposed as a description, not only as a tooltip
+    // on the non-focusable button.
+    expect(clear).toHaveAttribute(
+      "title",
+      "当前服务商尚未保存 API Key，清除按钮不可用",
+    );
+    expect(clear).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-api-key-clear-reason",
+    );
     expect(
-      within(dialog).getByRole("button", { name: "清除" }),
-    ).toBeDisabled();
+      within(dialog).getByText("当前服务商尚未保存 API Key，清除按钮不可用"),
+    ).toHaveAttribute("id", "settings-translation-api-key-clear-reason");
     expect(within(dialog).getByLabelText("模型")).toHaveValue(
       DEFAULT_TRANSLATION_SETTINGS.model,
     );
-    expect(within(dialog).getByLabelText("并发数")).toHaveValue(
-      DEFAULT_TRANSLATION_SETTINGS.concurrency,
+    expect(within(dialog).getByLabelText("模型")).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-model-description",
+    );
+    const concurrency = within(dialog).getByLabelText("并发数");
+    expect(concurrency).toHaveValue(DEFAULT_TRANSLATION_SETTINGS.concurrency);
+    expect(concurrency.parentElement).toHaveClass("settings-number");
+    expect(concurrency.parentElement).toHaveTextContent("个");
+    expect(concurrency).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-concurrency-description settings-translation-concurrency-unit",
     );
     expect(within(dialog).getByLabelText("目标语言")).toHaveValue(
       DEFAULT_TRANSLATION_SETTINGS.targetLanguage,
+    );
+    expect(within(dialog).getByLabelText("目标语言")).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-target-language-description",
     );
     expect(
       within(dialog).getByText("同时翻译的段落数，范围 1-32，默认 10；调太高可能被服务商限流。"),
@@ -896,6 +992,21 @@ describe("settings: translation", () => {
     expect(
       within(dialog).getByText("翻译结果会缓存在本机，原文不变时不重复调用 API。"),
     ).toBeInTheDocument();
+  });
+
+  it("gives the endpoint a full-row monospace field that exposes its complete value", () => {
+    const { dialog } = renderTranslationDialog();
+    const endpoint = within(dialog).getByLabelText("API 端点");
+    expect(endpoint.closest(".settings-row")).toHaveClass(
+      "settings-row-stacked",
+    );
+    expect(endpoint).toHaveClass("settings-control-fill");
+    expect(endpoint).toHaveClass("settings-control-mono");
+    // The native tooltip carries the whole URL even when the field scrolls.
+    expect(endpoint).toHaveAttribute(
+      "title",
+      DEFAULT_TRANSLATION_SETTINGS.endpoint,
+    );
   });
 
   it("commits endpoint and model edits as settings patches and stores the key", async () => {
@@ -1420,6 +1531,19 @@ describe("settings: translation", () => {
     const apiKey = within(dialog).getByLabelText("API Key");
     const clear = within(dialog).getByRole("button", { name: "清除" });
     await waitFor(() => expect(clear).toBeEnabled());
+    expect(clear).toHaveAttribute(
+      "title",
+      "当前服务商已保存 API Key，可使用清除按钮删除",
+    );
+    // The description follows the state, so the button is explained even
+    // without hovering its tooltip.
+    expect(clear).toHaveAttribute(
+      "aria-describedby",
+      "settings-translation-api-key-clear-reason",
+    );
+    expect(
+      within(dialog).getByText("当前服务商已保存 API Key，可使用清除按钮删除"),
+    ).toHaveAttribute("id", "settings-translation-api-key-clear-reason");
 
     await user.click(clear);
 
@@ -1429,6 +1553,12 @@ describe("settings: translation", () => {
     );
     expect(apiKey).toHaveAttribute("placeholder", "sk-...");
     expect(within(dialog).getByRole("button", { name: "清除" })).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "清除" }),
+    ).toHaveAttribute(
+      "title",
+      "当前服务商尚未保存 API Key，清除按钮不可用",
+    );
     expect(within(dialog).getByText("已清除")).toBeInTheDocument();
   });
 
@@ -1514,5 +1644,37 @@ describe("settings: translation", () => {
     expect(
       within(dialog).queryByText(preset.note),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("settings: stylesheet contract", () => {
+  // jsdom does not resolve the imported stylesheet's layout, so the control
+  // geometry and dialog height rules are locked down here.
+  const settingsCss = readFileSync("src/app/settingsRefinements.css", "utf8");
+
+  it("shares one control height and a 3:1 neutral border", () => {
+    expect(settingsCss).toMatch(/--settings-control-height:\s*34px;/);
+    expect(settingsCss).toMatch(/--settings-control-border:\s*#63646a;/);
+    expect(settingsCss).toMatch(
+      /:root\[data-theme="light"\] \.settings-dialog\s*\{[^}]*--settings-control-border:\s*#818186;/s,
+    );
+    expect(settingsCss).toMatch(
+      /\.settings-dialog \.settings-row button\s*\{[^}]*height:\s*var\(--settings-control-height\);/s,
+    );
+  });
+
+  it("anchors the dialog top and tightens short sections", () => {
+    expect(settingsCss).toMatch(
+      /--settings-dialog-top:\s*max\(24px, calc\(\(100dvh - 640px\) \/ 2\)\);/,
+    );
+    expect(settingsCss).toMatch(
+      /\.dialog-overlay \[role="dialog"\]\.settings-dialog\s*\{[^}]*align-self:\s*start;[^}]*margin-block-start:\s*var\(--settings-dialog-top\);/s,
+    );
+    expect(settingsCss).toMatch(
+      /\.settings-dialog\.settings-dialog-compact\s*\{[^}]*height:\s*auto;/s,
+    );
+    expect(settingsCss).toMatch(/@media \(max-width: 900px\)/);
+    expect(settingsCss).toMatch(/@media \(max-width: 700px\)/);
+    expect(settingsCss).toMatch(/@media \(max-width: 560px\)/);
   });
 });

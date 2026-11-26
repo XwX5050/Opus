@@ -69,6 +69,43 @@ const paragraphBlock = (n: number) =>
   );
 
 describe("PresentationOverlay", () => {
+  it("renders fenced and inline code through the shared preview classes", async () => {
+    const rendered = renderOverlay({
+      markdown: [
+        "# Code",
+        "",
+        "Inline `n = 1` and `m = 2`.",
+        "",
+        "```ts",
+        "const answer = 42;",
+        "```",
+      ].join("\n"),
+    });
+
+    await waitFor(() =>
+      expect(slideText(rendered.container)).toContain("const answer = 42;"),
+    );
+    const host = rendered.container.querySelector<HTMLElement>(
+      ".presentation-slide-host:not(.presentation-measure)",
+    )!;
+    // The slide host stays a plain preview surface: the code styles are
+    // scoped to it directly instead of borrowing the editor layout class.
+    expect(host.classList.contains("markdown-editor")).toBe(false);
+    expect(host.querySelector(".cm-live-preview-code-block")).not.toBeNull();
+    expect(
+      host.querySelector(".cm-line.cm-live-preview-code-line-first"),
+    ).not.toBeNull();
+    expect(
+      host.querySelector(".cm-line.cm-live-preview-code-line-last"),
+    ).not.toBeNull();
+    expect(
+      host.querySelector(".cm-live-preview-code-lang-badge")?.textContent,
+    ).toBe("ts");
+    expect(
+      host.querySelector(".cm-live-preview-inline-code")?.textContent,
+    ).toBe("n = 1");
+  });
+
   it("follows manual `---` slide separators and advances forward on click", async () => {
     const onExit = vi.fn();
     const rendered = renderOverlay({

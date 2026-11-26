@@ -27,13 +27,18 @@ const makePort = () =>
     { workspace: root, directories: ["/notes/archive"] },
   );
 
-const renderSidebar = (port = makePort(), onOpenFile = vi.fn()) => {
+const renderSidebar = (
+  port = makePort(),
+  onOpenFile = vi.fn(),
+  activePath: string | null = null,
+) => {
   const view = render(
     <FileSidebar
       root={root}
       port={port}
       onOpenFile={onOpenFile}
       onCloseWorkspace={vi.fn()}
+      activePath={activePath}
     />,
   );
   return { port, onOpenFile, ...view };
@@ -51,6 +56,33 @@ const selectRowAction = async (
   await user.pointer({ keys: "[MouseRight]", target: row });
   const menu = await screen.findByRole("menu");
   await user.click(within(menu).getByRole("menuitem", { name }));
+};
+
+const stubScrollIntoView = () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollIntoView",
+  );
+  const calls: Array<{
+    readonly element: Element;
+    readonly options?: ScrollIntoViewOptions;
+  }> = [];
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value(this: Element, options?: ScrollIntoViewOptions) {
+      calls.push({ element: this, options });
+    },
+  });
+  return {
+    calls,
+    restore: () => {
+      if (descriptor) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      } else {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      }
+    },
+  };
 };
 
 // The disk-event reload path — event -> invalidation -> listing request ->
@@ -75,6 +107,154 @@ describe("FileSidebar", () => {
     expect(screen.getByRole("treeitem", { name: "alpha.md" })).not.toHaveAttribute(
       "aria-expanded",
     );
+  });
+
+  it("marks only the open document row as selected", async () => {
+    renderSidebar(makePort(), vi.fn(), "/notes/Beta.markdown");
+    await screen.findByRole("treeitem", { name: "alpha.md" });
+
+    expect(screen.getByRole("treeitem", { name: "Beta.markdown" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("treeitem", { name: "alpha.md" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    // Folders are expansion affordances, never the current document.
+    expect(screen.getByRole("treeitem", { name: "archive" })).not.toHaveAttribute(
+      "aria-selected",
+    );
+    expect(screen.getByRole("treeitem", { name: "drafts" })).not.toHaveAttribute(
+      "aria-selected",
+    );
+  });
+
+  it("keeps a roving tab stop without selecting the first row when no document is open", async () => {
+    renderSidebar();
+    const first = await screen.findByRole("treeitem", { name: "archive" });
+
+    expect(first).toHaveAttribute("tabindex", "0");
+    expect(first).not.toHaveAttribute("aria-selected");
+    expect(rows().some((row) => row.getAttribute("aria-selected") === "true")).toBe(false);
+  });
+
+  it("expands a folder on click without making it look like the open document", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    const drafts = await screen.findByRole("treeitem", { name: "drafts" });
+
+    await user.click(drafts);
+    const child = await screen.findByRole("treeitem", { name: "gamma.md" });
+
+    expect(drafts).toHaveAttribute("aria-expanded", "true");
+    expect(drafts).not.toHaveAttribute("aria-selected");
+    expect(child).toHaveAttribute("aria-selected", "false");
+    expect(rows().some((row) => row.getAttribute("aria-selected") === "true")).toBe(false);
+  });
+
+  it("ignores an activePath that points at a directory", async () => {
+    renderSidebar(makePort(), vi.fn(), "/notes/drafts");
+    const drafts = await screen.findByRole("treeitem", { name: "drafts" });
+
+    expect(drafts).not.toHaveAttribute("aria-selected");
+    expect(rows().some((row) => row.getAttribute("aria-selected") === "true")).toBe(false);
+  });
+
+  it("moves the selected row when activePath changes", async () => {
+    const port = makePort();
+    const onOpenFile = vi.fn();
+    const view = renderSidebar(port, onOpenFile, "/notes/alpha.md");
+    const alpha = await screen.findByRole("treeitem", { name: "alpha.md" });
+    expect(alpha).toHaveAttribute("aria-selected", "true");
+
+    view.rerender(
+      <FileSidebar
+        root={root}
+        port={port}
+        onOpenFile={onOpenFile}
+        onCloseWorkspace={vi.fn()}
+        activePath="/notes/Beta.markdown"
+      />,
+    );
+
+    expect(screen.getByRole("treeitem", { name: "Beta.markdown" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(alpha).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("reveals the selected document row when activePath changes", async () => {
+    const scroll = stubScrollIntoView();
+    try {
+      const onOpenFile = vi.fn();
+      const { port, rerender } = renderSidebar(
+        makePort(),
+        onOpenFile,
+        "/notes/alpha.md",
+      );
+      const alpha = await screen.findByRole("treeitem", { name: "alpha.md" });
+      await waitFor(() =>
+        expect(scroll.calls.some((call) => call.element === alpha)).toBe(true),
+      );
+      expect(scroll.calls.at(-1)?.options).toEqual({ block: "nearest" });
+
+      rerender(
+        <FileSidebar
+          root={root}
+          port={port}
+          onOpenFile={onOpenFile}
+          onCloseWorkspace={vi.fn()}
+          activePath="/notes/Beta.markdown"
+        />,
+      );
+      const beta = screen.getByRole("treeitem", { name: "Beta.markdown" });
+      await waitFor(() => expect(scroll.calls.at(-1)?.element).toBe(beta));
+    } finally {
+      scroll.restore();
+    }
+  });
+
+  it("does not scroll to a document whose row is not rendered", async () => {
+    const scroll = stubScrollIntoView();
+    try {
+      renderSidebar(makePort(), vi.fn(), "/notes/drafts/gamma.md");
+      await screen.findByRole("treeitem", { name: "alpha.md" });
+
+      expect(
+        screen.queryByRole("treeitem", { name: "gamma.md" }),
+      ).not.toBeInTheDocument();
+      expect(scroll.calls).toHaveLength(0);
+    } finally {
+      scroll.restore();
+    }
+  });
+
+  it("keeps keyboard focus independent from the open document selection", async () => {
+    const user = userEvent.setup();
+    const onOpenFile = vi.fn();
+    renderSidebar(makePort(), onOpenFile, "/notes/Beta.markdown");
+    const beta = await screen.findByRole("treeitem", { name: "Beta.markdown" });
+    // Without a keyboard-focused row, the roving tab stop starts on the
+    // selected document.
+    expect(beta).toHaveAttribute("tabindex", "0");
+
+    beta.focus();
+    await user.keyboard("{ArrowUp}");
+
+    const alpha = screen.getByRole("treeitem", { name: "alpha.md" });
+    expect(alpha).toHaveFocus();
+    expect(alpha).toHaveAttribute("tabindex", "0");
+    expect(alpha).toHaveAttribute("aria-selected", "false");
+    expect(beta).toHaveAttribute("tabindex", "-1");
+    expect(beta).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{Enter}");
+    expect(onOpenFile).toHaveBeenCalledWith("/notes/alpha.md");
+    // Selection follows the activePath prop, not keyboard focus.
+    expect(beta).toHaveAttribute("aria-selected", "true");
+    expect(alpha).toHaveAttribute("aria-selected", "false");
   });
 
   it("expanding one directory requests only that directory and collapsing keeps the cache", async () => {

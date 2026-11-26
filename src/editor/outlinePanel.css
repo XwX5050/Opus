@@ -1,0 +1,25 @@
+/* Current-location highlight for the outline tree. The wash and text color
+   mirror the explorer's selected row through shared tokens, without relying
+   on the explorer's classes. */
+
+.outline-tree-row.outline-heading-active,
+.outline-tree-row.outline-heading-active:hover {
+  background: var(--accent-soft);
+}
+
+.outline-tree-row.outline-heading-active .outline-heading-button {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* The current heading sits inside a collapsed branch: its row is not
+   rendered, so the nearest visible collapsed ancestor carries the cue
+   instead of force-expanding the tree. */
+.outline-tree-row[data-current-ancestor="true"]
+  .outline-disclosure[aria-expanded="false"] {
+  color: var(--accent);
+}
+
+.outline-tree-row[data-current-ancestor="true"] .outline-heading-button {
+  color: var(--text-primary);
+}

@@ -67,7 +67,7 @@ test("keeps compact titlebar icons aligned and tabs flush with the header bottom
 });
 
 
-test("uses a soft hover shadow on icon buttons in both themes without a rail divider", async ({
+test("keeps icon buttons flat on hover in both themes without a rail divider", async ({
   page,
 }) => {
   const fixture: E2eFixtureSpec = {
@@ -87,6 +87,14 @@ test("uses a soft hover shadow on icon buttons in both themes without a rail div
   await expect(page.locator(".app-header")).toHaveCSS("transform", "none");
   const fileButton = page.getByRole("navigation", { name: "活动栏" }).getByRole("button", { name: "文件" });
   const rightButton = page.locator(".right-sidebar-toggle");
+  const rail = page.locator(".activity-rail");
+
+  const expectFlatIconHovers = async () => {
+    await fileButton.hover();
+    await expect(fileButton).toHaveCSS("box-shadow", "none");
+    await rightButton.hover();
+    await expect(rightButton).toHaveCSS("box-shadow", "none");
+  };
 
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "light";
@@ -94,15 +102,24 @@ test("uses a soft hover shadow on icon buttons in both themes without a rail div
   await expect(fileButton).toHaveCSS("width", "32px");
   await expect(fileButton).toHaveCSS("height", "32px");
   await expect(fileButton).toHaveCSS("border-radius", "8px");
-  await fileButton.hover();
-  await expect(fileButton).toHaveCSS("box-shadow", "rgba(0, 0, 0, 0.18) 0px 6px 16px -4px");
-  await rightButton.hover();
-  await expect(rightButton).toHaveCSS("box-shadow", "rgba(0, 0, 0, 0.18) 0px 6px 16px -4px");
-  expect(await page.locator(".activity-rail").evaluate((rail) => getComputedStyle(rail).boxShadow)).toBe("none");
+  await expectFlatIconHovers();
+
+  const railStyles = await rail.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      boxShadow: style.boxShadow,
+      borderRightWidth: style.borderRightWidth,
+      borderLeftWidth: style.borderLeftWidth,
+      borderInlineEndWidth: style.borderInlineEndWidth,
+    };
+  });
+  expect(railStyles.boxShadow).toBe("none");
+  expect(railStyles.borderRightWidth).toBe("0px");
+  expect(railStyles.borderLeftWidth).toBe("0px");
+  expect(railStyles.borderInlineEndWidth).toBe("0px");
 
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "dark";
   });
-  await fileButton.hover();
-  await expect(fileButton).toHaveCSS("box-shadow", "rgba(0, 0, 0, 0.4) 0px 6px 16px -4px");
+  await expectFlatIconHovers();
 });

@@ -1,0 +1,235 @@
+/*
+ * Live-preview typography refinements.
+ *
+ * Code surfaces are shared by the document editor and the presentation slide
+ * host. The presentation host deliberately does not take `.markdown-editor`
+ * (that would import the editor's layout); both roots are listed in `:is()`
+ * so one set of token-driven rules serves them. Selectors also raise their
+ * specificity above the base Markdown rules without `!important` and without
+ * relying on stylesheet order.
+ */
+
+.markdown-editor,
+.presentation-slide-host {
+  --md-code-font:
+    "JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace,
+    Menlo, Consolas, monospace;
+  /* Code surfaces sit one imperceptible step above the canvas: never a card. */
+  --md-code-block-bg: var(--surface-panel);
+  --md-inline-code-bg: var(--surface-panel);
+  /* One fixed rhythm for both hosts: the editor's reading column and the
+   * presentation slide share the same quiet insets and corner radii. */
+  --md-block-inset-y: 8px;
+  --md-block-inset-x: 16px;
+  --md-block-gap: 12px;
+  --md-code-radius: 8px;
+  --md-inline-radius: 4px;
+}
+
+/* ---------- Fenced code blocks ---------- */
+
+/* The extra `.cm-editor .cm-content` steps keep code lines above quote-line
+ * backgrounds from app.css / presentation.css, including a fence nested in a
+ * blockquote, independent of stylesheet injection order. */
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line {
+  position: relative;
+  width: 100%;
+  padding-inline: var(--md-block-inset-x);
+  background-color: var(--md-code-block-bg);
+}
+
+/* The fence rows only frame the block; a compact line height keeps that
+ * frame from turning the surface into a padded card. */
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line-first,
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line-last,
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line-single {
+  line-height: 1.2;
+}
+
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line-first {
+  padding-top: var(--md-block-inset-y);
+  border-radius: var(--md-code-radius) var(--md-code-radius) 0 0;
+}
+
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line-last {
+  padding-bottom: var(--md-block-inset-y);
+  border-radius: 0 0 var(--md-code-radius) var(--md-code-radius);
+}
+
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-content
+  .cm-line.cm-live-preview-code-line-single {
+  padding-block: var(--md-block-inset-y);
+  border-radius: var(--md-code-radius);
+}
+
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-live-preview-code-block {
+  font-family: var(--md-code-font);
+  font-size: 0.9em;
+}
+
+/* The label hugs the block's top-left corner. `max()` keeps it at least
+ * 11px in the editor while letting it scale with presentation type. */
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-live-preview-code-lang-badge {
+  position: absolute;
+  top: calc(var(--md-block-inset-y) - 2px);
+  left: var(--md-block-inset-x);
+  right: auto;
+  font-family: var(--md-code-font);
+  font-size: max(11px, 0.55em);
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  padding: 0;
+  background: transparent;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ---------- Inline code ---------- */
+
+/* Inline code uses one token-driven surface for both hosts. The extra
+ * `.cm-editor` step raises specificity above generic preview rules without
+ * relying on stylesheet order. */
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-live-preview-inline-code {
+  font-family: var(--md-code-font);
+  font-size: 0.9em;
+  font-style: normal;
+  background-color: var(--md-inline-code-bg);
+  border: none;
+  border-radius: var(--md-inline-radius);
+  padding: 0.1em 0.34em;
+}
+
+/* Highlights keep their own wash even around inline code. */
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-live-preview-highlight
+  .cm-live-preview-inline-code,
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-editor
+  .cm-live-preview-inline-code.cm-live-preview-highlight {
+  background-color: var(--highlight);
+  border-radius: var(--md-inline-radius);
+  padding: 0 var(--space-0-5);
+}
+
+/* ---------- Frontmatter ---------- */
+
+/* Metadata should read as a quiet header, not a competing code block. */
+:is(.markdown-editor, .presentation-slide-host)
+  .cm-live-preview-frontmatter {
+  font-family: var(--md-code-font);
+  font-size: 0.82em;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* ---------- Heading source markers ---------- */
+
+/* The heading span is the positioning context; the # run hangs in the
+ * left margin so revealing it while editing never shifts the heading text. */
+.markdown-editor .cm-live-preview-heading-1,
+.markdown-editor .cm-live-preview-heading-2,
+.markdown-editor .cm-live-preview-heading-3,
+.markdown-editor .cm-live-preview-heading-4,
+.markdown-editor .cm-live-preview-heading-5,
+.markdown-editor .cm-live-preview-heading-6 {
+  position: relative;
+}
+
+.markdown-editor .cm-line.cm-live-preview-heading-line {
+  min-height: 1.35em;
+}
+
+.markdown-editor .cm-live-preview-heading-mark {
+  position: absolute;
+  top: 0.08em;
+  right: 100%;
+  font-size: 0.62em;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  white-space: pre;
+}
+
+/* Narrow layouts leave almost no margin beside the reading column (680px
+ * with both sidebars open leaves ~12px), so a hanging run would be clipped
+ * by the scroller. Tuck the marker above the heading instead: still out of
+ * flow, still no horizontal shift, always visible. */
+@media (max-width: 960px) {
+  /* Only the heading whose marker is actually revealed reserves the marker
+   * row, so untouched headings keep their normal spacing. */
+  .markdown-editor[data-view-mode="editing"]
+    .cm-line.cm-live-preview-heading-line-revealed {
+    padding-top: 1.4em;
+  }
+
+  .markdown-editor .cm-live-preview-heading-mark {
+    top: auto;
+    right: auto;
+    bottom: 100%;
+    left: 0;
+  }
+}
+
+/* ---------- Shared block rhythm (editor) ---------- */
+
+.markdown-editor .cm-editor .cm-line.cm-live-preview-quote-line {
+  padding-inline: var(--md-block-inset-x);
+}
+
+.markdown-editor .cm-editor .cm-line.cm-live-preview-quote-line-single {
+  padding-block: var(--md-block-inset-y);
+}
+
+.markdown-editor .cm-editor .cm-line.cm-live-preview-quote-line-first {
+  padding-top: var(--md-block-inset-y);
+}
+
+.markdown-editor .cm-editor .cm-line.cm-live-preview-quote-line-last {
+  padding-bottom: var(--md-block-inset-y);
+}
+
+.markdown-editor .cm-line.cm-live-preview-rule-line {
+  padding-block: var(--md-block-gap);
+}
+
+.markdown-editor .cm-live-preview-horizontal-rule {
+  display: inline-block;
+  width: 100%;
+  margin: 0;
+  vertical-align: middle;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.markdown-editor .cm-content .md-table-frame {
+  margin-block: var(--md-block-gap);
+}

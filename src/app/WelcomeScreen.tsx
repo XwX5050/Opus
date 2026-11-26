@@ -25,10 +25,14 @@ interface ShortcutLabels {
   readonly openWorkspace: string;
 }
 
-const shortcutLabels = (): ShortcutLabels =>
-  detectPathPlatform() === "macos"
-    ? { newDocument: "⌘ N", openFiles: "⌘ O", openWorkspace: "⌘ ⇧ O" }
-    : { newDocument: "Ctrl N", openFiles: "Ctrl O", openWorkspace: "Ctrl ⇧ O" };
+const shortcutLabels = (macos: boolean): ShortcutLabels =>
+  macos
+    ? { newDocument: "⌘N", openFiles: "⌘O", openWorkspace: "⇧⌘O" }
+    : {
+        newDocument: "Ctrl+N",
+        openFiles: "Ctrl+O",
+        openWorkspace: "Ctrl+Shift+O",
+      };
 
 /** Last path segment, handling both POSIX and Windows separators. */
 const itemName = (path: string): string => {
@@ -50,9 +54,9 @@ const abbreviateHome = (path: string): string => {
   );
 };
 
-const itemLocation = (item: RecentItem): string => {
-  if (item.kind === "folder") return abbreviateHome(item.path);
-  const trimmed = item.path.replace(/[\\/]+$/, "");
+/** Parent directory of a file or folder, compacted like the recent rows. */
+const parentLocation = (path: string): string => {
+  const trimmed = path.replace(/[\\/]+$/, "");
   const separator = Math.max(
     trimmed.lastIndexOf("/"),
     trimmed.lastIndexOf("\\"),
@@ -83,9 +87,14 @@ function RecentRow({ item, onOpenRecent }: RecentRowProps) {
         onClick={() => onOpenRecent(item)}
       >
         <span className="welcome-recent-text">
-          <span className="welcome-recent-name">{name}</span>
+          <span className="welcome-recent-label">
+            <span className="welcome-recent-name">{name}</span>
+            <span className="welcome-recent-kind" aria-hidden="true">
+              {folder ? "文件夹" : "文件"}
+            </span>
+          </span>
           <span className="welcome-recent-path" aria-hidden="true">
-            {itemLocation(item)}
+            {parentLocation(item.path)}
           </span>
         </span>
       </button>
@@ -96,7 +105,7 @@ function RecentRow({ item, onOpenRecent }: RecentRowProps) {
 interface LaunchActionProps {
   readonly icon: ReactNode;
   readonly label: string;
-  /** Spoken label without the visual ellipsis (the ellipsis means "opens a dialog"). */
+  /** Spoken label when it differs from the visible one (an ellipsis means "opens a dialog"). */
   readonly ariaLabel: string;
   readonly shortcut: string;
   readonly ariaKeyshortcuts: string;
@@ -137,7 +146,8 @@ export default function WelcomeScreen({
   onOpenWorkspace,
   onOpenRecent,
 }: WelcomeScreenProps) {
-  const labels = shortcutLabels();
+  const macos = detectPathPlatform() === "macos";
+  const labels = shortcutLabels(macos);
   const visible = recent.slice(0, RECENT_VISIBLE_LIMIT);
   const remainder = recent.slice(RECENT_VISIBLE_LIMIT);
 
@@ -145,7 +155,11 @@ export default function WelcomeScreen({
     <div className="welcome-screen">
       <div className="welcome-main">
         <header className="welcome-header">
-          <h1 className="welcome-title">Opus</h1>
+          <h1
+            className={`welcome-title${macos ? " welcome-title-script" : ""}`}
+          >
+            Opus
+          </h1>
         </header>
 
         <section
@@ -158,7 +172,7 @@ export default function WelcomeScreen({
           <ul className="welcome-actions">
             <LaunchAction
               icon={<PencilLineIcon />}
-              label="新建文件…"
+              label="新建文件"
               ariaLabel="新建"
               shortcut={labels.newDocument}
               ariaKeyshortcuts="Meta+N Control+N"

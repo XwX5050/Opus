@@ -950,7 +950,7 @@ describe("useAppController renameDocument", () => {
     });
     expect(hook.result.current.state.tabs[0]).toMatchObject({
       path: null,
-      title: "Untitled",
+      title: "未命名",
     });
     hook.unmount();
   });

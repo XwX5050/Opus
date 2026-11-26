@@ -50,6 +50,21 @@ describe("RecoveryDialog", () => {
     }
   });
 
+  it("marks restore as primary, discard as danger, and keeps the dialog itself focused", () => {
+    renderDialog([draft()]);
+
+    const dialog = screen.getByRole("dialog", { name: "恢复未保存的更改" });
+    expect(dialog).toHaveFocus();
+    expect(within(dialog).getByRole("button", { name: "恢复" })).toHaveClass("button-primary");
+    expect(within(dialog).getByRole("button", { name: "丢弃" })).toHaveClass("button-danger");
+    expect(within(dialog).getByRole("button", { name: "查看源码" })).not.toHaveClass(
+      "button-primary",
+    );
+    expect(within(dialog).getByRole("button", { name: "查看源码" })).not.toHaveClass(
+      "button-danger",
+    );
+  });
+
   it("restores a draft only through an explicit click", async () => {
     const user = userEvent.setup();
     const props = renderDialog([draft()]);

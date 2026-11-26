@@ -21,6 +21,8 @@ const macUserAgent =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
 const windowsUserAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+const linuxUserAgent =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)";
 
 const renderWelcome = (recent: ReadonlyArray<RecentItem> = []) => {
   const onNewDocument = vi.fn();
@@ -51,9 +53,9 @@ describe("WelcomeScreen", () => {
     const handlers = renderWelcome();
     const user = userEvent.setup();
 
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Opus" }),
-    ).toBeVisible();
+    const title = screen.getByRole("heading", { level: 1, name: "Opus" });
+    expect(title).toBeVisible();
+    expect(title).toHaveClass("welcome-title", "welcome-title-script");
     expect(screen.queryByText("本地 Markdown 编辑器")).not.toBeInTheDocument();
 
     const launch = screen.getByRole("region", { name: "启动" });
@@ -63,7 +65,8 @@ describe("WelcomeScreen", () => {
       name: "打开文件夹",
     });
 
-    expect(within(newFile).getByText("新建文件…")).toBeVisible();
+    expect(within(newFile).getByText("新建文件")).toBeVisible();
+    expect(within(newFile).queryByText("新建文件…")).not.toBeInTheDocument();
     expect(within(openFiles).getByText("打开文件…")).toBeVisible();
     expect(within(openFolder).getByText("打开文件夹…")).toBeVisible();
     expect(newFile).toHaveAttribute("aria-keyshortcuts", "Meta+N Control+N");
@@ -72,9 +75,9 @@ describe("WelcomeScreen", () => {
       "aria-keyshortcuts",
       "Meta+Shift+O Control+Shift+O",
     );
-    expect(within(newFile).getByText("⌘ N")).toBeInTheDocument();
-    expect(within(openFiles).getByText("⌘ O")).toBeInTheDocument();
-    expect(within(openFolder).getByText("⌘ ⇧ O")).toBeInTheDocument();
+    expect(within(newFile).getByText("⌘N")).toBeInTheDocument();
+    expect(within(openFiles).getByText("⌘O")).toBeInTheDocument();
+    expect(within(openFolder).getByText("⇧⌘O")).toBeInTheDocument();
 
     await user.click(newFile);
     await user.click(openFiles);
@@ -126,6 +129,7 @@ describe("WelcomeScreen", () => {
     );
 
     expect(within(item).getByText(name)).toHaveClass("welcome-recent-name");
+    expect(within(item).getByText("文件")).toHaveClass("welcome-recent-kind");
     expect(location).toHaveClass("welcome-recent-path");
     expect(location).toHaveAttribute("aria-hidden", "true");
     expect(item).toHaveAttribute("title", path);
@@ -140,8 +144,25 @@ describe("WelcomeScreen", () => {
       { path: "D:\\notes\\b.md", kind: "file" },
     ]);
 
-    expect(screen.getAllByText("~\\notes")).toHaveLength(2);
+    // The folder row shows its parent directory, not its own name again.
+    expect(screen.getAllByText("~\\notes")).toHaveLength(1);
     expect(screen.getByText("D:\\notes")).toBeVisible();
+
+    const folder = screen.getByRole("button", {
+      name: "打开文件夹 notes：C:\\Users\\me\\notes",
+    });
+    expect(within(folder).getByText("notes")).toHaveClass(
+      "welcome-recent-name",
+    );
+    expect(within(folder).getByText("文件夹")).toHaveClass(
+      "welcome-recent-kind",
+    );
+    expect(within(folder).getByText("~")).toHaveClass("welcome-recent-path");
+
+    const file = screen.getByRole("button", {
+      name: "打开文件 a.md：C:\\Users\\me\\notes\\a.md",
+    });
+    expect(within(file).getByText("文件")).toHaveClass("welcome-recent-kind");
   });
 
   it("uses only the launch and recent column without decorative content", () => {
@@ -158,6 +179,7 @@ describe("WelcomeScreen", () => {
     ).not.toBeInTheDocument();
     expect(document.querySelector(".welcome-aside")).toBeNull();
     expect(document.querySelector(".welcome-recent-icon")).toBeNull();
+    expect(document.querySelector(".welcome-recent-kind")).not.toBeNull();
   });
 
   it("activates recent files and folders through accessible buttons", async () => {
@@ -190,18 +212,22 @@ describe("WelcomeScreen", () => {
     stubUserAgent(windowsUserAgent);
     renderWelcome([{ path: "/notes/a.md", kind: "file" }]);
 
+    const title = screen.getByRole("heading", { level: 1, name: "Opus" });
+    expect(title).toHaveClass("welcome-title");
+    expect(title).not.toHaveClass("welcome-title-script");
+
     const launch = screen.getByRole("region", { name: "启动" });
     const newFile = within(launch).getByRole("button", { name: "新建" });
     const openFiles = within(launch).getByRole("button", { name: "打开文件" });
     const openFolder = within(launch).getByRole("button", {
       name: "打开文件夹",
     });
-    expect(within(newFile).getByText("新建文件…")).toBeVisible();
+    expect(within(newFile).getByText("新建文件")).toBeVisible();
     expect(within(openFiles).getByText("打开文件…")).toBeVisible();
     expect(within(openFolder).getByText("打开文件夹…")).toBeVisible();
-    expect(within(newFile).getByText("Ctrl N")).toBeInTheDocument();
-    expect(within(openFiles).getByText("Ctrl O")).toBeInTheDocument();
-    expect(within(openFolder).getByText("Ctrl ⇧ O")).toBeInTheDocument();
+    expect(within(newFile).getByText("Ctrl+N")).toBeInTheDocument();
+    expect(within(openFiles).getByText("Ctrl+O")).toBeInTheDocument();
+    expect(within(openFolder).getByText("Ctrl+Shift+O")).toBeInTheDocument();
 
     expect(
       screen.queryByRole("region", { name: "快捷键" }),
@@ -213,5 +239,21 @@ describe("WelcomeScreen", () => {
     expect(recentButton).toHaveAccessibleName(
       "打开文件 a.md：/notes/a.md",
     );
+  });
+
+  it("uses the Ctrl shortcut family and a plain wordmark on Linux", () => {
+    stubUserAgent(linuxUserAgent);
+    renderWelcome();
+
+    const title = screen.getByRole("heading", { level: 1, name: "Opus" });
+    expect(title).not.toHaveClass("welcome-title-script");
+
+    const launch = screen.getByRole("region", { name: "启动" });
+    const newFile = within(launch).getByRole("button", { name: "新建" });
+    const openFolder = within(launch).getByRole("button", {
+      name: "打开文件夹",
+    });
+    expect(within(newFile).getByText("Ctrl+N")).toBeInTheDocument();
+    expect(within(openFolder).getByText("Ctrl+Shift+O")).toBeInTheDocument();
   });
 });

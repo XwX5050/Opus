@@ -45,6 +45,23 @@ describe("WorkspaceSearch", () => {
     expect(screen.getByRole("status")).toHaveTextContent("2 处匹配");
   });
 
+  it("labels results with their file, line and text and marks the hit", async () => {
+    const search = vi.fn().mockResolvedValue(result);
+    render(<WorkspaceSearch port={portWith(search)} workspace={workspace} onOpenResult={vi.fn()} />);
+
+    setQuery("Hello");
+    await finishDebounce();
+
+    const option = screen.getByRole("option", { name: "a.md 第 2 行：Hello 世界" });
+    expect(option.querySelector("mark.workspace-search-hit")).toHaveTextContent("Hello");
+    expect(screen.getByRole("group", { name: "a.md" })).toContainElement(option);
+
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    const active = screen.getAllByRole("option")[1];
+    expect(active).toHaveAttribute("aria-selected", "true");
+    expect(active.querySelector("mark.workspace-search-hit")).toHaveTextContent("Hello");
+  });
+
   it("rejects stale responses after a newer query", async () => {
     let resolveFirst!: (value: WorkspaceSearchResult) => void;
     const search = vi.fn()

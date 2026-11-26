@@ -1,14 +1,17 @@
-/* Launch actions and recent items share a compact, theme-aware column. */
+/* Launch actions and recent items share a compact, theme-aware column.
+   Rows bleed their hover surface slightly outside the column so the heading,
+   the row icons and the recent labels all start on one quiet left edge. */
 
 .welcome-screen {
   flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
+  align-content: safe center;
   justify-content: center;
   width: 100%;
   min-height: 0;
-  padding: clamp(var(--space-5), 7vh, 72px) var(--space-5) var(--space-5);
+  padding: clamp(32px, 6vh, 56px) var(--space-5) var(--space-4);
   overflow-y: auto;
   color: var(--text-secondary);
 }
@@ -17,23 +20,32 @@
   display: grid;
   gap: var(--space-5);
   min-width: 0;
-  width: min(100%, clamp(560px, 68%, 880px));
+  width: min(100%, 640px);
   justify-self: center;
 }
 
 .welcome-header {
   display: grid;
-  gap: var(--space-1);
 }
 
+/* Windows and Linux get a predictable UI wordmark; the handwritten face is
+   macOS-only and never falls back to a generic cursive font. */
 .welcome-title {
   margin: 0;
-  font-family: "Snell Roundhand", "Apple Chancery", "Segoe Script", cursive;
-  font-size: clamp(42px, 5vw, 58px);
-  line-height: 1.1;
+  font-family: var(--font-ui);
+  font-size: clamp(30px, 3.2vw, 38px);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.welcome-title-script {
+  font-family: "Snell Roundhand", "Apple Chancery", var(--font-ui);
+  font-size: clamp(42px, 4.4vw, 54px);
+  line-height: 1.05;
   font-weight: 400;
   letter-spacing: 0;
-  color: var(--text-primary);
 }
 
 .welcome-section {
@@ -47,14 +59,14 @@
   font-size: var(--font-ui-size-small);
   font-weight: 600;
   letter-spacing: 0.08em;
-  color: var(--accent);
+  color: var(--text-secondary);
 }
 
 .welcome-actions,
 .welcome-recent-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -71,7 +83,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  width: 100%;
+  width: calc(100% + var(--space-4));
+  margin-inline: calc(var(--space-2) * -1);
   min-width: 0;
   min-height: 34px;
   padding: var(--space-1) var(--space-2);
@@ -96,24 +109,27 @@
 }
 
 .welcome-action-label {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The shortcut stays next to its action instead of floating at the far edge
+   of the column, so the label and the keys read as one pair. */
 .welcome-action kbd {
   flex: none;
   color: var(--text-muted);
   font-family: var(--font-ui);
   font-size: var(--font-ui-size-small);
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .welcome-recent-empty {
   margin: 0;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) 0;
   font-size: var(--font-ui-size-small);
   color: var(--text-muted);
 }
@@ -127,10 +143,19 @@
   display: flex;
   flex: 1 1 auto;
   align-items: baseline;
-  gap: var(--space-5);
+  column-gap: var(--space-5);
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+
+.welcome-recent-label {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .welcome-recent-name,
@@ -142,20 +167,27 @@
 }
 
 .welcome-recent-name {
-  flex: 1 1 auto;
-  color: var(--accent);
+  flex: 0 1 auto;
+  color: var(--text-primary);
   font-weight: 500;
+}
+
+/* A quiet type tag keeps a folder and a document in the same directory from
+   reading as the same kind of recent item. */
+.welcome-recent-kind {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-size-small);
 }
 
 .welcome-recent-path {
   flex: 0 1 42%;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   text-align: right;
   font-size: var(--font-ui-size-small);
 }
 
 .welcome-more {
-  margin-top: var(--space-1);
   min-width: 0;
 }
 
@@ -163,6 +195,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  margin-left: calc(var(--space-2) * -1);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-small);
   color: var(--text-secondary);

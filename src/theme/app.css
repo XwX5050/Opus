@@ -37,11 +37,11 @@ select {
   color: inherit;
 }
 
-/* Keyboard focus stays clearly visible everywhere. */
+/* Keyboard focus stays clearly visible everywhere. The outline follows each
+   control's own radius, so focusing never changes an element's shape. */
 :focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
-  border-radius: var(--radius-small);
   transition: outline-color var(--anim-fast) ease;
 }
 
@@ -71,6 +71,43 @@ button:active:not(:disabled) {
 
 button:disabled {
   opacity: 0.45;
+}
+
+/* Confirmation hierarchy: one filled accent action, quiet neutral actions,
+   and an outline-only danger action that does not compete with the primary. */
+.button-primary {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: var(--accent-strong-hover);
+  background: var(--accent-strong-hover);
+  color: var(--text-on-accent);
+}
+
+.button-primary:active:not(:disabled) {
+  border-color: var(--accent-strong-active);
+  background: var(--accent-strong-active);
+  color: var(--text-on-accent);
+}
+
+.button-danger {
+  border-color: var(--divider);
+  background: transparent;
+  color: var(--danger-strong);
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: var(--danger-strong);
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+}
+
+.button-danger:active:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger-strong);
 }
 
 /* Form controls: quiet fields with a drawn chevron on selects. Checkbox and
@@ -320,6 +357,12 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--text-muted);
 }
 
+.context-menu-separator {
+  height: 1px;
+  margin: var(--space-0-5) var(--space-1);
+  background: var(--divider);
+}
+
 .context-menu-shortcut {
   margin-left: auto;
   color: var(--text-muted);
@@ -328,13 +371,13 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .context-menu-item-danger,
 .context-menu-item-danger:disabled {
-  color: var(--danger);
+  color: var(--danger-strong);
 }
 
 .context-menu-item-danger:hover:not(:disabled),
 .context-menu-item-danger:focus-visible {
   background: var(--surface-hover);
-  color: var(--danger);
+  color: var(--danger-strong);
 }
 
 /* Header action controls are ghost buttons: quiet until hovered. */
@@ -1480,28 +1523,6 @@ body.outline-resizing * {
   padding-inline: var(--space-0-5);
 }
 
-.cm-live-preview-inline-code {
-  font-family: "KaTeX_Math", "STIX Two Math", "Cambria Math", "Times New Roman", serif;
-  font-size: 0.98em;
-  font-style: italic;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-}
-
-.cm-live-preview-highlight .cm-live-preview-inline-code,
-.cm-live-preview-inline-code.cm-live-preview-highlight {
-  background: var(--highlight);
-  border-radius: var(--radius-small);
-  padding-inline: var(--space-0-5);
-}
-
-.cm-live-preview-code-block {
-  font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 0.88em;
-}
-
 .cm-live-preview-link {
   color: var(--accent);
 }
@@ -1557,42 +1578,6 @@ body.outline-resizing * {
 .cm-live-preview-task-done {
   text-decoration: line-through;
   color: var(--text-muted);
-}
-
-/* ---------- Search panel (top) ---------- */
-
-.cm-panels {
-  background: var(--surface);
-  color: var(--text-primary);
-  border-bottom: 1px solid var(--divider);
-  font-family: var(--font-ui);
-  font-size: var(--font-ui-size);
-}
-
-.cm-panel.cm-search {
-  padding: var(--space-2) var(--space-3);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.cm-panel.cm-search input[type="checkbox"] {
-  accent-color: var(--accent);
-}
-
-.cm-panel.cm-search button {
-  text-transform: capitalize;
-}
-
-.cm-searchMatch {
-  background: var(--search-match);
-  border-radius: var(--radius-small);
-}
-
-.cm-searchMatch-selected {
-  background: var(--accent-soft);
-  outline: 1px solid var(--accent);
 }
 
 /* ---------- Workspace full-text search ---------- */
@@ -2138,6 +2123,16 @@ body.outline-resizing * {
   display: flex;
   gap: var(--space-2);
   justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Recovery rows keep their actions grouped while draft titles wrap above. */
+.recovery-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 /* ---------- Settings dialog ---------- */
@@ -2665,10 +2660,6 @@ button:active:not(:disabled),
 .file-tree-row:active,
 .tab:active {
   opacity: 0.8;
-}
-
-.icon-button:hover:not(:disabled) {
-  box-shadow: var(--shadow-hover);
 }
 
 @keyframes dialogIn {

@@ -69,7 +69,7 @@ describe("documentReducer", () => {
         {
           id: "doc-1",
           path: null,
-          title: "Untitled",
+          title: "未命名",
           text: "",
           savedText: "",
           hasUtf8Bom: false,
@@ -1125,7 +1125,7 @@ describe("MemoryDocumentPort", () => {
   it("can cancel choosing a save path without recording a write", async () => {
     const port = new MemoryDocumentPort(new Map(), { savePath: null });
 
-    await expect(port.chooseSavePath("Untitled.md")).resolves.toBeNull();
+    await expect(port.chooseSavePath("未命名.md")).resolves.toBeNull();
     expect(port.writes).toEqual([]);
   });
 
@@ -1133,7 +1133,7 @@ describe("MemoryDocumentPort", () => {
     const port = new MemoryDocumentPort(new Map(), {
       savePath: "/notes/new.md",
     });
-    const target = await port.chooseSavePath("Untitled.md");
+    const target = await port.chooseSavePath("未命名.md");
     expect(target).toEqual({ path: "/notes/new.md", expectedVersion: null });
     const result = await port.write(
       writeRequest({
