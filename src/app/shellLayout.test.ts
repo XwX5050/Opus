@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   activeHeadingIdAt,
+  clampContentResizeWidth,
   clampPanelResizeWidth,
+  CONTENT_WIDTH_EDGE_MARGIN,
+  contentWidthMax,
   EDITOR_MIN_WIDTH,
+  editorColumnWidthOf,
   flattenOutline,
   panelMaxWidth,
   panelRoomOf,
@@ -12,6 +16,7 @@ import {
   SHELL_ACTIVITY_RAIL_WIDTH,
   type PanelLayoutSnapshot,
 } from "./shellLayout";
+import { EDITOR_PREFERENCE_LIMITS } from "../theme/preferences";
 import type { OutlineHeading } from "../editor/outline";
 
 const snapshot = (
@@ -81,6 +86,21 @@ describe("panel width limits", () => {
     expect(clampPanelResizeWidth(10, 500)).toBe(120);
     expect(clampPanelResizeWidth(900, 500)).toBe(500);
     expect(clampPanelResizeWidth(300, 500)).toBe(300);
+  });
+
+  it("computes editor column width and reading-column resize limits", () => {
+    expect(editorColumnWidthOf(1200, 260, 300)).toBe(
+      1200 - SHELL_ACTIVITY_RAIL_WIDTH - 260 - 300,
+    );
+    expect(contentWidthMax(1000)).toBe(1000 - CONTENT_WIDTH_EDGE_MARGIN * 2);
+    expect(contentWidthMax(3000)).toBe(EDITOR_PREFERENCE_LIMITS.contentWidthPx.max);
+    expect(contentWidthMax(20)).toBe(0);
+
+    expect(clampContentResizeWidth(100, 900)).toBe(
+      EDITOR_PREFERENCE_LIMITS.contentWidthPx.min,
+    );
+    expect(clampContentResizeWidth(1200, 900)).toBe(900);
+    expect(clampContentResizeWidth(720.4, 900)).toBe(720);
   });
 });
 

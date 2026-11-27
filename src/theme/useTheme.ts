@@ -99,6 +99,11 @@ export function useTheme(
       "--editor-content-width",
       `${editorPreferences.contentWidthPx}px`,
     );
+    if (editorPreferences.contentWidthPinned) {
+      root.dataset.editorWidthMode = "fixed";
+    } else {
+      delete root.dataset.editorWidthMode;
+    }
     root.style.setProperty(
       "--editor-body-font",
       fontFamilyStack(editorPreferences.fontFamily),

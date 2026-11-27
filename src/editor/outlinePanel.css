@@ -1,10 +1,10 @@
-/* Current-location highlight for the outline tree. The wash and text color
-   mirror the explorer's selected row through shared tokens, without relying
-   on the explorer's classes. */
+/* Current-location highlight for the outline tree. The neutral pill and text
+   color mirror the explorer's selected row through shared tokens, without
+   relying on the explorer's classes. */
 
 .outline-tree-row.outline-heading-active,
 .outline-tree-row.outline-heading-active:hover {
-  background: var(--accent-soft);
+  background: var(--surface-active);
 }
 
 .outline-tree-row.outline-heading-active .outline-heading-button {

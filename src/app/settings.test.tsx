@@ -72,16 +72,24 @@ describe("settings: category navigation", () => {
     ]);
     expect(within(dialog).getAllByRole("tabpanel")).toHaveLength(1);
     expect(within(dialog).getByRole("tabpanel", { name: "外观" })).toBeVisible();
-    expect(within(dialog).getByLabelText("主题")).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("主题")).toHaveAttribute(
+    const themeGroup = within(dialog).getByRole("radiogroup", { name: "主题" });
+    expect(themeGroup).toBeInTheDocument();
+    expect(themeGroup).toHaveAttribute(
       "aria-describedby",
       "settings-theme-description",
     );
+    expect(
+      within(themeGroup)
+        .getAllByRole("radio")
+        .map((radio) => radio.textContent),
+    ).toEqual(["浅色", "深色", "跟随系统"]);
 
     await user.click(within(tablist).getByRole("tab", { name: "编辑器" }));
     expect(within(dialog).getByRole("tabpanel", { name: "编辑器" })).toBeVisible();
     expect(within(dialog).getByLabelText("正文字号")).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText("主题")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("radiogroup", { name: "主题" }),
+    ).not.toBeInTheDocument();
 
     await user.click(within(tablist).getByRole("tab", { name: "翻译" }));
     expect(within(dialog).getByRole("tabpanel", { name: "翻译" })).toBeVisible();
@@ -116,23 +124,18 @@ describe("settings: category navigation", () => {
     expect(appearance).toHaveFocus();
   });
 
-  it("tightens the dialog for short categories and keeps form categories scrollable", async () => {
+  it("keeps one steady dialog class across categories without height jumping", async () => {
     const user = userEvent.setup();
     render(<AppShell port={new MemoryDocumentPort(new Map())} />);
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
     const tab = (name: string) => within(dialog).getByRole("tab", { name });
 
-    // 外观 and 关于 hold one or two rows: the dialog follows their content
-    // instead of reserving the full 640px form height.
-    expect(dialog).toHaveClass("settings-dialog-compact");
-
-    await user.click(tab("编辑器"));
-    expect(dialog).not.toHaveClass("settings-dialog-compact");
-    await user.click(tab("翻译"));
-    expect(dialog).not.toHaveClass("settings-dialog-compact");
-    await user.click(tab("关于"));
-    expect(dialog).toHaveClass("settings-dialog-compact");
+    for (const name of ["外观", "编辑器", "翻译", "关于"]) {
+      await user.click(tab(name));
+      expect(dialog).toHaveClass("settings-dialog");
+      expect(dialog).not.toHaveClass("settings-dialog-compact");
+    }
   });
 });
 
@@ -284,7 +287,7 @@ describe("settings: theme and editor preferences", () => {
 
     await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
     const dialog = screen.getByRole("dialog", { name: "设置" });
-    await user.selectOptions(within(dialog).getByLabelText("主题"), "light");
+    await user.click(within(dialog).getByRole("radio", { name: "浅色" }));
 
     expect(document.documentElement.dataset.theme).toBe("light");
     await waitFor(() => expect(port.session?.theme).toBe("light"));
@@ -929,7 +932,10 @@ describe("settings: translation", () => {
       within(dialog)
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
-    ).toEqual(["设置", "翻译"]);
+    ).toEqual(["设置"]);
+    expect(
+      within(dialog).getByRole("tabpanel", { name: "翻译" }),
+    ).toBeVisible();
     const endpoint = within(dialog).getByLabelText("API 端点");
     expect(endpoint).toHaveValue(DEFAULT_TRANSLATION_SETTINGS.endpoint);
     expect(endpoint).toHaveAttribute(
@@ -1649,30 +1655,26 @@ describe("settings: translation", () => {
 
 describe("settings: stylesheet contract", () => {
   // jsdom does not resolve the imported stylesheet's layout, so the control
-  // geometry and dialog height rules are locked down here.
+  // geometry and theme-card rules are locked down here.
   const settingsCss = readFileSync("src/app/settingsRefinements.css", "utf8");
+  const appCss = readFileSync("src/theme/app.css", "utf8");
 
-  it("shares one control height and a 3:1 neutral border", () => {
-    expect(settingsCss).toMatch(/--settings-control-height:\s*34px;/);
-    expect(settingsCss).toMatch(/--settings-control-border:\s*#63646a;/);
+  it("uses soft rounded-rectangle controls and visual theme cards", () => {
+    expect(settingsCss).toMatch(/--settings-control-height:\s*36px;/);
+    expect(settingsCss).toMatch(/--settings-control-radius:\s*10px;/);
+    expect(settingsCss).toMatch(/\.settings-dialog \.settings-theme-grid\s*\{/);
+    expect(settingsCss).toMatch(/\.settings-dialog \.settings-row \.settings-theme-card\s*\{/);
     expect(settingsCss).toMatch(
-      /:root\[data-theme="light"\] \.settings-dialog\s*\{[^}]*--settings-control-border:\s*#818186;/s,
-    );
-    expect(settingsCss).toMatch(
-      /\.settings-dialog \.settings-row button\s*\{[^}]*height:\s*var\(--settings-control-height\);/s,
+      /\.settings-dialog \.settings-row button:not\(\.settings-theme-card\)\s*\{[^}]*height:\s*var\(--settings-control-height\);/s,
     );
   });
 
-  it("anchors the dialog top and tightens short sections", () => {
+  it("uses a unified surface and borderless pill-rounded navigation", () => {
+    expect(settingsCss).toMatch(/--settings-surface:\s*var\(--surface\);/);
     expect(settingsCss).toMatch(
-      /--settings-dialog-top:\s*max\(24px, calc\(\(100dvh - 640px\) \/ 2\)\);/,
+      /:root\[data-theme="light"\] \.settings-dialog\s*\{[^}]*--settings-surface:\s*var\(--canvas\);/s,
     );
-    expect(settingsCss).toMatch(
-      /\.dialog-overlay \[role="dialog"\]\.settings-dialog\s*\{[^}]*align-self:\s*start;[^}]*margin-block-start:\s*var\(--settings-dialog-top\);/s,
-    );
-    expect(settingsCss).toMatch(
-      /\.settings-dialog\.settings-dialog-compact\s*\{[^}]*height:\s*auto;/s,
-    );
+    expect(appCss).not.toMatch(/\.settings-tab\[aria-selected="true"\]::after/);
     expect(settingsCss).toMatch(/@media \(max-width: 900px\)/);
     expect(settingsCss).toMatch(/@media \(max-width: 700px\)/);
     expect(settingsCss).toMatch(/@media \(max-width: 560px\)/);

@@ -69,14 +69,7 @@
   justify-content: flex-end;
   gap: var(--space-1);
   width: 100%;
-  max-width: min(
-    clamp(
-      var(--editor-content-width),
-      68%,
-      calc(var(--editor-content-width) * 1.6)
-    ),
-    calc(100% - var(--space-5) * 2)
-  );
+  max-width: var(--editor-column-width);
   margin-inline: auto;
   padding: 0 2px var(--space-1) 2px;
 }
@@ -136,4 +129,81 @@
 .app-alert[data-tone="notice"] .app-alert-action:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--accent);
+}
+
+/* ---------- Hover-revealed reading-column edge resize handles ---------- */
+
+.editor-width-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.editor-width-frame {
+  position: relative;
+  width: 100%;
+  max-width: var(--editor-column-width);
+  height: 100%;
+  margin-inline: auto;
+  pointer-events: none;
+}
+
+.editor-width-handle {
+  position: absolute;
+  top: 16%;
+  bottom: 16%;
+  width: 18px;
+  border-radius: var(--radius-small);
+  cursor: col-resize;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.editor-width-handle-left {
+  right: calc(100% + 4px);
+}
+
+.editor-width-handle-right {
+  left: calc(100% + 4px);
+}
+
+.editor-width-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: clamp(72px, 30%, 160px);
+  border-radius: var(--radius-pill);
+  background: var(--resize-indicator-core);
+  box-shadow: var(--resize-indicator-glow);
+  opacity: 0;
+  transform: translate(-50%, -50%) scaleY(0.84);
+  transition:
+    opacity var(--anim-fast) ease,
+    transform var(--anim-fast) ease,
+    width var(--anim-fast) ease;
+}
+
+.editor-width-handle:hover::after,
+.editor-width-handle:focus-visible::after,
+body.content-width-resizing .editor-width-handle::after {
+  opacity: 1;
+  transform: translate(-50%, -50%) scaleY(1);
+}
+
+body.content-width-resizing .editor-width-handle::after {
+  width: 3px;
+}
+
+body.content-width-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.content-width-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }

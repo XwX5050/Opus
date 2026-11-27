@@ -62,29 +62,30 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Near-black canvas with a hair of blue; the native window background
+  /* Deep recessed canvas; the native window background
      (window_background.rs) must stay exactly this hex. */
-  --canvas: #0b0b0e;
-  /* Surfaces sit close to the near-black canvas; depth comes from the solid
-     values, not gradients. Dialogs and menus share --surface, the deepest
-     lifted tone. */
-  --surface: #121318;
-  /* Panels (sidebars): a flat tone one step above the near-black canvas —
-     depth comes from the solid value, not gradients. */
-  --surface-panel: #0f1015;
-  /* Markdown tables: the body hugs the canvas so tables sit naturally in the
-     text flow; the header row steps one subtle tone above it. */
-  --surface-table: #0f1014;
-  --surface-table-header: #131419;
-  --surface-hover: #1a1b22;
-  --surface-active: #22232a;
-  --surface-inset: #060608;
+  --canvas: #141518;
+  /* Floating surfaces (dialogs, menus, popovers) sit monotonically above both
+     the canvas and surrounding panels. */
+  --surface: #25262c;
+  /* Panels (sidebars, activity rail, top bar): a clearly separated lighter
+     charcoal tone above the recessed canvas, without gradients. */
+  --surface-panel: #222328;
+  /* Code blocks and inline code: one quiet step above the canvas, never a card. */
+  --surface-code: #191a1e;
+  /* Markdown tables: the body sits quietly over the canvas; the header row
+     steps one subtle tone above it. */
+  --surface-table: #1a1b1f;
+  --surface-table-header: #202127;
+  --surface-hover: #2f3038;
+  --surface-active: #393b44;
+  --surface-inset: #0e0f12;
   /* Quote callout card: just perceptibly lifted from the canvas. */
-  --surface-quote: #131419;
+  --surface-quote: #1b1c21;
   --text-primary: #e8e8ec;
-  --text-secondary: #aaacb5;
+  --text-secondary: #b4b6c0;
   /* Muted copy stays >= 4.5:1 on canvas, panel, surface and hover. */
-  --text-muted: #84858f;
+  --text-muted: #9b9da8;
   --divider: rgba(255, 255, 255, 0.08);
   --resize-indicator-core: #d0d0d4;
   --resize-indicator-glow:
@@ -100,14 +101,14 @@
   --text-on-accent: #ffffff;
   --danger: #e5534b;
   /* Danger text/actions need one step more luminance than the status dot. */
-  --danger-strong: #ea6259;
-  --danger-soft: #2b1b1e;
+  --danger-strong: #f06c64;
+  --danger-soft: #2d1c20;
   /* Windows caption close-button hover; same literal in both themes. */
   --window-close-hover: #e81123;
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.45);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.6);
   --backdrop: rgba(0, 0, 0, 0.6);
-  --focus-ring: #7f6df2;
+  --focus-ring: #838696;
   --selection: rgba(127, 109, 242, 0.3);
   --search-match: rgba(224, 175, 104, 0.4);
   --highlight: #796a32;
@@ -130,6 +131,7 @@
   --surface: #f5f5f7;
   /* Panels (sidebars): flat tone, one step below the white canvas. */
   --surface-panel: #f7f7f9;
+  --surface-code: #f7f7f9;
   /* Markdown tables: the body hugs the white canvas; the header row steps
      one subtle tone below it. */
   --surface-table: #f6f6f9;
@@ -161,7 +163,7 @@
   --shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.1);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
   --backdrop: rgba(0, 0, 0, 0.3);
-  --focus-ring: #6c56d9;
+  --focus-ring: #6b6e78;
   --selection: rgba(108, 86, 217, 0.15);
   --search-match: rgba(230, 180, 80, 0.45);
   --highlight: #ffec99;

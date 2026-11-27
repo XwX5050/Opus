@@ -6,6 +6,7 @@ import {
   SIDEBAR_WINDOW_WIDTH_FRACTION,
 } from "../document/types";
 import type { OutlineHeading } from "../editor/outline";
+import { EDITOR_PREFERENCE_LIMITS } from "../theme/preferences";
 
 /**
  * Shell layout refinements: keeping the reading column usable when side
@@ -132,6 +133,40 @@ export const clampPanelResizeWidth = (
   maxWidth: number,
 ): number =>
   Math.max(SIDEBAR_MIN_WIDTH, Math.min(maxWidth, Math.round(width)));
+
+/** Minimum horizontal inset reserved on each side of the reading column. */
+export const CONTENT_WIDTH_EDGE_MARGIN = 24;
+
+/** Horizontal width available to the editor column beside any open panels. */
+export const editorColumnWidthOf = (
+  windowWidth: number,
+  sidebarWidth: number,
+  outlineWidth: number,
+): number =>
+  Math.max(
+    0,
+    windowWidth -
+      SHELL_ACTIVITY_RAIL_WIDTH -
+      Math.max(0, sidebarWidth) -
+      Math.max(0, outlineWidth),
+  );
+
+/** Widest reading-column width that still leaves margin on both sides. */
+export const contentWidthMax = (editorColumnWidth: number): number =>
+  Math.min(
+    EDITOR_PREFERENCE_LIMITS.contentWidthPx.max,
+    Math.max(0, Math.floor(editorColumnWidth - CONTENT_WIDTH_EDGE_MARGIN * 2)),
+  );
+
+/** Clamp a drag/keyboard reading-column width into [min, maxWidth]. */
+export const clampContentResizeWidth = (
+  width: number,
+  maxWidth: number,
+): number =>
+  Math.max(
+    EDITOR_PREFERENCE_LIMITS.contentWidthPx.min,
+    Math.min(maxWidth, Math.round(width)),
+  );
 
 export interface PanelLayoutMemory {
   /** True while the outline is closed because the shell reclaimed it. */

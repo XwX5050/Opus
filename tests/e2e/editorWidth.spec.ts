@@ -447,3 +447,166 @@ test("folds the title, keeps it folded across outline republications, and restor
     "true",
   );
 });
+
+test("uses neutral selection on file/outline rows and icon-only outline header", async ({
+  page,
+}) => {
+  await seed(page, {
+    files: [
+      { path: "/docs/a.md", text: "# Alpha\n\n## Beta\n\nBody" },
+      { path: "/docs/b.md", text: "# Second" },
+    ],
+    workspace: { path: "/docs", title: "docs" },
+    session: {
+      ...sessionWith("/docs/a.md"),
+      workspacePath: "/docs",
+    },
+  });
+
+  const selectedFile = page.getByRole("treeitem", { name: "a.md" });
+  await expect(selectedFile).toHaveAttribute("aria-selected", "true");
+  const fileStyle = await selectedFile.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      background: style.backgroundColor,
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(fileStyle.boxShadow).toBe("none");
+  expect(fileStyle.background).toBe("rgb(57, 59, 68)");
+
+  const contrast = await page.evaluate(() => {
+    const canvas = getComputedStyle(document.querySelector(".editor-area")!).backgroundColor;
+    const sidebar = getComputedStyle(document.querySelector(".sidebar")!).backgroundColor;
+    const header = getComputedStyle(document.querySelector(".app-header")!).backgroundColor;
+    return { canvas, sidebar, header };
+  });
+  expect(contrast.canvas).toBe("rgb(20, 21, 24)");
+  expect(contrast.sidebar).toBe("rgb(34, 35, 40)");
+  expect(contrast.header).toBe("rgb(34, 35, 40)");
+
+  await page.getByRole("button", { name: "展开右侧栏" }).click();
+  const outline = page.getByRole("complementary", { name: "大纲侧栏" });
+  await expect(outline).toBeVisible();
+
+  const outlineButton = outline.locator(".outline-title-button");
+  await expect(outlineButton).toHaveAttribute("aria-label", "大纲");
+  await expect(outlineButton).toHaveAttribute("title", "大纲");
+  await expect(outlineButton.locator("svg")).toBeVisible();
+  expect(await outlineButton.innerText()).toBe("");
+  await expect(outline.locator(".outline-toolbar h2")).toHaveClass(/visually-hidden/);
+
+  const outlineBg = await outline.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(outlineBg).toBe("rgb(34, 35, 40)");
+
+  const activeHeadingRow = outline.locator(".outline-tree-row.outline-heading-active");
+  await expect(activeHeadingRow).toBeVisible();
+  const headingBg = await activeHeadingRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+  expect(headingBg).toBe("rgb(57, 59, 68)");
+});
+
+test("resizes the reading column with hover-revealed edge handles, persists, and resets on double-click", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 860 });
+  await seed(page, {
+    files: [{ path: "/docs/width.md", text: longDocument }],
+    session: sessionWith("/docs/width.md"),
+  });
+
+  await expect(page.locator(".markdown-editor .cm-content")).toBeVisible();
+  const rightHandle = page.getByRole("slider", { name: "调整正文宽度（右侧）" });
+  const leftHandle = page.getByRole("slider", { name: "调整正文宽度（左侧）" });
+  await expect(rightHandle).toBeVisible();
+  await expect(leftHandle).toBeVisible();
+
+  // Hidden at rest.
+  const restOpacity = await rightHandle.evaluate((el) =>
+    Number.parseFloat(getComputedStyle(el, "::after").opacity),
+  );
+  expect(restOpacity).toBe(0);
+
+  // Appears as a luminous short line on hover.
+  await rightHandle.hover();
+  await expect
+    .poll(() =>
+      rightHandle.evaluate((el) => ({
+        opacity: Number.parseFloat(getComputedStyle(el, "::after").opacity),
+        glow: getComputedStyle(el, "::after").boxShadow,
+      })),
+    )
+    .toMatchObject({ opacity: 1 });
+
+  const initial = await measureColumn(page);
+  const rightBox = await rightHandle.boundingBox();
+  if (!rightBox) throw new Error("right handle missing");
+
+  // Drag right handle 60px outward -> symmetric +120px.
+  await page.mouse.move(rightBox.x + rightBox.width / 2, rightBox.y + rightBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(rightBox.x + rightBox.width / 2 + 60, rightBox.y + rightBox.height / 2, {
+    steps: 6,
+  });
+  await page.mouse.up();
+
+  const widened = await measureColumn(page);
+  expect(Math.abs(widened.width - (initial.width + 120))).toBeLessThanOrEqual(4);
+  expectCentered(widened);
+
+  const titleWidth = await page
+    .locator(".document-title")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(Math.abs(titleWidth - widened.width)).toBeLessThanOrEqual(2);
+
+  // Drag left handle inward 140px -> symmetric -280px (allows narrowing below 68%).
+  const leftBox = await leftHandle.boundingBox();
+  if (!leftBox) throw new Error("left handle missing");
+  await page.mouse.move(leftBox.x + leftBox.width / 2, leftBox.y + leftBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(leftBox.x + leftBox.width / 2 + 140, leftBox.y + leftBox.height / 2, {
+    steps: 6,
+  });
+  await page.mouse.up();
+
+  const narrowed = await measureColumn(page);
+  expect(Math.abs(narrowed.width - (widened.width - 280))).toBeLessThanOrEqual(4);
+  expectCentered(narrowed);
+
+  // Persists in the session store and restores as a pinned width on relaunch.
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__E2E_PORT__?.session?.editorPreferences),
+    )
+    .toMatchObject({
+      contentWidthPinned: true,
+    });
+  const savedSession = await page.evaluate(() => window.__E2E_PORT__?.session);
+  if (!savedSession) throw new Error("saved session missing");
+  expect(
+    Math.abs(savedSession.editorPreferences!.contentWidthPx - narrowed.width),
+  ).toBeLessThanOrEqual(4);
+
+  await seed(page, {
+    files: [{ path: "/docs/width.md", text: longDocument }],
+    session: savedSession,
+  });
+  await expect(page.locator(".markdown-editor .cm-content")).toBeVisible();
+  const reloaded = await measureColumn(page);
+  expect(Math.abs(reloaded.width - narrowed.width)).toBeLessThanOrEqual(4);
+  expect(
+    await page.evaluate(() => document.documentElement.dataset.editorWidthMode),
+  ).toBe("fixed");
+
+  // Double-click resets back to auto-scaling width.
+  await rightHandle.dblclick();
+  await expect
+    .poll(async () => (await measureColumn(page)).width)
+    .toBeGreaterThanOrEqual(initial.width - 4);
+  const reset = await measureColumn(page);
+  expect(Math.abs(reset.width - initial.width)).toBeLessThanOrEqual(4);
+  expect(
+    await page.evaluate(() => document.documentElement.dataset.editorWidthMode),
+  ).toBeUndefined();
+});

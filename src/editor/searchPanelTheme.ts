@@ -113,11 +113,11 @@ export const searchPanelTheme: Extension = EditorView.theme({
     borderColor: "var(--text-muted)",
   },
   ".cm-panel.cm-search input.cm-textfield:focus": {
-    borderColor: "var(--accent)",
+    borderColor: "var(--focus-ring)",
   },
   ".cm-panel.cm-search input.cm-textfield:focus-visible": {
-    outline: "2px solid var(--focus-ring)",
-    outlineOffset: "0",
+    outline: "none",
+    boxShadow: "inset 0 0 0 1px var(--focus-ring)",
   },
   ".cm-panel.cm-search button.cm-button": {
     flex: "0 0 auto",
@@ -144,13 +144,12 @@ export const searchPanelTheme: Extension = EditorView.theme({
     backgroundImage: "none",
   },
   ".cm-panel.cm-search button.cm-button:active": {
-    backgroundColor: "var(--accent-soft)",
+    backgroundColor: "var(--surface-active)",
     backgroundImage: "none",
   },
   ".cm-panel.cm-search button.cm-button:focus-visible": {
     outline: "2px solid var(--focus-ring)",
     outlineOffset: "1px",
-    borderColor: "var(--accent)",
     backgroundImage: "none",
   },
   ".cm-panel.cm-search label": {
@@ -220,7 +219,7 @@ export const searchPanelTheme: Extension = EditorView.theme({
   },
   ".cm-searchMatch-selected": {
     backgroundColor: "var(--accent-soft)",
-    outline: "1px solid var(--accent)",
+    boxShadow: "inset 0 -2px 0 var(--accent)",
   },
 });
 

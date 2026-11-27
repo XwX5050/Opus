@@ -80,13 +80,13 @@ const outlineIconProps = {
 } as const;
 
 export const ListTreeIcon = () => (
-  <svg {...outlineIconProps}>
-    <path d="M4 6h.01" />
-    <path d="M8 6h12" />
-    <path d="M4 12h.01" />
-    <path d="M8 12h12" />
-    <path d="M4 18h.01" />
-    <path d="M8 18h12" />
+  <svg {...iconProps}>
+    <path d="M3 6h.01" />
+    <path d="M7 6h14" />
+    <path d="M7 12h.01" />
+    <path d="M11 12h10" />
+    <path d="M7 18h.01" />
+    <path d="M11 18h10" />
   </svg>
 );
 
@@ -174,5 +174,19 @@ export const InfoIcon = ({ size = 18 }: { size?: number }) => (
   <svg {...outlineIconProps} width={size} height={size}>
     <circle cx="12" cy="12" r="9" />
     <path d="M12 11v5M12 8h.01" />
+  </svg>
+);
+
+export const MoonIcon = ({ size = 18 }: { size?: number }) => (
+  <svg {...outlineIconProps} width={size} height={size}>
+    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+  </svg>
+);
+
+export const MonitorIcon = ({ size = 18 }: { size?: number }) => (
+  <svg {...outlineIconProps} width={size} height={size}>
+    <rect width="20" height="14" x="2" y="3" rx="2" />
+    <path d="M8 21h8" />
+    <path d="M12 17v4" />
   </svg>
 );

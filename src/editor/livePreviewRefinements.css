@@ -14,9 +14,9 @@
   --md-code-font:
     "JetBrains Mono", "Cascadia Code", "Fira Code", "SF Mono", ui-monospace,
     Menlo, Consolas, monospace;
-  /* Code surfaces sit one imperceptible step above the canvas: never a card. */
-  --md-code-block-bg: var(--surface-panel);
-  --md-inline-code-bg: var(--surface-panel);
+  /* Code surfaces sit one quiet step above the canvas: never a card. */
+  --md-code-block-bg: var(--surface-code);
+  --md-inline-code-bg: var(--surface-code);
   /* One fixed rhythm for both hosts: the editor's reading column and the
    * presentation slide share the same quiet insets and corner radii. */
   --md-block-inset-y: 8px;

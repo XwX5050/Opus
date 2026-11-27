@@ -131,6 +131,31 @@ describe("normalizeEditorPreferences", () => {
     const normalized = normalizeEditorPreferences(null);
     expect(normalized).not.toBe(DEFAULT_EDITOR_PREFERENCES);
   });
+
+  it("preserves contentWidthPinned only when stored width is valid and pinned is true", () => {
+    expect(
+      normalizeEditorPreferences({
+        contentWidthPx: 880,
+        contentWidthPinned: true,
+      }),
+    ).toEqual({
+      ...DEFAULT_EDITOR_PREFERENCES,
+      contentWidthPx: 880,
+      contentWidthPinned: true,
+    });
+    expect(
+      normalizeEditorPreferences({
+        contentWidthPx: 100,
+        contentWidthPinned: true,
+      }),
+    ).not.toHaveProperty("contentWidthPinned");
+    expect(
+      normalizeEditorPreferences({
+        contentWidthPx: 880,
+        contentWidthPinned: false,
+      }),
+    ).not.toHaveProperty("contentWidthPinned");
+  });
 });
 
 describe("clampEditorPreferences", () => {
@@ -161,6 +186,26 @@ describe("clampEditorPreferences", () => {
     expect(clamped.lineHeight).toBe(DEFAULT_EDITOR_PREFERENCES.lineHeight);
     expect(clamped.contentWidthPx).toBe(700);
     expect(clamped.fontFamily).toBe(DEFAULT_EDITOR_PREFERENCES.fontFamily);
+  });
+
+  it("preserves contentWidthPinned when true and omits it otherwise", () => {
+    expect(
+      clampEditorPreferences({
+        ...DEFAULT_EDITOR_PREFERENCES,
+        contentWidthPx: 920,
+        contentWidthPinned: true,
+      }),
+    ).toEqual({
+      ...DEFAULT_EDITOR_PREFERENCES,
+      contentWidthPx: 920,
+      contentWidthPinned: true,
+    });
+    expect(
+      clampEditorPreferences({
+        ...DEFAULT_EDITOR_PREFERENCES,
+        contentWidthPx: 920,
+      }),
+    ).not.toHaveProperty("contentWidthPinned");
   });
 });
 

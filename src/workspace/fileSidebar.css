@@ -1,18 +1,17 @@
 /* File tree selection and left-edge rhythm.
  *
  * The selected row is the document currently open in the editor: only that
- * file row gets the accent wash and inset marker. Folders never carry
+ * file row gets the neutral elevated surface pill. Folders never carry
  * aria-selected, so expanding one cannot read as "the current document".
- * Keyboard focus remains the shared focus ring and never borrows this wash. */
+ * Keyboard focus remains the shared focus ring and never borrows this fill. */
 
 .file-sidebar .file-tree-row[aria-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--surface-active);
   color: var(--text-primary);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .file-sidebar .file-tree-row[aria-selected="true"]:hover {
-  background: var(--accent-soft);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 

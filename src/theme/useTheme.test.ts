@@ -86,6 +86,7 @@ const renderProbe = (
 
 beforeEach(() => {
   document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-editor-width-mode");
   document.documentElement.className = "";
   document.documentElement.removeAttribute("style");
   tauriMocks.invoke.mockReset();
@@ -234,5 +235,31 @@ describe("useTheme", () => {
     // set_window_background command is registered on macOS only.
     renderProbe("dark");
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("toggles data-editor-width-mode when contentWidthPinned changes", () => {
+    installMatchMedia(true, false);
+    const { rerender } = renderProbe("dark", DEFAULT_EDITOR_PREFERENCES);
+    expect(document.documentElement.dataset.editorWidthMode).toBeUndefined();
+
+    rerender(
+      createElement(Probe, {
+        preference: "dark",
+        editorPreferences: {
+          ...DEFAULT_EDITOR_PREFERENCES,
+          contentWidthPx: 880,
+          contentWidthPinned: true,
+        },
+      }),
+    );
+    expect(document.documentElement.dataset.editorWidthMode).toBe("fixed");
+
+    rerender(
+      createElement(Probe, {
+        preference: "dark",
+        editorPreferences: DEFAULT_EDITOR_PREFERENCES,
+      }),
+    );
+    expect(document.documentElement.dataset.editorWidthMode).toBeUndefined();
   });
 });

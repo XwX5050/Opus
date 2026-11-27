@@ -29,6 +29,10 @@ import {
 import { REDUCED_SYNTAX_MIN_LENGTH } from "../editor/performanceMode";
 import { useAutomaticPerformanceMode } from "./usePerformanceMode";
 import RecoveryDialog from "../recovery/RecoveryDialog";
+import {
+  DEFAULT_EDITOR_PREFERENCES,
+  EDITOR_PREFERENCE_LIMITS,
+} from "../theme/preferences";
 import { useTheme } from "../theme/useTheme";
 import FileSidebar from "../workspace/FileSidebar";
 import {
@@ -69,7 +73,10 @@ import {
 } from "../motion/motionRuntime";
 import PresentationOverlay from "../present/PresentationOverlay";
 import {
+  clampContentResizeWidth,
   clampPanelResizeWidth,
+  contentWidthMax,
+  editorColumnWidthOf,
   panelMaxWidth,
   resolvePanelDisplayWidths,
   SHELL_ACTIVITY_RAIL_WIDTH,
@@ -92,6 +99,19 @@ type PanelDragState = {
   startX: number;
   startWidth: number;
   lastWidth: number;
+  frame: number | null;
+  cleanup: () => void;
+};
+
+// Live drag-resize state for the reading-column edge handles. Snapshots the
+// previous root CSS state so cancelling a drag restores auto/fixed sizing cleanly.
+type ContentWidthDragState = {
+  pointerId: number;
+  startX: number;
+  startWidth: number;
+  lastWidth: number;
+  previousCssWidth: string;
+  previousWidthMode: string | undefined;
   frame: number | null;
   cleanup: () => void;
 };
@@ -341,6 +361,7 @@ export default function AppShell({
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineResizing, setOutlineResizing] = useState(false);
+  const [contentWidthResizing, setContentWidthResizing] = useState(false);
   // Runtime-only space hide for the explorer. It never writes the persisted
   // collapse preference, so a restart at a wide window shows the sidebar
   // again even if the previous session ended on a narrow window.
@@ -418,6 +439,7 @@ export default function AppShell({
   const outlineRailRef = useRef<HTMLDivElement>(null);
   const outlineRef = useRef<HTMLElement>(null);
   const outlineResizeRef = useRef<PanelDragState | null>(null);
+  const contentWidthResizeRef = useRef<ContentWidthDragState | null>(null);
   // Move/up/cancel are tracked on window listeners registered at pointerdown
   // rather than on the handle element: WebKitGTK under Wayland cannot be
   // relied on to keep pointer capture, and a lost capture must never strand
@@ -548,9 +570,11 @@ export default function AppShell({
   useEffect(() => {
     const sidebarDrag = sidebarResizeRef;
     const outlineDrag = outlineResizeRef;
+    const contentWidthDrag = contentWidthResizeRef;
     return () => {
       sidebarDrag.current?.cleanup();
       outlineDrag.current?.cleanup();
+      contentWidthDrag.current?.cleanup();
     };
   }, []);
   const sidebarResizeLimit = (): number =>
@@ -655,6 +679,11 @@ export default function AppShell({
     document.body.classList.add("outline-resizing");
     return () => document.body.classList.remove("outline-resizing");
   }, [outlineResizing]);
+  useEffect(() => {
+    if (!contentWidthResizing) return;
+    document.body.classList.add("content-width-resizing");
+    return () => document.body.classList.remove("content-width-resizing");
+  }, [contentWidthResizing]);
   const workspacePath = controller.workspace?.path ?? null;
   const [imageDrop, setImageDrop] = useState<EditorImageDrop | null>(null);
   const imageDropSequenceRef = useRef(0);
@@ -675,6 +704,190 @@ export default function AppShell({
   const active = controller.state.tabs.find(
     (tab) => tab.id === controller.state.activeId,
   );
+  const contentWidthEditorSpan = editorColumnWidthOf(
+    windowWidth,
+    sidebarPanelVisible ? panelDisplay.sidebarWidth : 0,
+    outlineOpen ? panelDisplay.outlineWidth : 0,
+  );
+  const contentWidthResizeMax =
+    windowWidth > 0
+      ? contentWidthMax(contentWidthEditorSpan)
+      : EDITOR_PREFERENCE_LIMITS.contentWidthPx.max;
+  const showContentWidthHandles =
+    Boolean(active) &&
+    contentWidthResizeMax >= EDITOR_PREFERENCE_LIMITS.contentWidthPx.min;
+  const contentWidthAriaValueNow = Math.min(
+    contentWidthResizeMax,
+    Math.max(
+      EDITOR_PREFERENCE_LIMITS.contentWidthPx.min,
+      controller.editorPreferences.contentWidthPx,
+    ),
+  );
+  const contentWidthLiveLimit = (): number => {
+    const scrollerWidth =
+      activeEditorViewRef.current?.scrollDOM.clientWidth ||
+      editorAreaRef.current?.clientWidth ||
+      0;
+    return scrollerWidth > 0
+      ? contentWidthMax(scrollerWidth)
+      : contentWidthResizeMax;
+  };
+  const measuredContentColumnWidth = (maxWidth: number): number => {
+    const measured =
+      activeEditorViewRef.current?.contentDOM.getBoundingClientRect().width ||
+      editorAreaRef.current
+        ?.querySelector<HTMLElement>(".cm-content")
+        ?.getBoundingClientRect().width ||
+      0;
+    if (measured > 0) {
+      return clampContentResizeWidth(measured, maxWidth);
+    }
+    return clampContentResizeWidth(
+      controllerRef.current.editorPreferences.contentWidthPx,
+      maxWidth,
+    );
+  };
+  const startContentWidthResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    direction: 1 | -1,
+  ) => {
+    if (event.button !== 0) return;
+    const maxWidth = contentWidthLiveLimit();
+    if (maxWidth < EDITOR_PREFERENCE_LIMITS.contentWidthPx.min) return;
+    const startWidth = measuredContentColumnWidth(maxWidth);
+    event.preventDefault();
+    const root = document.documentElement;
+    const previousCssWidth = root.style.getPropertyValue(
+      "--editor-content-width",
+    );
+    const previousWidthMode = root.dataset.editorWidthMode;
+    const applyWidth = (width: number) => {
+      root.dataset.editorWidthMode = "fixed";
+      root.style.setProperty("--editor-content-width", `${width}px`);
+    };
+    const drag: ContentWidthDragState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth,
+      lastWidth: startWidth,
+      previousCssWidth,
+      previousWidthMode,
+      frame: null,
+      cleanup: () => {},
+    };
+    const flush = () => {
+      drag.frame = null;
+      applyWidth(drag.lastWidth);
+    };
+    const scheduleFlush = () => {
+      if (drag.frame !== null) return;
+      if (typeof requestAnimationFrame === "function") {
+        drag.frame = requestAnimationFrame(flush);
+      } else {
+        flush();
+      }
+    };
+    const finish = (commit: boolean) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("lostpointercapture", onCancel);
+      window.removeEventListener("blur", onBlur);
+      if (drag.frame !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(drag.frame);
+      }
+      contentWidthResizeRef.current = null;
+      setContentWidthResizing(false);
+      if (commit && drag.lastWidth !== drag.startWidth) {
+        applyWidth(drag.lastWidth);
+        const currentPrefs = controllerRef.current.editorPreferences;
+        controllerRef.current.setEditorPreferences({
+          ...currentPrefs,
+          contentWidthPx: drag.lastWidth,
+          contentWidthPinned: true,
+        });
+      } else {
+        if (drag.previousCssWidth) {
+          root.style.setProperty(
+            "--editor-content-width",
+            drag.previousCssWidth,
+          );
+        } else {
+          root.style.removeProperty("--editor-content-width");
+        }
+        if (drag.previousWidthMode === undefined) {
+          delete root.dataset.editorWidthMode;
+        } else {
+          root.dataset.editorWidthMode = drag.previousWidthMode;
+        }
+      }
+    };
+    const onMove = (move: PointerEvent) => {
+      if (move.pointerId !== drag.pointerId) return;
+      if (move.buttons === 0) {
+        finish(true);
+        return;
+      }
+      drag.lastWidth = clampContentResizeWidth(
+        drag.startWidth + direction * 2 * (move.clientX - drag.startX),
+        maxWidth,
+      );
+      scheduleFlush();
+    };
+    const onUp = (up: PointerEvent) => {
+      if (up.pointerId !== drag.pointerId) return;
+      finish(true);
+    };
+    const onCancel = (cancel: Event) => {
+      if (
+        cancel instanceof PointerEvent &&
+        cancel.pointerId !== drag.pointerId
+      ) {
+        return;
+      }
+      finish(false);
+    };
+    const onBlur = () => {
+      finish(false);
+    };
+    drag.cleanup = () => finish(false);
+    contentWidthResizeRef.current = drag;
+    // No setPointerCapture for WebKitGTK/Wayland seat safety.
+    setContentWidthResizing(true);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("lostpointercapture", onCancel);
+    window.addEventListener("blur", onBlur);
+  };
+  const resetContentWidth = () => {
+    const { contentWidthPinned: _pinned, ...rest } =
+      controllerRef.current.editorPreferences;
+    controllerRef.current.setEditorPreferences({
+      ...rest,
+      contentWidthPx: DEFAULT_EDITOR_PREFERENCES.contentWidthPx,
+    });
+  };
+  const onContentWidthKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+    direction: 1 | -1,
+  ) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const maxWidth = contentWidthLiveLimit();
+    if (maxWidth < EDITOR_PREFERENCE_LIMITS.contentWidthPx.min) return;
+    const step = 20;
+    const delta = (event.key === "ArrowRight" ? step : -step) * direction;
+    const baseWidth = measuredContentColumnWidth(maxWidth);
+    const next = clampContentResizeWidth(baseWidth + delta, maxWidth);
+    if (next === baseWidth) return;
+    const currentPrefs = controllerRef.current.editorPreferences;
+    controllerRef.current.setEditorPreferences({
+      ...currentPrefs,
+      contentWidthPx: next,
+      contentWidthPinned: true,
+    });
+  };
   const viewMode = controller.viewModeOf(active?.id);
   const presenting = controller.presentationOpenOf(active?.id);
   // OS fullscreen while presenting, restored when the overlay closes or the
@@ -2311,6 +2524,40 @@ export default function AppShell({
             onOpenWorkspace={openWorkspaceFromUser}
             onOpenRecent={openRecentFromUser}
           />
+        )}
+        {showContentWidthHandles && (
+          <div className="editor-width-handles">
+            <div className="editor-width-frame">
+              <div
+                role="slider"
+                aria-orientation="vertical"
+                aria-label="调整正文宽度（左侧）"
+                aria-valuenow={contentWidthAriaValueNow}
+                aria-valuemin={EDITOR_PREFERENCE_LIMITS.contentWidthPx.min}
+                aria-valuemax={contentWidthResizeMax}
+                tabIndex={0}
+                title="拖动调整正文宽度（双击恢复默认）"
+                className="editor-width-handle editor-width-handle-left"
+                onPointerDown={(event) => startContentWidthResize(event, -1)}
+                onDoubleClick={resetContentWidth}
+                onKeyDown={(event) => onContentWidthKeyDown(event, -1)}
+              />
+              <div
+                role="slider"
+                aria-orientation="vertical"
+                aria-label="调整正文宽度（右侧）"
+                aria-valuenow={contentWidthAriaValueNow}
+                aria-valuemin={EDITOR_PREFERENCE_LIMITS.contentWidthPx.min}
+                aria-valuemax={contentWidthResizeMax}
+                tabIndex={0}
+                title="拖动调整正文宽度（双击恢复默认）"
+                className="editor-width-handle editor-width-handle-right"
+                onPointerDown={(event) => startContentWidthResize(event, 1)}
+                onDoubleClick={resetContentWidth}
+                onKeyDown={(event) => onContentWidthKeyDown(event, 1)}
+              />
+            </div>
+          </div>
         )}
         </div>
         </div>

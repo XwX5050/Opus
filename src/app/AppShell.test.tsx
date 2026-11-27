@@ -3510,4 +3510,128 @@ describe("AppShell window layout and scrolling title", () => {
     expect(reading).toHaveAttribute("title", "切换到编辑模式");
     expect(reading.querySelector('[data-view-icon="pencil"]')).not.toBeNull();
   });
+
+  it("renders reading-column resize handles only with an active document and enough width", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1200,
+    });
+    const user = userEvent.setup();
+    render(<AppShell port={new MemoryDocumentPort(new Map())} />);
+
+    expect(
+      screen.queryByRole("slider", { name: "调整正文宽度（左侧）" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("slider", { name: "调整正文宽度（右侧）" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "新建" }));
+    const left = screen.getByRole("slider", { name: "调整正文宽度（左侧）" });
+    const right = screen.getByRole("slider", { name: "调整正文宽度（右侧）" });
+    expect(left).toHaveAttribute("aria-orientation", "vertical");
+    expect(right).toHaveAttribute("aria-orientation", "vertical");
+
+    // 440px leaves 440 - 36 (rail) - 260 (sidebar) - 48 (margins) = 96px < 400px min.
+    resizeWindow(440);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("slider", { name: "调整正文宽度（右侧）" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("resizes the reading column by dragging edge handles, cancels cleanly, and resets on double-click", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1400,
+    });
+    const user = userEvent.setup();
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", file("/notes/a.md", "# Alpha\n\nBody text.")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: ["/notes/a.md"],
+          activePath: "/notes/a.md",
+          workspacePath: null,
+        },
+      },
+    );
+    render(<AppShell port={port} />);
+
+    const right = await screen.findByRole("slider", { name: "调整正文宽度（右侧）" });
+    const left = screen.getByRole("slider", { name: "调整正文宽度（左侧）" });
+
+    // Drag right handle 40px outward -> symmetric +80px from 760px -> 840px.
+    fireEvent.pointerDown(right, { pointerId: 11, button: 0, clientX: 900 });
+    expect(document.body).toHaveClass("content-width-resizing");
+    fireEvent.pointerMove(right, { pointerId: 11, clientX: 940, buttons: 1 });
+    await waitFor(() =>
+      expect(
+        document.documentElement.style.getPropertyValue("--editor-content-width"),
+      ).toBe("840px"),
+    );
+    expect(document.documentElement.dataset.editorWidthMode).toBe("fixed");
+    fireEvent.pointerUp(right, { pointerId: 11 });
+    expect(document.body).not.toHaveClass("content-width-resizing");
+
+    await waitFor(() =>
+      expect(port.session?.editorPreferences).toMatchObject({
+        contentWidthPx: 840,
+        contentWidthPinned: true,
+      }),
+    );
+
+    // Drag left handle 30px rightward (inward) -> -60px from 840px -> 780px,
+    // committed via lost-up buttons: 0 unstrand guard.
+    fireEvent.pointerDown(left, { pointerId: 12, button: 0, clientX: 300 });
+    fireEvent.pointerMove(left, { pointerId: 12, clientX: 330, buttons: 1 });
+    await waitFor(() =>
+      expect(
+        document.documentElement.style.getPropertyValue("--editor-content-width"),
+      ).toBe("780px"),
+    );
+    fireEvent.pointerMove(left, { pointerId: 12, clientX: 330, buttons: 0 });
+    expect(document.body).not.toHaveClass("content-width-resizing");
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.contentWidthPx).toBe(780),
+    );
+
+    // Cancelling restores the committed width without persisting.
+    fireEvent.pointerDown(right, { pointerId: 13, button: 0, clientX: 900 });
+    fireEvent.pointerMove(right, { pointerId: 13, clientX: 960, buttons: 1 });
+    await waitFor(() =>
+      expect(
+        document.documentElement.style.getPropertyValue("--editor-content-width"),
+      ).toBe("900px"),
+    );
+    fireEvent.pointerCancel(right, { pointerId: 13 });
+    expect(document.body).not.toHaveClass("content-width-resizing");
+    expect(
+      document.documentElement.style.getPropertyValue("--editor-content-width"),
+    ).toBe("780px");
+    expect(port.session?.editorPreferences?.contentWidthPx).toBe(780);
+
+    // Keyboard arrow adjustments step by 20px.
+    fireEvent.keyDown(right, { key: "ArrowRight" });
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.contentWidthPx).toBe(800),
+    );
+    fireEvent.keyDown(left, { key: "ArrowRight" });
+    await waitFor(() =>
+      expect(port.session?.editorPreferences?.contentWidthPx).toBe(780),
+    );
+
+    // Double-clicking resets to default auto-scaling width.
+    fireEvent.doubleClick(right);
+    await waitFor(() => {
+      expect(port.session?.editorPreferences?.contentWidthPx).toBe(760);
+      expect(
+        port.session?.editorPreferences?.contentWidthPinned,
+      ).toBeUndefined();
+    });
+    expect(document.documentElement.dataset.editorWidthMode).toBeUndefined();
+    void user;
+  });
 });

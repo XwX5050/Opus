@@ -1,62 +1,158 @@
 /**
  * Settings dialog refinements.
  *
- * Imported by SettingsDialog after the global app stylesheet, so these rules
- * may override the dialog's own controls without !important. One capsule
- * control family keeps every row on a shared grid:
- *   - 240px for ordinary fields and selects
- *   - 300px for long option labels (provider presets)
- *   - 108px for compact numeric fields with a visible unit
- *   - 100% for the API endpoint, which needs to stay readable
- *   - 360px for a field plus its action group (API Key, model, updates)
- * Every control is 34px tall, so a row's right edge stays one line.
+ * Clean, airy dual-pane layout inspired by modern macOS/desktop preference
+ * sheets: a unified surface (pure white in light mode, elevated dark surface
+ * in dark mode), borderless pill-rounded navigation items, visual theme cards,
+ * and soft 10px rounded-rectangle controls on quiet neutral fills.
  */
 
 .settings-dialog {
-  --settings-control-height: 34px;
-  --settings-control-width: 240px;
-  --settings-control-width-wide: 300px;
-  --settings-control-width-action: 360px;
-  --settings-control-number-width: 108px;
-  /* At least 3:1 against both the dialog surface and the control inset in
-     each theme. One 1px neutral stroke, deliberately not an accent frame. */
-  --settings-control-border: #63646a;
-  --settings-control-background: var(--surface-inset);
-  /* Anchor the dialog where a 640px workspace would be centred; compact
-     sections then grow and shrink from the same top edge. */
-  --settings-dialog-top: max(24px, calc((100dvh - 640px) / 2));
+  --settings-control-height: 36px;
+  --settings-control-radius: 10px;
+  --settings-control-width: 220px;
+  --settings-control-width-wide: 260px;
+  --settings-control-width-action: 340px;
+  --settings-control-number-width: 76px;
+  --settings-surface: var(--surface);
+  --settings-nav-hover: var(--surface-hover);
+  --settings-nav-active: var(--surface-active);
+  --settings-control-bg: var(--surface-hover);
+  --settings-control-bg-hover: var(--surface-active);
+  --settings-card-bg: transparent;
+  --settings-card-active-bg: var(--surface-active);
+  --settings-card-border-hover: rgba(255, 255, 255, 0.14);
+  --settings-card-border-selected: rgba(255, 255, 255, 0.2);
+  --settings-focus-halo: rgba(255, 255, 255, 0.08);
 }
 
 :root[data-theme="light"] .settings-dialog {
-  --settings-control-border: #818186;
+  --settings-surface: var(--canvas);
+  --settings-nav-hover: var(--surface);
+  --settings-nav-active: var(--surface-hover);
+  --settings-control-bg: var(--surface);
+  --settings-control-bg-hover: var(--surface-hover);
+  --settings-card-bg: var(--canvas);
+  --settings-card-active-bg: var(--surface-hover);
+  --settings-card-border-hover: rgba(0, 0, 0, 0.14);
+  --settings-card-border-selected: rgba(0, 0, 0, 0.18);
+  --settings-focus-halo: rgba(0, 0, 0, 0.06);
+}
+
+.dialog-overlay > [role="dialog"].settings-dialog {
+  background: var(--settings-surface);
+  border-radius: 16px;
+}
+
+/* ---------- Navigation rail ---------- */
+
+.settings-dialog .settings-tab:hover {
+  background: var(--settings-nav-hover);
+  color: var(--text-primary);
+}
+
+.settings-dialog .settings-tab[aria-selected="true"] {
+  background: var(--settings-nav-active);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* ---------- Visual 3-card theme selector ---------- */
+
+.settings-dialog .settings-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}
+
+.settings-dialog .settings-row .settings-theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 86px;
+  min-height: 86px;
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-large);
+  background-color: var(--settings-card-bg);
+  color: var(--text-secondary);
+  font-size: var(--font-ui-size);
+  font-weight: 450;
+}
+
+.settings-dialog .settings-row .settings-theme-card:hover:not(:disabled) {
+  border-color: var(--settings-card-border-hover);
+  background-color: var(--settings-nav-hover);
+  color: var(--text-primary);
+}
+
+.settings-dialog .settings-row .settings-theme-card[aria-checked="true"] {
+  border-color: var(--settings-card-border-selected);
+  background-color: var(--settings-card-active-bg);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.settings-dialog .settings-row .settings-theme-card:active:not(:disabled) {
+  transform: scale(0.985);
 }
 
 /* ---------- Shared field chrome ---------- */
 
-.settings-dialog .settings-row input:not([type="checkbox"]):not([type="radio"]),
 .settings-dialog .settings-row select {
   height: var(--settings-control-height);
   min-height: var(--settings-control-height);
-  border: 1px solid var(--settings-control-border);
-  border-radius: var(--radius-pill);
-  background-color: var(--settings-control-background);
+  border: 1px solid transparent;
+  border-radius: var(--settings-control-radius);
+  background-color: var(--settings-control-bg);
   padding-block: 0;
-  padding-inline: var(--space-3);
+  padding-inline: 14px var(--space-5);
+  color: var(--text-primary);
 }
 
-.settings-dialog .settings-row select {
-  padding-inline-end: var(--space-5);
-}
-
-.settings-dialog .settings-row input:hover:not(:disabled):not(:focus-visible),
 .settings-dialog .settings-row select:hover:not(:disabled):not(:focus-visible) {
-  border-color: var(--text-muted);
-  background-color: var(--settings-control-background);
+  border-color: transparent;
+  background-color: var(--settings-control-bg-hover);
 }
 
-.settings-dialog .settings-row input:focus-visible,
 .settings-dialog .settings-row select:focus-visible {
-  border-color: var(--accent);
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 2px var(--settings-focus-halo);
+}
+
+.settings-dialog
+  .settings-row
+  input:not([type="checkbox"]):not([type="radio"]):not([type="number"]) {
+  height: var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  border: 1px solid var(--divider);
+  border-radius: var(--settings-control-radius);
+  background-color: var(--settings-control-bg);
+  padding-block: 0;
+  padding-inline: 12px;
+  color: var(--text-primary);
+}
+
+.settings-dialog
+  .settings-row
+  input:not([type="checkbox"]):not([type="radio"]):not([type="number"]):hover:not(
+    :disabled
+  ):not(:focus-visible) {
+  border-color: var(--settings-card-border-hover);
+  background-color: var(--settings-control-bg-hover);
+}
+
+.settings-dialog
+  .settings-row
+  input:not([type="checkbox"]):not([type="radio"]):not([type="number"]):focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  background-color: var(--settings-surface);
+  box-shadow: 0 0 0 2px var(--settings-focus-halo);
 }
 
 /* Width rules: one class decides each control's size. Every field and select
@@ -92,62 +188,54 @@
   max-width: 100%;
 }
 
-/* ---------- Numeric fields with a unit ---------- */
+/* ---------- Numeric fields with an adjacent unit ---------- */
 
 .settings-dialog .settings-row .settings-number {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-self: end;
-  width: var(--settings-control-number-width);
+  gap: var(--space-2);
   max-width: 100%;
-  height: var(--settings-control-height);
-  border: 1px solid var(--settings-control-border);
-  border-radius: var(--radius-pill);
-  background-color: var(--settings-control-background);
-  transition: border-color var(--transition-fast),
-    background-color var(--transition-fast);
-}
-
-.settings-dialog .settings-row .settings-number:hover {
-  border-color: var(--text-muted);
-}
-
-.settings-dialog .settings-row .settings-number:focus-within {
-  border-color: var(--accent);
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 .settings-dialog .settings-row .settings-number input[type="number"] {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  padding: 0 calc(var(--space-5) + var(--space-1)) 0 var(--space-3);
-  text-align: right;
+  width: var(--settings-control-number-width);
+  height: var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--settings-control-radius);
+  background-color: var(--settings-control-bg);
+  color: var(--text-primary);
+  text-align: center;
   font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
-.settings-dialog
-  .settings-row
-  .settings-number
-  input[type="number"]:focus-visible {
+.settings-dialog .settings-row .settings-number input[type="number"]:hover:not(:disabled):not(:focus-visible) {
+  border-color: var(--divider);
+  background-color: var(--settings-control-bg-hover);
+}
+
+.settings-dialog .settings-row .settings-number input[type="number"]:focus-visible {
   outline: none;
+  border-color: var(--focus-ring);
+  background-color: var(--settings-surface);
+  box-shadow: 0 0 0 2px var(--settings-focus-halo);
 }
 
 .settings-dialog .settings-number-unit {
-  position: absolute;
-  inset-inline-end: var(--space-3);
+  min-width: 18px;
   color: var(--text-muted);
-  font-size: var(--font-ui-size-small);
+  font-size: var(--font-ui-size);
   line-height: 1;
-  pointer-events: none;
+  user-select: none;
 }
 
-/* ---------- Stacked rows (long endpoint) ---------- */
+/* ---------- Stacked rows (theme cards, long endpoint) ---------- */
 
 .settings-dialog .settings-row.settings-row-stacked {
   grid-template-columns: minmax(0, 1fr);
@@ -171,23 +259,22 @@
   overflow-wrap: anywhere;
 }
 
-/* Row actions join the same 34px capsule control family as the fields. */
-.settings-dialog .settings-row button {
+/* Row action buttons share the 36px soft rounded-rectangle control family. */
+.settings-dialog .settings-row button:not(.settings-theme-card) {
   height: var(--settings-control-height);
   min-height: var(--settings-control-height);
   padding-block: 0;
-  border: 1px solid var(--settings-control-border);
-  border-radius: var(--radius-pill);
+  padding-inline: 14px;
+  border: 1px solid var(--divider);
+  border-radius: var(--settings-control-radius);
   background-color: transparent;
+  color: var(--text-primary);
+  font-size: var(--font-ui-size);
 }
 
-.settings-dialog .settings-row button:hover:not(:disabled) {
-  border-color: var(--text-secondary);
-  background-color: var(--surface-hover);
-}
-
-.settings-dialog .settings-row button:focus-visible {
-  border-color: var(--accent);
+.settings-dialog .settings-row button:not(.settings-theme-card):hover:not(:disabled) {
+  border-color: var(--settings-card-border-hover);
+  background-color: var(--settings-control-bg);
 }
 
 .settings-dialog .settings-row button:disabled {
@@ -195,38 +282,10 @@
 }
 
 .settings-dialog .settings-key-clear:disabled {
-  border-color: var(--settings-control-border);
+  border-color: var(--divider);
   background: transparent;
   color: var(--text-muted);
-  opacity: 0.5;
-}
-
-/* ---------- Stable top anchor ---------- */
-
-/* Switching categories must not move the dialog (or its navigation) up and
-   down: the top edge stays where a full 640px workspace would start, while the
-   bottom follows the current content height. */
-.dialog-overlay [role="dialog"].settings-dialog {
-  align-self: start;
-  margin-block-start: var(--settings-dialog-top);
-  max-height: calc(100dvh - var(--settings-dialog-top) - 24px);
-}
-
-/* ---------- Short sections ---------- */
-
-/* 外观 and 关于 hold only one or two rows, so the dialog follows their
-   content instead of reserving the fixed 640px form height. The max-height
-   still caps the dialog on short windows, where the body keeps scrolling. */
-.dialog-overlay [role="dialog"].settings-dialog.settings-dialog-compact {
-  height: auto;
-  max-height: min(
-    640px,
-    calc(100dvh - var(--settings-dialog-top) - 24px)
-  );
-}
-
-.settings-dialog-compact .settings-body {
-  scrollbar-gutter: auto;
+  opacity: 0.45;
 }
 
 .settings-dialog .settings-section-note {
@@ -238,9 +297,6 @@
 
 /* ---------- Narrow windows ---------- */
 
-/* Between the full form width and the compact icon rail the 200px navigation
-   column plus a 360px action group would squeeze the label below ~230px, so
-   rows that carry field + action groups stack earlier than the rest. */
 @media (max-width: 900px) {
   .settings-dialog .settings-row:has(.settings-update-controls) {
     grid-template-columns: minmax(0, 1fr);
@@ -272,14 +328,17 @@
     row-gap: var(--space-2);
   }
 
+  .settings-dialog .settings-theme-grid {
+    gap: var(--space-2);
+  }
+
   .settings-dialog .settings-row > select,
   .settings-dialog .settings-row > input,
-  .settings-dialog .settings-row > .settings-number,
   .settings-dialog .settings-row > .font-search {
     width: 100%;
   }
 
   .settings-dialog .settings-row > .settings-number {
-    justify-self: stretch;
+    justify-self: start;
   }
 }

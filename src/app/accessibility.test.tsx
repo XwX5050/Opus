@@ -211,7 +211,7 @@ describe("accessibility: roles and names", () => {
     const dialog = screen.getByRole("dialog", { name: "设置" });
     expect(dialog).toBeVisible();
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(within(dialog).getByLabelText("主题")).toBeInTheDocument();
+    expect(within(dialog).getByRole("radiogroup", { name: "主题" })).toBeInTheDocument();
     // Escape reaches the dialog's onKeyDown handler directly rather than
     // through document.activeElement: under heavy CI load the jsdom document
     // can lose focus (document.hasFocus() flips false), which yanks focus —
@@ -400,13 +400,15 @@ describe("accessibility: keyboard-only flows", () => {
     sidebarSettingsButton().focus();
     await user.keyboard("{Enter}");
     const dialog = screen.getByRole("dialog", { name: "设置" });
-    const themeSelect = within(dialog).getByLabelText("主题");
-    // The dialog moves focus into its first control on mount, but that
-    // focus state is not asserted here: under heavy CI load a starved jsdom
-    // can revoke it (document.hasFocus() flips false), which would flake the
-    // assertion without reflecting anything about the component.
-    expect(themeSelect).toBeInTheDocument();
-    await user.selectOptions(themeSelect, "light");
+    const themeGroup = within(dialog).getByRole("radiogroup", { name: "主题" });
+    const darkRadio = within(themeGroup).getByRole("radio", { name: "深色" });
+    expect(darkRadio).toHaveAttribute("aria-checked", "true");
+    // Move selection via keyboard ArrowLeft from 深色 -> 浅色.
+    fireEvent.keyDown(themeGroup, { key: "ArrowLeft" });
+    expect(within(themeGroup).getByRole("radio", { name: "浅色" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     expect(document.documentElement.dataset.theme).toBe("light");
 
     // Escape is dispatched to the dialog's own keydown handler instead of
@@ -433,12 +435,15 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(appCss).toMatch(/--focus-ring/);
   });
 
-  it("uses a solid accent focus ring without changing control shape", () => {
+  it("uses a solid neutral focus ring without changing control shape", () => {
     const focusBlock = appCss.match(/:focus-visible\s*\{([^}]*)\}/s)?.[1] ?? "";
     expect(focusBlock).toContain("outline: 2px solid var(--focus-ring);");
     expect(focusBlock).not.toContain("border-radius");
-    expect(tokensCss).toMatch(/--focus-ring:\s*#7f6df2;/);
-    expect(tokensCss).toMatch(/--focus-ring:\s*#6c56d9;/);
+    expect(tokensCss).toMatch(/--focus-ring:\s*#838696;/);
+    expect(tokensCss).toMatch(/--focus-ring:\s*#6b6e78;/);
+    expect(appCss).not.toMatch(
+      /input:focus-visible,\s*select:focus-visible\s*\{[^}]*border-color:\s*var\(--accent\)/s,
+    );
   });
 
   it("prefers the platform UI font over an unbundled Inter", () => {
@@ -493,7 +498,7 @@ describe("accessibility: stylesheet guarantees", () => {
   };
 
   it("keeps muted text at 4.5:1 on the quiet surfaces in both themes", () => {
-    expect(tokenHex("text-muted", 0)).toBe("#84858f");
+    expect(tokenHex("text-muted", 0)).toBe("#9b9da8");
     expect(tokenHex("text-muted", 1)).toBe("#686a73");
     for (const themeIndex of [0, 1] as const) {
       const muted = tokenHex("text-muted", themeIndex);
@@ -802,12 +807,12 @@ describe("accessibility: stylesheet guarantees", () => {
     );
   });
 
-  it("uses the text-selection color to highlight reading mode", () => {
+  it("uses a neutral pill with an accent glyph to highlight active outline modes", () => {
     expect(appCss).toMatch(
-      /\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--surface-active\);[^}]*color:\s*var\(--accent\);/s,
     );
     expect(appCss).toMatch(
-      /\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]:hover,[^}]*\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--selection\);/s,
+      /\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]:hover,[^}]*\.outline-toolbar \.icon-button\.(translate-toggle|view-mode-toggle|presentation-toggle)\[aria-pressed="true"\]:active\s*\{[^}]*background:\s*var\(--surface-active\);/s,
     );
   });
 
@@ -857,5 +862,44 @@ describe("accessibility: stylesheet guarantees", () => {
     expect(appCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*animation-duration:\s*0\.01ms !important;/s,
     );
+  });
+
+  it("uses neutral surface selection without a purple border on explorer and outline rows", () => {
+    const fileSidebarCss = readFileSync("src/workspace/fileSidebar.css", "utf8");
+    const outlinePanelCss = readFileSync("src/editor/outlinePanel.css", "utf8");
+
+    expect(appCss).toMatch(
+      /\.file-tree-row\[aria-selected="true"\]\s*\{[^}]*background:\s*var\(--surface-active\);/s,
+    );
+    expect(fileSidebarCss).toMatch(
+      /\.file-sidebar \.file-tree-row\[aria-selected="true"\]\s*\{[^}]*background:\s*var\(--surface-active\);/s,
+    );
+    expect(fileSidebarCss).not.toMatch(/box-shadow:\s*inset/);
+    expect(fileSidebarCss).not.toMatch(/var\(--accent-soft\)/);
+    expect(outlinePanelCss).toMatch(
+      /\.outline-tree-row\.outline-heading-active,\s*\.outline-tree-row\.outline-heading-active:hover\s*\{[^}]*background:\s*var\(--surface-active\);/s,
+    );
+    expect(outlinePanelCss).not.toMatch(/var\(--accent-soft\)/);
+  });
+
+  it("reveals reading-column width handles only on hover, focus, or active resize", () => {
+    const shellCss = readFileSync("src/app/shellRefinements.css", "utf8");
+    expect(shellCss).toMatch(/\.editor-width-handle::after\s*\{[^}]*opacity:\s*0;/s);
+    expect(shellCss).toMatch(
+      /\.editor-width-handle:hover::after,\s*\.editor-width-handle:focus-visible::after,\s*body\.content-width-resizing \.editor-width-handle::after\s*\{[^}]*opacity:\s*1;/s,
+    );
+  });
+
+  it("keeps clear dark canvas-vs-panel separation and avoids purple chrome overuse", () => {
+    const settingsCss = readFileSync("src/app/settingsRefinements.css", "utf8");
+    const searchViewsCss = readFileSync("src/app/searchViews.css", "utf8");
+
+    expect(tokenHex("canvas", 0)).toBe("#141518");
+    expect(tokenHex("surface-panel", 0)).toBe("#222328");
+    expect(tokenHex("surface", 0)).toBe("#25262c");
+    expect(settingsCss).not.toMatch(/border-color:\s*var\(--accent\)/);
+    expect(settingsCss).not.toMatch(/var\(--accent-soft\)/);
+    expect(searchViewsCss).not.toMatch(/border-bottom-color:\s*var\(--accent\)/);
+    expect(searchViewsCss).not.toMatch(/var\(--accent-soft\)/);
   });
 });

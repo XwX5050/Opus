@@ -3,6 +3,7 @@ import {
   CollapseAllIcon,
   DisclosureChevronIcon,
   ExpandAllIcon,
+  ListTreeIcon,
 } from "../app/icons";
 import { bindChevronSpreadHover } from "../motion/motionRuntime";
 import {
@@ -132,6 +133,19 @@ const cssPixels = (value: string): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const revealRowInContainer = (content: HTMLElement, rowElement: HTMLElement) => {
+  const style = getComputedStyle(content);
+  const view = content.getBoundingClientRect();
+  const top = view.top + cssPixels(style.paddingTop);
+  const bottom = view.bottom - cssPixels(style.paddingBottom);
+  const row = rowElement.getBoundingClientRect();
+  if (row.top < top) {
+    content.scrollTop = Math.max(0, content.scrollTop - (top - row.top));
+  } else if (row.bottom > bottom) {
+    content.scrollTop += row.bottom - bottom;
+  }
+};
+
 export default function OutlinePanel({
   headings,
   collapsedIds,
@@ -190,22 +204,42 @@ export default function OutlinePanel({
       content?.querySelector<HTMLElement>(".outline-heading-active") ??
       content?.querySelector<HTMLElement>('[data-current-ancestor="true"]');
     if (!content || !target) return;
-    const style = getComputedStyle(content);
-    const view = content.getBoundingClientRect();
-    const top = view.top + cssPixels(style.paddingTop);
-    const bottom = view.bottom - cssPixels(style.paddingBottom);
-    const row = target.getBoundingClientRect();
-    if (row.top < top) {
-      content.scrollTop = Math.max(0, content.scrollTop - (top - row.top));
-    } else if (row.bottom > bottom) {
-      content.scrollTop += row.bottom - bottom;
-    }
+    revealRowInContainer(content, target);
   }, [resolvedActiveId, collapsedAncestorId]);
+
+  const focusOutline = () => {
+    const content = contentRef.current;
+    if (!content) return;
+    const targetButton =
+      content.querySelector<HTMLButtonElement>(
+        ".outline-heading-active .outline-heading-button",
+      ) ??
+      content.querySelector<HTMLButtonElement>(
+        '[data-current-ancestor="true"] .outline-heading-button',
+      ) ??
+      content.querySelector<HTMLButtonElement>(".outline-heading-button");
+    if (targetButton) {
+      const row = targetButton.closest<HTMLElement>(".outline-tree-row");
+      if (row) revealRowInContainer(content, row);
+      targetButton.focus();
+    } else {
+      content.scrollTop = 0;
+    }
+  };
 
   return (
     <>
       <div className="outline-toolbar">
-        <h2>大纲</h2>
+        <h2 className="visually-hidden">大纲</h2>
+        <button
+          type="button"
+          className="icon-button outline-title-button"
+          aria-label="大纲"
+          title="大纲"
+          onClick={focusOutline}
+        >
+          <ListTreeIcon />
+        </button>
         {actions && <div className="outline-document-actions">{actions}</div>}
         <button
           ref={toggleAllRef}

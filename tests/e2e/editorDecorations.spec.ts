@@ -266,7 +266,7 @@ test("keeps the code surface on a fence nested inside a blockquote", async ({
       ".cm-line.cm-live-preview-code-line-middle",
     )!;
     const probe = document.createElement("div");
-    probe.style.backgroundColor = "var(--surface-panel)";
+    probe.style.backgroundColor = "var(--surface-code)";
     document.body.append(probe);
     const surface = getComputedStyle(probe).backgroundColor;
     probe.style.backgroundColor = "var(--surface-quote)";
@@ -486,7 +486,7 @@ test("renders the same quiet code treatment in presentation mode", async ({
       ".cm-live-preview-inline-code",
     )!;
     const probe = document.createElement("div");
-    probe.style.backgroundColor = "var(--surface-panel)";
+    probe.style.backgroundColor = "var(--surface-code)";
     document.body.append(probe);
     const surface = getComputedStyle(probe).backgroundColor;
     probe.remove();

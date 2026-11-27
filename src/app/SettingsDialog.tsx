@@ -26,7 +26,14 @@ import { matchPreset, TRANSLATION_PRESETS } from "../translate/presets";
 import { MOTION } from "../motion/motionConfig";
 import { prefersReducedMotion } from "../motion/motionRuntime";
 import type { UpdateCheckState } from "./updates";
-import { InfoIcon, PencilLineIcon, SunIcon, TranslateIcon } from "./icons";
+import {
+  InfoIcon,
+  MonitorIcon,
+  MoonIcon,
+  PencilLineIcon,
+  SunIcon,
+  TranslateIcon,
+} from "./icons";
 import { version as APP_VERSION } from "../../package.json";
 import "./settingsRefinements.css";
 
@@ -50,10 +57,14 @@ export interface SettingsDialogProps {
   readonly port?: DocumentPort;
 }
 
-const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
-  { value: "system", label: "跟随系统" },
-  { value: "light", label: "浅色" },
-  { value: "dark", label: "深色" },
+const THEME_OPTIONS: ReadonlyArray<{
+  value: ThemePreference;
+  label: string;
+  Icon: typeof SunIcon;
+}> = [
+  { value: "light", label: "浅色", Icon: SunIcon },
+  { value: "dark", label: "深色", Icon: MoonIcon },
+  { value: "system", label: "跟随系统", Icon: MonitorIcon },
 ];
 
 const FONT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
@@ -497,7 +508,7 @@ export default function SettingsDialog({
   port,
 }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const firstControlRef = useRef<HTMLSelectElement>(null);
+  const firstControlRef = useRef<HTMLButtonElement>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>("appearance");
   // Whether the custom-font row is shown. Tracked locally so picking
   // "自定义…" does not round-trip through the (clamped) stored value before
@@ -655,6 +666,36 @@ export default function SettingsDialog({
     document.getElementById(`settings-tab-${next.id}`)?.focus();
   };
 
+  const onThemeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = THEME_OPTIONS.findIndex(
+      (option) => option.value === theme,
+    );
+    let nextIndex: number;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        nextIndex = (currentIndex + 1) % THEME_OPTIONS.length;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        nextIndex =
+          (currentIndex - 1 + THEME_OPTIONS.length) % THEME_OPTIONS.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = THEME_OPTIONS.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const next = THEME_OPTIONS[nextIndex];
+    onThemeChange(next.value);
+    document.getElementById(`settings-theme-${next.value}`)?.focus();
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -781,15 +822,6 @@ export default function SettingsDialog({
       : [translationSettings.model, ...models];
   }, [translationModels, translationSettings.model]);
 
-  const activeSectionMeta = SETTINGS_SECTIONS.find(
-    (section) => section.id === activeSection,
-  ) ?? SETTINGS_SECTIONS[0];
-
-  // 外观 and 关于 hold one or two rows; a fixed 640px dialog would leave them
-  // mostly empty. The translation/editor panes keep the fixed workspace so
-  // their long forms scroll inside the body.
-  const compactLayout = activeSection === "appearance" || activeSection === "about";
-
   const clearKeyReason =
     port === undefined
       ? "当前环境不支持管理 API Key"
@@ -806,12 +838,35 @@ export default function SettingsDialog({
       tabIndex={-1}
       aria-modal="true"
       aria-labelledby="settings-dialog-title"
-      className={`settings-dialog${compactLayout ? " settings-dialog-compact" : ""}`}
+      className="settings-dialog"
       onKeyDown={onKeyDown}
     >
+      <header className="settings-header">
+        <h2 id="settings-dialog-title" className="settings-dialog-title">
+          设置
+        </h2>
+        <button
+          type="button"
+          className="icon-button settings-close"
+          aria-label="关闭设置"
+          onClick={onClose}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </header>
       <div className="settings-layout">
         <nav className="settings-navigation" aria-label="设置导航">
-          <h2 id="settings-dialog-title" className="settings-navigation-title">设置</h2>
           <div
             role="tablist"
             aria-label="设置分类"
@@ -831,7 +886,7 @@ export default function SettingsDialog({
                 className="settings-tab"
                 onClick={() => setActiveSection(id)}
               >
-                <Icon />
+                <Icon size={17} />
                 <span className="settings-tab-label">{label}</span>
               </button>
             ))}
@@ -839,22 +894,6 @@ export default function SettingsDialog({
         </nav>
 
         <div className="settings-content">
-          <header className="settings-content-header">
-            <div className="settings-content-heading">
-              <h2 className="settings-content-title">{activeSectionMeta.label}</h2>
-              <p className="settings-content-description">{activeSectionMeta.description}</p>
-            </div>
-            <button
-              type="button"
-              className="icon-button settings-close"
-              aria-label="关闭设置"
-              onClick={onClose}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-                <path d="m6 6 12 12M18 6 6 18" />
-              </svg>
-            </button>
-          </header>
           <div className="settings-body">
       {activeSection === "appearance" && (
       <section
@@ -863,24 +902,45 @@ export default function SettingsDialog({
         aria-labelledby="settings-tab-appearance"
       >
         <div className="settings-group">
-          <div className="settings-row" data-settings-row>
-            <FieldLabel id="settings-theme" label="主题" description="选择浅色、深色，或跟随系统设置" />
-            <select
-              id="settings-theme"
-              ref={firstControlRef}
-              className="settings-control"
+          <div className="settings-row settings-row-stacked" data-settings-row>
+            <span className="settings-field-label">
+              <span id="settings-theme-label" className="settings-row-title">
+                主题
+              </span>
+              <span
+                id="settings-theme-description"
+                className="settings-field-description"
+              >
+                选择浅色、深色，或跟随系统设置
+              </span>
+            </span>
+            <div
+              role="radiogroup"
+              aria-labelledby="settings-theme-label"
               aria-describedby="settings-theme-description"
-              value={theme}
-              onChange={(event) =>
-                onThemeChange(event.target.value as ThemePreference)
-              }
+              className="settings-theme-grid"
+              onKeyDown={onThemeKeyDown}
             >
-              {THEME_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              {THEME_OPTIONS.map(({ value, label, Icon }) => {
+                const selected = theme === value;
+                return (
+                  <button
+                    key={value}
+                    id={`settings-theme-${value}`}
+                    ref={selected ? firstControlRef : undefined}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={selected ? 0 : -1}
+                    className="settings-theme-card"
+                    onClick={() => onThemeChange(value)}
+                  >
+                    <Icon size={20} />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </section>
@@ -919,7 +979,7 @@ export default function SettingsDialog({
           </div>
 
           <div className="settings-row" data-settings-row>
-            <FieldLabel id="settings-content-width" label="内容宽度" description="设置正文阅读栏的基础宽度" />
+            <FieldLabel id="settings-content-width" label="内容宽度" description="设置正文阅读栏宽度，也可直接拖动正文两侧边缘调整" />
             <NumberField
               id="settings-content-width"
               min={limits.contentWidthPx.min}
@@ -927,7 +987,7 @@ export default function SettingsDialog({
               step={10}
               value={editorPreferences.contentWidthPx}
               unit="px"
-              onCommit={(value) => update({ contentWidthPx: value })}
+              onCommit={(value) => update({ contentWidthPx: value, contentWidthPinned: true })}
             />
           </div>
 

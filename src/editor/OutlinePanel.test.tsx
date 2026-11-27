@@ -309,4 +309,21 @@ describe("OutlinePanel", () => {
 
     expect(screen.getByRole("button", { name: "全部折叠" })).toBeDisabled();
   });
+
+  it("renders the outline toolbar heading as a matching icon button and focuses headings on click", async () => {
+    const user = userEvent.setup();
+    renderPanel({ activeId: "child" });
+
+    const heading = screen.getByRole("heading", { name: "大纲" });
+    expect(heading).toHaveClass("visually-hidden");
+
+    const titleButton = screen.getByRole("button", { name: "大纲" });
+    expect(titleButton).toHaveAttribute("title", "大纲");
+    expect(titleButton).toHaveClass("icon-button", "outline-title-button");
+    expect(titleButton.querySelector("svg")).not.toBeNull();
+    expect(titleButton.textContent).toBe("");
+
+    await user.click(titleButton);
+    expect(screen.getByRole("treeitem", { name: "Child" })).toHaveFocus();
+  });
 });

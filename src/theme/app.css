@@ -45,11 +45,6 @@ select {
   transition: outline-color var(--anim-fast) ease;
 }
 
-input:focus-visible,
-select:focus-visible {
-  border-color: var(--accent);
-}
-
 button {
   border: 1px solid var(--divider);
   border-radius: var(--radius-medium);
@@ -405,8 +400,8 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .app-header-actions > button[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--surface-active);
+  color: var(--text-primary);
 }
 
 /* The right-panel toggle already signals state through its animated icon;
@@ -446,12 +441,12 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .icon-button[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--surface-active);
+  color: var(--text-primary);
 }
 
-/* Document actions live in the outline toolbar; pressed states retain the
-   quieter selection-tinted wash. */
+/* Document actions live in the outline toolbar; pressed states keep a neutral
+   pill with a restrained accent icon glyph instead of a full purple wash. */
 .outline-document-actions {
   display: flex;
   align-items: center;
@@ -461,7 +456,7 @@ input[type="number"]::-webkit-inner-spin-button {
 .outline-toolbar .icon-button.translate-toggle[aria-pressed="true"],
 .outline-toolbar .icon-button.view-mode-toggle[aria-pressed="true"],
 .outline-toolbar .icon-button.presentation-toggle[aria-pressed="true"] {
-  background: var(--selection);
+  background: var(--surface-active);
   color: var(--accent);
 }
 
@@ -471,7 +466,7 @@ input[type="number"]::-webkit-inner-spin-button {
 .outline-toolbar .icon-button.view-mode-toggle[aria-pressed="true"]:active,
 .outline-toolbar .icon-button.presentation-toggle[aria-pressed="true"]:hover,
 .outline-toolbar .icon-button.presentation-toggle[aria-pressed="true"]:active {
-  background: var(--selection);
+  background: var(--surface-active);
 }
 
 /* ---------- Windows caption controls + edge-resize hotzones ---------- */
@@ -1083,14 +1078,9 @@ body.sidebar-resizing * {
   border-bottom: 1px solid var(--divider);
 }
 
-.outline-toolbar h2 {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  padding-left: var(--space-2);
-  color: var(--text-secondary);
-  font-size: var(--font-ui-size);
-  font-weight: 600;
+.outline-toolbar .outline-title-button {
+  flex-shrink: 0;
+  margin-right: auto;
 }
 
 .outline-icon-button {
@@ -1268,12 +1258,28 @@ body.outline-resizing * {
 }
 
 .editor-area {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
   background: var(--canvas);
+  --editor-column-width: min(
+    clamp(
+      var(--editor-content-width),
+      68%,
+      calc(var(--editor-content-width) * 1.6)
+    ),
+    calc(100% - var(--space-5) * 2)
+  );
+}
+
+:root[data-editor-width-mode="fixed"] .editor-area {
+  --editor-column-width: min(
+    var(--editor-content-width),
+    calc(100% - var(--space-5) * 2)
+  );
 }
 
 .editor-area > .markdown-editor,
@@ -1289,14 +1295,7 @@ body.outline-resizing * {
 .document-title {
   flex-shrink: 0;
   width: 100%;
-  max-width: min(
-    clamp(
-      var(--editor-content-width),
-      68%,
-      calc(var(--editor-content-width) * 1.6)
-    ),
-    calc(100% - var(--space-5) * 2)
-  );
+  max-width: var(--editor-column-width);
   margin-inline: auto;
   padding: var(--space-3) var(--space-2) var(--space-1);
 }
@@ -1337,7 +1336,7 @@ body.outline-resizing * {
 
 .document-title input {
   padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--divider);
   border-radius: var(--radius-small);
   background: var(--surface);
 }
@@ -1427,14 +1426,7 @@ body.outline-resizing * {
   caret-color: var(--text-primary);
   line-height: var(--editor-line-height);
   padding-bottom: 40vh;
-  max-width: min(
-    clamp(
-      var(--editor-content-width),
-      68%,
-      calc(var(--editor-content-width) * 1.6)
-    ),
-    calc(100% - var(--space-5) * 2)
-  );
+  max-width: var(--editor-column-width);
   margin-inline: auto;
 }
 
@@ -1633,10 +1625,6 @@ body.outline-resizing * {
   background: var(--canvas);
 }
 
-.workspace-search-form:focus-within {
-  border-color: var(--accent);
-}
-
 .workspace-search-form input {
   flex: 1;
   min-width: 0;
@@ -1735,7 +1723,7 @@ body.outline-resizing * {
 }
 
 .workspace-search-match[aria-selected="true"] {
-  background: var(--selection);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
@@ -1843,7 +1831,7 @@ body.outline-resizing * {
 }
 
 .file-switcher-option[aria-selected="true"] {
-  background: var(--selection);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
@@ -2010,6 +1998,7 @@ body.outline-resizing * {
   gap: var(--space-1);
   align-items: center;
   padding-block: calc(var(--space-1) + var(--space-0-5));
+  padding-right: var(--space-2);
   border-radius: var(--radius-medium);
   cursor: default;
   color: var(--text-secondary);
@@ -2023,7 +2012,7 @@ body.outline-resizing * {
 }
 
 .file-tree-row[aria-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
@@ -2076,14 +2065,15 @@ body.outline-resizing * {
   gap: var(--space-3);
 }
 
-/* Settings uses a fixed dual-pane workspace inside the viewport. The vh
+/* Settings uses a steady dual-pane workspace inside the viewport. The vh
    height is the fallback for older WKWebViews; dvh handles dynamic chrome. */
 .dialog-overlay [role="dialog"].settings-dialog {
-  width: min(900px, calc(100% - 48px));
-  height: min(640px, calc(100vh - 48px));
-  height: min(640px, calc(100dvh - 48px));
+  width: min(860px, calc(100% - 48px));
+  height: min(600px, calc(100vh - 48px));
+  height: min(600px, calc(100dvh - 48px));
   max-width: none;
-  grid-template-rows: minmax(0, 1fr);
+  border-radius: 16px;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0;
   padding: 0;
   overflow: hidden;
@@ -2137,30 +2127,38 @@ body.outline-resizing * {
 
 /* ---------- Settings dialog ---------- */
 
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-4) var(--space-2) var(--space-5);
+}
+
+.dialog-overlay .settings-dialog .settings-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
 .settings-layout {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 204px minmax(0, 1fr);
   min-height: 0;
 }
 
 .settings-navigation {
   min-width: 0;
-  padding: var(--space-5) var(--space-4);
-  border-right: 1px solid var(--divider);
-  background: var(--surface-panel);
-}
-
-.dialog-overlay .settings-dialog .settings-navigation-title {
-  padding-inline: var(--space-2);
-  font-size: 22px;
-  line-height: 1.3;
+  padding: var(--space-2) var(--space-3) var(--space-4) var(--space-4);
+  background: transparent;
 }
 
 .settings-tabs {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  margin-top: var(--space-5);
+  margin-top: 0;
 }
 
 .settings-tab {
@@ -2168,20 +2166,22 @@ body.outline-resizing * {
   display: flex;
   gap: 10px;
   align-items: center;
-  min-height: 40px;
-  padding: var(--space-2) var(--space-3);
+  height: 38px;
+  min-height: 38px;
+  padding: 0 var(--space-3);
   border: 0;
-  border-radius: var(--radius-medium);
+  border-radius: 10px;
   background: transparent;
   color: var(--text-secondary);
   font-size: var(--font-ui-size-large);
+  font-weight: 450;
   text-align: left;
 }
 
 .settings-tab svg {
   flex-shrink: 0;
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
 }
 
 .settings-tab:hover,
@@ -2190,45 +2190,12 @@ body.outline-resizing * {
   color: var(--text-primary);
 }
 
-.settings-tab[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  inset-block: 10px;
-  inset-inline-start: 0;
-  border-inline-start: 2px solid currentColor;
-}
-
 .settings-content {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: var(--space-5) var(--space-5) var(--space-4);
-}
-
-.settings-content-header {
-  display: flex;
-  flex-shrink: 0;
-  gap: var(--space-4);
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: var(--space-5);
-}
-
-.settings-content-heading {
-  min-width: 0;
-}
-
-.dialog-overlay .settings-dialog .settings-content-title {
-  font-size: 24px;
-  line-height: 1.25;
-}
-
-.dialog-overlay .settings-dialog .settings-content-description {
-  margin: var(--space-1) 0 0;
-  color: var(--text-muted);
-  font-size: var(--font-ui-size);
-  line-height: 1.5;
+  padding: var(--space-1) var(--space-5) var(--space-4) var(--space-4);
 }
 
 .settings-close {
@@ -2241,7 +2208,7 @@ body.outline-resizing * {
 .settings-body {
   flex: 1;
   min-height: 0;
-  padding: 0 var(--space-1) var(--space-1) 0;
+  padding: 0 var(--space-2) var(--space-2) 0;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -2259,10 +2226,9 @@ body.outline-resizing * {
   }
 
   .settings-navigation {
-    padding: var(--space-4) var(--space-0-5);
+    padding: var(--space-2) var(--space-1);
   }
 
-  .settings-navigation-title,
   .settings-tab-label {
     display: none;
   }
@@ -2276,16 +2242,8 @@ body.outline-resizing * {
     padding-inline: 0;
   }
 
-  .settings-tab[aria-selected="true"]::after {
-    inset-inline-start: 2px;
-  }
-
   .settings-content {
-    padding: var(--space-4);
-  }
-
-  .dialog-overlay .settings-dialog .settings-content-title {
-    font-size: 20px;
+    padding: var(--space-1) var(--space-4) var(--space-4);
   }
 
   .settings-row:has(.settings-update-controls) {
@@ -2309,8 +2267,12 @@ body.outline-resizing * {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--space-4);
-  padding: var(--space-3) 0;
+  padding: var(--space-4) 0;
   min-height: 64px;
+}
+
+.settings-row:first-child {
+  padding-top: var(--space-2);
 }
 
 .settings-row + .settings-row {
@@ -2319,9 +2281,11 @@ body.outline-resizing * {
 
 .settings-row > label,
 .settings-row-label,
+.settings-row-title,
 .settings-field-label > label {
   color: var(--text-primary);
-  font-weight: 600;
+  font-size: var(--font-ui-size-large);
+  font-weight: 500;
 }
 
 .settings-field-label {
@@ -2340,27 +2304,27 @@ body.outline-resizing * {
 .settings-row input:not([type="checkbox"]):not([type="radio"]),
 .settings-row select {
   border: 1px solid var(--divider);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-medium);
   background-color: transparent;
   transition: border-color var(--transition-fast),
     background-color var(--transition-fast);
 }
 
 .settings-row input:not([type="number"]) {
-  min-height: 34px;
+  min-height: 36px;
 }
 
 .settings-dialog .settings-row input[type="number"] {
   width: 6.5em;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-medium);
   background-color: transparent;
-  text-align: right;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
 .settings-row button {
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-medium);
   background-color: transparent;
 }
 
@@ -2416,7 +2380,7 @@ body.outline-resizing * {
 }
 
 .font-search-option[aria-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--surface-active);
 }
 
 /* About section: the version trails like a value, and the update action

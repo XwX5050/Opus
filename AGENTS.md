@@ -99,21 +99,18 @@ Rust/Tauri backend.
 
 - `src/app/`: composition root (`App.tsx`, `createApp.tsx`), top-level shell
   (`AppShell.tsx`), state controller hook (`useAppController.ts`), settings
-  dialog (`SettingsDialog.tsx` — a dual-pane dialog with vertical 外观/编辑器/
-  翻译/关于 tabs on the left, the active panel on the right with descriptive
-  labels, hairline rows and one 34 px capsule control family on
-  `--surface-inset` (240/300/360 px width steps, 108 px numeric fields with a
-  visible px/倍/个 unit suffix, the API endpoint full width) with one neutral
-  1 px border at >= 3:1 in both themes, roving-tabindex
-  ArrowUp/ArrowDown/Home/End navigation, a compact icon rail below 700 px,
-  field+action rows stacked below 900 px and every row below 560 px;
-  the dialog keeps a stable top anchor while 外观 and 关于 size to their
-  content and 编辑器/翻译 keep the fixed form height;
-  its API Key field is write-only: it never
-  echoes a stored key, shows an 已保存 placeholder when the addressed slot has
-  one, commits on blur/Enter straight to the credential store, and offers a
-  清除 button plus a warning when the store fell back to the weakly-protected
-  file), tab bar (`TabList.tsx`), automatic
+  dialog (`SettingsDialog.tsx` — a dual-pane dialog with a minimal top header,
+  a borderless left navigation rail with vertical 外观/编辑器/翻译/关于 pill
+  tabs, a unified dialog surface (`--surface` dark / `--canvas` white light),
+  a 3-card visual theme selector (`浅色`/`深色`/`跟随系统`), and soft 10 px
+  rounded-rectangle 36 px controls (compact centered numeric fields with
+  adjacent px/倍/个 units, soft-filled selects, full-width stacked API
+  endpoint), roving-tabindex ArrowUp/ArrowDown/Home/End navigation, a compact
+  icon rail below 700 px, field+action rows stacked below 900 px and every
+  row below 560 px; its API Key field is write-only: it never echoes a stored
+  key, shows an 已保存 placeholder when the addressed slot has one, commits on
+  blur/Enter straight to the credential store, and offers a 清除 button plus a
+  warning when the store fell back to the weakly-protected file), tab bar (`TabList.tsx`), automatic
   performance-mode hook (`usePerformanceMode.ts`), in-app update checks
   (`updates.ts`), and the E2E fixture bridge (`e2e.ts`). A persistent 36 px
   activity rail sits at the far left of the shell body: its top actions are
@@ -170,7 +167,8 @@ Rust/Tauri backend.
   The unified top bar has no global workspace-search field. The explorer owns
   the file tree even in the empty state; it never contains
   the document tab list. The translate, view-mode, and presentation toggles
-  live in the outline toolbar while the panel is open — hiding it never resets
+  live in the outline toolbar beside the icon-only 大纲 header button while the
+  panel is open — hiding it never resets
   per-tab translation or view-mode state. When the outline is collapsed while
   a translation is on screen or the reading view is active, a compact state
   bar above the editor keeps that state visible with a
@@ -211,8 +209,8 @@ Rust/Tauri backend.
   component and `DocumentPort.searchWorkspace` keeps its backend contract; in
   dedicated mode it fills the left sidebar with a single pill-shaped search
   field. Results are grouped per file, each match row carries its line number
-  and a full accessible label, the selected row uses an accent wash, and the
-  hit is emphasized with weight/underline on that wash (`searchViews.css`).
+  and a full accessible label, the selected row uses a neutral elevated surface (`--surface-active`), and the
+  hit is emphasized with weight/underline on that row (`searchViews.css`).
   `FileQuickSwitcher.tsx` uses a native `<dialog>` with combobox
   keyboard navigation, recursively collected Markdown paths, and Shift+Enter
   creation through `createMarkdownFile`. Options split the file name from its
@@ -329,8 +327,8 @@ Rust/Tauri backend.
   core produces no table widgets at all. `viewMode.ts` defines the
   per-tab modes: `editing` (live preview, selection reveals source) and
   `reading` (read-only, fully rendered). `livePreviewRefinements.css` owns the
-  rendered typography: fenced blocks and inline code sit on `--surface-panel`
-  (one step above the canvas, never a card), the language label sits at the
+  rendered typography: fenced blocks and inline code sit on `--surface-code`
+  (one quiet step above the canvas, never a card), the language label sits at the
   block's top-left, fixed 8/16 px fenced-block insets and 8/4 px radii are
   shared by the editor and presentation slide host, and a heading's `#` run
   hangs in the left margin (tucked above the heading below 960 px) so
@@ -368,8 +366,8 @@ Rust/Tauri backend.
   and no file icon;
   an invisible spacer keeps file and folder labels aligned at
   `--font-ui-size-large`. The shell passes the open document's `activePath`;
-  only a visible file row matching it is selected (accent wash plus a 2 px
-  inset marker), while a separate `focusedPath` owns the roving tab stop, so
+  only a visible file row matching it is selected (a neutral `--surface-active`
+  pill without an accent border/wash), while a separate `focusedPath` owns the roving tab stop, so
   keyboard focus never implies selection and an unmatched or directory path
   never falls back to the first row for selection; folder rows carry no
   `aria-selected`. Rows have no inline action buttons; the right-click
@@ -436,19 +434,23 @@ Rust/Tauri backend.
   glm-4.7-flash can even return empty content when reasoning exhausts the
   completion budget.
 - `src/theme/`: CSS tokens, app styles, theme hook, and editor/theme
-  preferences. The reading column scales proportionally with the window
+  preferences. By default the reading column scales proportionally with the window
   (`min(clamp(--editor-content-width, 68%, 1.6x it), 100% - 48px)` on
-  `.cm-content`); the preference is the column's minimum/base width, and the
-  scroller runs edge to edge so the scrollbar rides the window edge. Syntax
+  `.cm-content`); dragging the hover-revealed short vertical handles flanking
+  the reading column (or editing 内容宽度 in Settings) pins `contentWidthPinned`
+  (`data-editor-width-mode="fixed"`, `min(--editor-content-width, 100% - 48px)`,
+  double-click to reset to auto-scaling), and the scroller runs edge to edge so
+  the scrollbar rides the window edge. Syntax
   highlight colors are `--syntax-*` tokens mapped in
-  `editor/editorExtensions.ts`. The canvas is a flat near-black:
-  `--canvas` must stay a plain hex (the native window background in
-  `window_background.rs` parses it as a solid color) and carries no glow or
-  texture overlays; side panels use the flat `--surface-panel` tone, one step
-  above the canvas. Primary actions use `.button-primary` (filled
-  `--accent-strong` with white text); destructive actions use `.button-danger`
-  (outline `--danger-strong` on `--danger-soft`). `--text-muted` stays at or
-  above 4.5:1 on canvas/panel/surface/hover, `--focus-ring` is a solid accent
+  `editor/editorExtensions.ts`. The canvas uses a recessed dark background
+  (`--canvas` `#141518`, kept as a plain hex because `window_background.rs`
+  parses it as a solid color) with no glow or texture overlays; side panels
+  and the header use the flat lighter charcoal `--surface-panel` (`#222328`)
+  for clear separation, while dialogs and popovers step above both on
+  `--surface`. Primary actions use `.button-primary` (filled `--accent-strong`
+  with white text); destructive actions use `.button-danger` (outline
+  `--danger-strong` on `--danger-soft`). `--text-muted` stays at or above
+  4.5:1 on canvas/panel/surface/hover, `--focus-ring` is a solid neutral slate
   hex, and the UI font starts at `system-ui` (no bundled Inter). Component
   sheets refine their own surfaces — `searchViews.css`,
   `settingsRefinements.css`, `shellRefinements.css`, `fileSidebar.css`,

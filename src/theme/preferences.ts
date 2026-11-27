@@ -25,13 +25,15 @@ export interface EditorPreferences {
   readonly bodySizePx: number;
   readonly lineHeight: number;
   readonly contentWidthPx: number;
+  /** True when the user explicitly chose a fixed width (via drag or Settings). */
+  readonly contentWidthPinned?: true;
   readonly fontFamily: string;
 }
 
 export const EDITOR_PREFERENCE_LIMITS = {
   bodySizePx: { min: 13, max: 24 },
   lineHeight: { min: 1.3, max: 2.2 },
-  contentWidthPx: { min: 560, max: 1100 },
+  contentWidthPx: { min: 400, max: 1600 },
 } as const;
 
 const MAX_FONT_NAME_LENGTH = 100;
@@ -76,6 +78,11 @@ export const normalizeEditorPreferences = (
     return { ...DEFAULT_EDITOR_PREFERENCES };
   }
   const record = value as Record<string, unknown>;
+  const validWidth = within(
+    record.contentWidthPx,
+    EDITOR_PREFERENCE_LIMITS.contentWidthPx.min,
+    EDITOR_PREFERENCE_LIMITS.contentWidthPx.max,
+  );
   return {
     bodySizePx: within(
       record.bodySizePx,
@@ -91,13 +98,12 @@ export const normalizeEditorPreferences = (
     )
       ? record.lineHeight
       : DEFAULT_EDITOR_PREFERENCES.lineHeight,
-    contentWidthPx: within(
-      record.contentWidthPx,
-      EDITOR_PREFERENCE_LIMITS.contentWidthPx.min,
-      EDITOR_PREFERENCE_LIMITS.contentWidthPx.max,
-    )
-      ? Math.round(record.contentWidthPx)
+    contentWidthPx: validWidth
+      ? Math.round(record.contentWidthPx as number)
       : DEFAULT_EDITOR_PREFERENCES.contentWidthPx,
+    ...(validWidth && record.contentWidthPinned === true
+      ? { contentWidthPinned: true as const }
+      : {}),
     fontFamily: normalizeFontFamily(record.fontFamily),
   };
 };
@@ -131,6 +137,9 @@ export const clampEditorPreferences = (
       EDITOR_PREFERENCE_LIMITS.contentWidthPx.max,
     ),
   ),
+  ...(preferences.contentWidthPinned === true
+    ? { contentWidthPinned: true as const }
+    : {}),
   fontFamily: normalizeFontFamily(preferences.fontFamily),
 });
 

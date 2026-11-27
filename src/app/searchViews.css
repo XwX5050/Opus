@@ -76,7 +76,7 @@
 }
 
 .workspace-search .workspace-search-match[aria-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--surface-active);
   color: var(--text-primary);
 }
 
@@ -87,7 +87,7 @@
   color: var(--text-primary);
 }
 
-/* On the tinted selection row an orange hit would fight the background;
+/* On the selected row an orange hit would fight the elevated background;
    emphasize with weight and an underline instead. */
 .workspace-search .workspace-search-match[aria-selected="true"] .workspace-search-hit {
   padding: 0;
@@ -112,7 +112,7 @@
 }
 
 .file-switcher-dialog .file-switcher-input-row:focus-within {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--focus-ring);
 }
 
 .file-switcher-dialog .file-switcher-option {
