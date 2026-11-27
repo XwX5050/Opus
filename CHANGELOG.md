@@ -2,6 +2,33 @@
 
 All notable changes to Opus are documented in this file.
 
+## [0.2.7] - 2026-11-27
+
+### Added
+
+- The reading column can be resized by dragging the hover-revealed vertical
+  handles at its sides: dragging (or editing 内容宽度 in Settings) pins a
+  fixed width, and double-clicking a handle restores automatic proportional
+  scaling. The supported width range is now 400–1600 px.
+- Settings gain a 3-card visual theme selector (浅色/深色/跟随系统).
+
+### Changed
+
+- The settings dialog is redesigned with a minimal top header, a borderless
+  left navigation rail with pill tabs, a unified dialog surface, and soft
+  10 px rounded-rectangle 36 px controls: compact centered numeric fields
+  with adjacent units, soft-filled selects, and a full-width stacked API
+  endpoint.
+- The dark theme uses a recessed `#141518` canvas with lighter charcoal
+  `#222328` side panels and header, while dialogs and popovers step above
+  both; the native window background matches the new canvas on startup.
+- Fenced and inline code sit on the new quiet `--surface-code` tone, one step
+  above the canvas.
+- The file tree and search results mark the selected row with a neutral
+  `--surface-active` pill instead of an accent wash, the outline toolbar
+  groups its toggles beside an icon-only 大纲 header button, and focus rings
+  use a solid neutral slate.
+
 ## [0.2.6] - 2026-11-27
 
 ### Changed
