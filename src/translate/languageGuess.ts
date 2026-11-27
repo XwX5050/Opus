@@ -83,6 +83,14 @@ const countMatches = (text: string, re: RegExp): number =>
   (text.match(re) ?? []).length;
 
 /**
+ * Returns true when `text` contains at least one Unicode letter (skipping
+ * digits, punctuation, Markdown delimiters, and `⟪n⟫` placeholder tokens).
+ */
+export function hasTranslatableLetters(text: string): boolean {
+  return countMatches(text, LETTER_RE) > 0;
+}
+
+/**
  * Returns true when `text` is very likely already written in
  * `targetLanguage`, so the caller can skip sending it to the provider.
  * Recognized targets map to strict script-ratio rules; anything else returns

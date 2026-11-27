@@ -356,12 +356,35 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || value === lastSyncedValueRef.current) return;
+    const previous = lastSyncedValueRef.current;
+    if (!view || value === previous) return;
     lastSyncedValueRef.current = value;
+    const docLength = view.state.doc.length;
     const head = Math.min(view.state.selection.main.head, value.length);
     const anchor = Math.min(view.state.selection.main.anchor, value.length);
+    let from = 0;
+    let to = docLength;
+    let insert = value;
+    if (previous.length === docLength) {
+      let prefix = 0;
+      const minLength = Math.min(previous.length, value.length);
+      while (prefix < minLength && previous[prefix] === value[prefix]) {
+        prefix += 1;
+      }
+      let suffix = 0;
+      while (
+        suffix < minLength - prefix &&
+        previous[previous.length - 1 - suffix] ===
+          value[value.length - 1 - suffix]
+      ) {
+        suffix += 1;
+      }
+      from = prefix;
+      to = previous.length - suffix;
+      insert = value.slice(prefix, value.length - suffix);
+    }
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
+      changes: { from, to, insert },
       selection: { anchor, head },
       annotations: [
         Transaction.addToHistory.of(false),

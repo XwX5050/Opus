@@ -65,6 +65,11 @@ export interface WorkspaceSearchResult {
   readonly truncated: boolean;
 }
 
+export interface TranslateSegmentsOptions {
+  readonly signal?: AbortSignal;
+  readonly runId?: string;
+}
+
 export interface DocumentPort {
   chooseAndOpenFiles(): Promise<ReadonlyArray<OpenedFile>>;
   openPath(path: string): Promise<OpenedFile>;
@@ -113,7 +118,13 @@ export interface DocumentPort {
   translateSegments(
     settings: TranslationSettings,
     segments: string[],
+    options?: TranslateSegmentsOptions,
   ): Promise<string[]>;
+  /**
+   * Cancels all in-flight backend requests for `runId`. Best-effort and
+   * idempotent; ports without a backend cancellation channel omit or no-op it.
+   */
+  cancelTranslation?(runId: string): Promise<void>;
   /**
    * Lists the model ids an OpenAI-compatible endpoint advertises (GET
    * {endpoint}/models with the key stored for `keySlot`), sorted by id. The

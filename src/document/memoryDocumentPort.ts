@@ -4,6 +4,7 @@ import {
   type DirectoryEntry,
   type DocumentPort,
   type SavedFile,
+  type TranslateSegmentsOptions,
   type WorkspaceRoot,
   type WorkspaceSearchMatch,
 } from "./DocumentPort";
@@ -300,9 +301,13 @@ export class MemoryDocumentPort implements DocumentPort {
   async translateSegments(
     settings: TranslationSettings,
     segments: string[],
+    options?: TranslateSegmentsOptions,
   ): Promise<string[]> {
+    if (options?.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     const cacheKey =
-      `${settings.model}\u0000${settings.targetLanguage}\u0000` +
+      `${settings.endpoint}\u0000${settings.model}\u0000${settings.targetLanguage}\u0000` +
       segments.join("\u0000");
     const cached = this.#translationCache.get(cacheKey);
     if (cached) return [...cached];
@@ -312,6 +317,8 @@ export class MemoryDocumentPort implements DocumentPort {
     this.#translationRequestedSegments += segments.length;
     return [...translated];
   }
+
+  async cancelTranslation(_runId: string): Promise<void> {}
 
   async listTranslationModels(
     endpoint: string,

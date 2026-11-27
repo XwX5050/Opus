@@ -99,6 +99,7 @@ pub fn run() {
             document_commands::read_recovery_draft,
             document_commands::discard_recovery_draft,
             translate::translate_segments,
+            translate::cancel_translation,
             translate::list_translation_models,
             api_keys::store_translation_key,
             api_keys::delete_translation_key,

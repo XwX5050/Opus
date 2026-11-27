@@ -1040,4 +1040,150 @@ describe("translateDocument", () => {
     expect(result).not.toContain("⟫");
     expect(result.length).toBe(doc.length + 8);
   });
+
+  it("skips letter-free chunks such as rules, numbers, and standalone code spans", async () => {
+    const doc = "Hello world\n\n---\n\n12345\n\n`parse()`\n";
+    const port = echoPort();
+    await expect(translateDocument(port, settings, doc)).resolves.toBe(
+      "HELLO WORLD\n\n---\n\n12345\n\n`parse()`\n",
+    );
+    expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(1, settings, [
+      "Hello world\n",
+    ]);
+  });
+
+  it("fails immediately without retrying on non-retryable errors (401/403/404/missing-key)", async () => {
+    for (const message of [
+      "translation provider returned HTTP 401 Unauthorized: bad key",
+      "translation provider returned HTTP 403 Forbidden: denied",
+      "translation provider returned HTTP 404 Not Found: no route",
+      'missing-key: no API key stored for slot "custom"',
+    ]) {
+      const port: FakeTranslatePort = {
+        translateSegments: vi.fn(async () => {
+          throw new Error(message);
+        }),
+      };
+      await expect(
+        translateDocument(port, settings, "hello\n"),
+      ).rejects.toThrow(message);
+      expect(port.translateSegments).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("aborts immediately and cancels backend even when a sibling call never settles", async () => {
+    const paras = Array.from({ length: 9 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const controller = new AbortController();
+    const cancelTranslation = vi.fn(async () => {});
+    const neverSettlingPort = {
+      translateSegments: vi.fn(
+        () => new Promise<string[]>(() => {}),
+      ),
+      cancelTranslation,
+    };
+    const running = translateDocument(neverSettlingPort, settings, doc, {
+      signal: controller.signal,
+    });
+    expect(neverSettlingPort.translateSegments).toHaveBeenCalledTimes(2);
+
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancelTranslation).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects immediately when one worker fails permanently even if a sibling hangs", async () => {
+    const paras = Array.from({ length: 9 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const cancelTranslation = vi.fn(async () => {});
+    let call = 0;
+    const port = {
+      translateSegments: vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          throw new Error("translation provider returned HTTP 401 Unauthorized");
+        }
+        return new Promise<string[]>(() => {});
+      }),
+      cancelTranslation,
+    };
+    await expect(translateDocument(port, settings, doc)).rejects.toThrow("401");
+    expect(cancelTranslation).toHaveBeenCalledTimes(1);
+  });
+
+  it("halves concurrency and retries with cooldown on HTTP 429 rate limits", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const paras = Array.from({ length: 16 }, () => paragraph(550));
+    const doc = paras.join("\n");
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        async (_settings: TranslationSettings, segments: string[]) => {
+          calls += 1;
+          if (calls === 1) {
+            throw new Error(
+              "translation provider returned HTTP 429 Too Many Requests",
+            );
+          }
+          return segments.map((s) => s.toUpperCase());
+        },
+      ),
+    };
+    const running = translateDocument(port, settings, doc, { concurrency: 4 });
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(running).resolves.toBe(doc.toUpperCase());
+    expect(calls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("bisects a failing batch on timeout or truncation instead of failing the run", async () => {
+    const paras = Array.from({ length: 4 }, (_, i) => `para-${i}-` + "a".repeat(50) + "\n");
+    const doc = paras.join("\n");
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        async (_settings: TranslationSettings, segments: string[]) => {
+          if (segments.length > 2) {
+            throw new Error(
+              "unexpected translation provider response: response truncated by model token limit",
+            );
+          }
+          return segments.map((s) => s.toUpperCase());
+        },
+      ),
+    };
+    await expect(translateDocument(port, settings, doc)).resolves.toBe(
+      doc.toUpperCase(),
+    );
+    // 1 failing 4-unit batch -> bisected into two 2-unit batches.
+    expect(port.translateSegments).toHaveBeenCalledTimes(3);
+    expect(port.translateSegments).toHaveBeenNthCalledWith(2, settings, paras.slice(0, 2));
+    expect(port.translateSegments).toHaveBeenNthCalledWith(3, settings, paras.slice(2));
+  });
+
+  it("runs placeholder fallback retries concurrently for multiple mangled units", async () => {
+    const doc = "`a` one\n\n`b` two\n";
+    const pendingFallback: { text: string; resolve: (value: string[]) => void }[] = [];
+    let batchResolved = false;
+    const port: FakeTranslatePort = {
+      translateSegments: vi.fn(
+        (_settings: TranslationSettings, segments: string[]) => {
+          if (!batchResolved && segments.length === 2) {
+            batchResolved = true;
+            // Drop placeholders on both units so both need plain fallback.
+            return Promise.resolve(["dropped-1", "dropped-2"]);
+          }
+          return new Promise<string[]>((resolve) => {
+            pendingFallback.push({ text: segments[0], resolve });
+          });
+        },
+      ),
+    };
+    const running = translateDocument(port, settings, doc);
+    await flushMicrotasks();
+    // Both fallback requests are in flight at the same time (not sequential).
+    expect(pendingFallback).toHaveLength(2);
+    pendingFallback[0].resolve(["甲"]);
+    pendingFallback[1].resolve(["乙"]);
+    await expect(running).resolves.toBe("甲\n\n乙\n");
+  });
 });

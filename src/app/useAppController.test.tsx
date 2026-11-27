@@ -3026,6 +3026,15 @@ describe("useAppController translation failure and close flows", () => {
 });
 
 describe("useAppController translation settings binding", () => {
+  const openDoc = (path: string, text = "hello world"): OpenedFile => ({
+    path,
+    text,
+    hasUtf8Bom: false,
+    newline: "lf",
+    modifiedUnixMs: 1,
+    version: "v1",
+  });
+
   it("drops a hidden result when the target language changes and re-translates on show", async () => {
     const port = new MemoryDocumentPort(
       new Map([
@@ -3126,6 +3135,110 @@ describe("useAppController translation settings binding", () => {
       port.resolvePending[0](["late result"]);
     });
     expect(hook.result.current.translationOf(id)).toBeUndefined();
+    hook.unmount();
+  });
+
+  it("allows loopback endpoints without a stored API key", async () => {
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openDoc("/notes/a.md", "hello world")]]),
+      {
+        session: {
+          recent: [],
+          openPaths: [],
+          activePath: null,
+          workspacePath: null,
+          translationSettings: {
+            endpoint: "http://localhost:11434/v1",
+            model: "qwen2.5",
+            targetLanguage: "中文",
+            concurrency: 4,
+          },
+        },
+      },
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+    await waitFor(() =>
+      expect(hook.result.current.translationSettings.endpoint).toBe(
+        "http://localhost:11434/v1",
+      ),
+    );
+
+    await act(async () => hook.result.current.toggleTranslation(id));
+    await waitFor(() =>
+      expect(hook.result.current.translationOf(id)?.state.phase).toBe("ready"),
+    );
+    expect(hook.result.current.error).toBeNull();
+    hook.unmount();
+  });
+
+  it("cancels a pending key-lookup start when settings change before it resolves", async () => {
+    let resolveKey!: (present: boolean) => void;
+    const port = new MemoryDocumentPort(
+      new Map([["/notes/a.md", openDoc("/notes/a.md", "hello world")]]),
+      keyedOptions,
+    );
+    port.hasTranslationKey = () =>
+      new Promise<boolean>((resolve) => {
+        resolveKey = resolve;
+      });
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const id = hook.result.current.state.tabs[0].id;
+
+    act(() => hook.result.current.toggleTranslation(id));
+    act(() =>
+      hook.result.current.setTranslationSettings({
+        ...hook.result.current.translationSettings,
+        targetLanguage: "日本語",
+      }),
+    );
+    await act(async () => resolveKey(true));
+    expect(hook.result.current.translationOf(id)).toBeUndefined();
+    expect(port.translationCallCount).toBe(0);
+    hook.unmount();
+  });
+
+  it("isolates the viewport provider to the active tab only", async () => {
+    class DeferredPort extends MemoryDocumentPort {
+      readonly pending: { segments: string[]; resolve: (value: string[]) => void }[] =
+        [];
+      override translateSegments(
+        _settings: TranslationSettings,
+        segments: string[],
+      ): Promise<string[]> {
+        return new Promise((resolve) => {
+          this.pending.push({ segments, resolve });
+        });
+      }
+    }
+    const port = new DeferredPort(
+      new Map([
+        ["/notes/a.md", openDoc("/notes/a.md", "hello world")],
+        ["/notes/b.md", openDoc("/notes/b.md", "second file")],
+      ]),
+      keyedOptions,
+    );
+    const hook = renderHook(() => useAppController(port));
+    await act(() => hook.result.current.openPath("/notes/a.md"));
+    const firstId = hook.result.current.state.tabs[0].id;
+    await act(() => hook.result.current.openPath("/notes/b.md"));
+    const secondId = hook.result.current.state.tabs[1].id;
+    act(() => hook.result.current.activate(firstId));
+
+    act(() =>
+      hook.result.current.setTranslationViewportProvider(() => ({ from: 0, to: 10 })),
+    );
+    await act(async () => hook.result.current.toggleTranslation(firstId));
+    await waitFor(() => expect(port.pending).toHaveLength(1));
+    const priority = vi.mocked(translateDocument).mock.calls.at(-1)![3]!.priority!;
+    expect(priority.visibleRange()).toEqual({ from: 0, to: 10 });
+
+    // Switching to another tab means the background tab no longer uses the
+    // foreground tab's viewport offsets.
+    act(() => hook.result.current.activate(secondId));
+    expect(priority.visibleRange()).toBeNull();
     hook.unmount();
   });
 });

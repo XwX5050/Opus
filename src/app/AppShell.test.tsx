@@ -2239,7 +2239,9 @@ describe("AppShell document translation", () => {
       expect(screen.getByRole("status")).toHaveTextContent("正在翻译… (8/16)"),
     );
     expect(editor()).toHaveTextContent("ｘ");
-    expect(editor().textContent).toContain("x");
+    expect(EditorView.findFromDOM(editor())?.state.doc.toString()).toContain(
+      "x",
+    );
     expect(editor()).toHaveAttribute("contenteditable", "false");
 
     // The second batch completes: the full translation lands ready.
@@ -2306,6 +2308,23 @@ describe("AppShell document translation", () => {
       "true",
     );
     expect(editor()).toHaveTextContent("ｈｅｌｌｏ ｗｏｒｌｄ");
+  });
+
+  it("dismisses a translation failure banner when its close button is clicked", async () => {
+    const user = userEvent.setup();
+    const port = keyedPort([translateFile("/notes/trans.md", "hello world")]);
+    port.translateSegments = async () => {
+      throw new Error("translation provider returned HTTP 401 Unauthorized");
+    };
+    render(<AppShell port={port} />);
+    await user.click(screen.getByRole("button", { name: "打开文件" }));
+    await user.click(screen.getByRole("button", { name: "展开右侧栏" }));
+    await user.click(screen.getByRole("button", { name: "翻译文档" }));
+
+    const banner = await screen.findByRole("status");
+    expect(banner).toHaveTextContent("翻译失败：");
+    await user.click(within(banner).getByRole("button", { name: "关闭翻译错误提示" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("asks the user to configure the API when no key is set", async () => {

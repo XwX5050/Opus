@@ -78,16 +78,49 @@ const findCodeSpanCloser = (
   return -1;
 };
 
+const isMathWhitespace = (char: string | undefined): boolean =>
+  char === " " || char === "\t" || char === "\n" || char === "\r";
+
+/**
+ * Mirrors `mathExtension.ts`'s `isPriceLike`: a closing `$` directly followed
+ * by a digit or CJK ideograph most likely belongs to currency ("$5到$10元",
+ * "$10 to $20") rather than to inline math.
+ */
+const isPriceLike = (char: string | undefined): boolean => {
+  if (char === undefined) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 0xff10 && code <= 0xff19) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xf900 && code <= 0xfaff)
+  );
+};
+
+const isEscapedAt = (text: string, index: number): boolean => {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+};
+
 /**
  * Index of the next lone `$` at or after `from`, or -1. Dollars inside a `$$`
- * run are display-math material, never an inline-math closer, so the scan
- * steps over the whole run: `$a$$b$` closes at the final dollar instead of
- * splitting into the two spans `$a$` and `$b$`.
+ * run, escaped `\$`, or price-like / whitespace-padded currency delimiters
+ * never close an inline math span, mirroring `mathExtension.ts`.
  */
 const findInlineMathCloser = (text: string, from: number): number => {
   let cursor = from;
   while (cursor < text.length) {
-    if (text[cursor] !== "$") {
+    const ch = text[cursor];
+    if (ch === "\n" || ch === "\r") return -1;
+    if (ch === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (ch !== "$") {
       cursor += 1;
       continue;
     }
@@ -95,7 +128,13 @@ const findInlineMathCloser = (text: string, from: number): number => {
       while (text[cursor] === "$") cursor += 1;
       continue;
     }
-    return cursor;
+    if (
+      !isMathWhitespace(text[cursor - 1]) &&
+      !isPriceLike(text[cursor + 1])
+    ) {
+      return cursor;
+    }
+    cursor += 1;
   }
   return -1;
 };
@@ -144,6 +183,11 @@ export function protectInlineSpans(text: string): ProtectedText {
       continue;
     }
     if (char === "$") {
+      if (isEscapedAt(text, index)) {
+        result += "$";
+        index += 1;
+        continue;
+      }
       if (text[index + 1] === "$") {
         // A `$$` run is display-math material and stays literal. Emitting
         // both dollars together stops the pair's second dollar from being
@@ -153,21 +197,23 @@ export function protectInlineSpans(text: string): ProtectedText {
         index += 2;
         continue;
       }
-      // A single dollar opens an inline-math pair closed by the next lone
-      // dollar; a `$$` run in between is display-math material, never a
-      // close.
-      const closer = findInlineMathCloser(text, index + 1);
-      const content = closer === -1 ? "" : text.slice(index + 1, closer);
-      if (closer !== -1 && !content.includes("\n")) {
-        spans.push({
-          index: nextIndex,
-          placeholder: placeholderFor(nextIndex),
-          original: text.slice(index, closer + 1),
-        });
-        nextIndex += 1;
-        result += spans[spans.length - 1].placeholder;
-        index = closer + 1;
-        continue;
+      if (!isMathWhitespace(text[index + 1])) {
+        // A single dollar opens an inline-math pair closed by the next lone
+        // dollar; a `$$` run in between is display-math material, never a
+        // close.
+        const closer = findInlineMathCloser(text, index + 1);
+        const content = closer === -1 ? "" : text.slice(index + 1, closer);
+        if (closer !== -1 && !content.includes("\n")) {
+          spans.push({
+            index: nextIndex,
+            placeholder: placeholderFor(nextIndex),
+            original: text.slice(index, closer + 1),
+          });
+          nextIndex += 1;
+          result += spans[spans.length - 1].placeholder;
+          index = closer + 1;
+          continue;
+        }
       }
     }
     result += char;
@@ -236,13 +282,13 @@ export function replaceInlineSpans(
   protectedText: string,
   spans: readonly InlineSpan[],
 ): string {
+  if (spans.length === 0) return protectedText;
+  const byIndex = new Map<number, string>();
+  for (const span of spans) {
+    byIndex.set(span.index, span.original);
+  }
   return protectedText.replace(
     PLACEHOLDER_TOKEN_RE,
-    (token, number: string) => {
-      const span = spans.find(
-        (candidate) => candidate.index === Number(number),
-      );
-      return span ? span.original : token;
-    },
+    (token, number: string) => byIndex.get(Number(number)) ?? token,
   );
 }

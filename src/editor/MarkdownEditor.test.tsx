@@ -1258,4 +1258,25 @@ describe("MarkdownEditor", () => {
       }
     });
   });
+
+  it("applies external value updates incrementally without replacing unchanged ranges", () => {
+    const initial = "第一段内容\n\n第二段内容\n\n第三段内容\n";
+    const rendered = renderEditor({ value: initial, viewMode: "reading" });
+    const view = editorView();
+    const dispatchSpy = vi.spyOn(view, "dispatch");
+
+    const updated = "第一段内容\n\n第二段译文内容\n\n第三段内容\n";
+    rendered.rerender(<MarkdownEditor {...rendered.props} value={updated} />);
+
+    expect(view.state.doc.toString()).toBe(updated);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const spec = dispatchSpy.mock.calls[0][0] as {
+      changes: { from: number; to: number; insert: string };
+    };
+    expect(spec.changes).toEqual({
+      from: initial.indexOf("内容\n\n第三段"),
+      to: initial.indexOf("内容\n\n第三段"),
+      insert: "译文",
+    });
+  });
 });

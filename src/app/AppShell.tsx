@@ -182,8 +182,13 @@ const visibleTextRangeOf = (
     const scroller = view.scrollDOM;
     const rect = scroller.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
-    const from = view.posAtCoords({ x: rect.left + 4, y: rect.top + 1 });
-    const to = view.posAtCoords({ x: rect.left + 4, y: rect.bottom - 1 });
+    const contentRect = view.contentDOM.getBoundingClientRect();
+    const x =
+      contentRect.width > 0
+        ? contentRect.left + Math.min(4, contentRect.width / 2)
+        : rect.left + 4;
+    const from = view.posAtCoords({ x, y: rect.top + 1 });
+    const to = view.posAtCoords({ x, y: rect.bottom - 1 });
     const start = from ?? 0;
     const end = to ?? view.state.doc.length;
     return start <= end ? { from: start, to: end } : { from: end, to: start };
@@ -955,7 +960,7 @@ export default function AppShell({
     if (!view) return;
     controller.setTranslationViewportProvider(() => visibleTextRangeOf(view));
     return () => controller.setTranslationViewportProvider(null);
-  }, [controller.setTranslationViewportProvider, active?.id]);
+  }, [controller.setTranslationViewportProvider, activeEditorView, active?.id]);
   const [outlinesByTab, setOutlinesByTab] = useState<
     ReadonlyMap<string, ReadonlyArray<OutlineHeading>>
   >(new Map());
@@ -2465,6 +2470,13 @@ export default function AppShell({
             >
               重试
             </button>
+            <button
+              type="button"
+              aria-label="关闭翻译错误提示"
+              onClick={() => controller.dismissTranslationError(active.id)}
+            >
+              ×
+            </button>
           </div>
         )}
         {active ? (
@@ -2488,7 +2500,12 @@ export default function AppShell({
             }
             onReopenClosed={reopenClosed}
             onToggleReading={() => controller.toggleReading(active.id)}
-            viewMode={translationShown ? "reading" : viewMode}
+            viewMode={
+              translationShown ||
+              activeTranslation?.state.phase === "translating"
+                ? "reading"
+                : viewMode
+            }
             documentPath={active.path}
             saveClipboardImage={withAssetScopeForSavedImage(port, active.id)}
             resolveImageUrl={tauriImagePreviewUrl}

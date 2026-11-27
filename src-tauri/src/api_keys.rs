@@ -37,7 +37,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tauri::Manager;
 
 /// Keyring service name for every entry this app writes: the bundle
@@ -513,13 +513,89 @@ fn blank_key_error(slot: &str) -> String {
     )
 }
 
+fn app_data_dir_for(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("key-store: the app data directory is unavailable: {error}"))
+}
+
 /// The store the app uses, with the app data directory resolved.
 pub fn store_for_app(app: &tauri::AppHandle) -> Result<ApiKeyStore, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("key-store: the app data directory is unavailable: {error}"))?;
+    let data_dir = app_data_dir_for(app)?;
     Ok(ApiKeyStore::for_app_data_dir(&data_dir))
+}
+
+type KeyCacheMap = HashMap<(PathBuf, String), Option<String>>;
+
+/// Process-wide in-memory cache of resolved API keys keyed by
+/// `(app_data_dir, slot)`. Eliminates repeated OS keychain / D-Bus Secret
+/// Service lookups during multi-batch translations while staying synchronized
+/// with `store_translation_key` and `delete_translation_key`. Never logged.
+static KEY_CACHE: OnceLock<RwLock<KeyCacheMap>> = OnceLock::new();
+
+fn key_cache() -> &'static RwLock<KeyCacheMap> {
+    KEY_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn read_cached_slot(data_dir: &Path, slot: &str) -> Option<Option<String>> {
+    let cache = key_cache()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(&(data_dir.to_path_buf(), slot.to_string()))
+        .cloned()
+}
+
+fn update_cached_slot(data_dir: &Path, slot: &str, value: Option<String>) {
+    let mut cache = key_cache()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert((data_dir.to_path_buf(), slot.to_string()), value);
+}
+
+#[allow(dead_code)]
+fn invalidate_cached_slot(data_dir: &Path, slot: &str) {
+    let mut cache = key_cache()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.remove(&(data_dir.to_path_buf(), slot.to_string()));
+}
+
+async fn cached_optional_key_with_loader<F>(
+    data_dir: PathBuf,
+    slot: &str,
+    loader: F,
+) -> Result<Option<String>, String>
+where
+    F: FnOnce() -> Result<Option<String>, String> + Send + 'static,
+{
+    validate_slot(slot)?;
+    if let Some(hit) = read_cached_slot(&data_dir, slot) {
+        return Ok(hit);
+    }
+    let loaded = run_store(loader).await?;
+    update_cached_slot(&data_dir, slot, loaded.clone());
+    Ok(loaded)
+}
+
+/// Reads `slot`'s key from the in-memory cache or falls back to the OS
+/// credential store once on miss, returning `Ok(None)` when no key is stored.
+pub async fn cached_optional_key_for_slot(
+    app: &tauri::AppHandle,
+    slot: &str,
+) -> Result<Option<String>, String> {
+    let data_dir = app_data_dir_for(app)?;
+    let store = ApiKeyStore::for_app_data_dir(&data_dir);
+    let slot_owned = slot.to_string();
+    cached_optional_key_with_loader(data_dir, slot, move || store.get(&slot_owned)).await
+}
+
+/// Reads `slot`'s key using the in-memory cache, failing with
+/// `missing_key_error` when the slot holds no usable key.
+pub async fn cached_key_for_slot(app: &tauri::AppHandle, slot: &str) -> Result<String, String> {
+    cached_optional_key_for_slot(app, slot)
+        .await?
+        .ok_or_else(|| missing_key_error(slot))
 }
 
 /// Runs one credential-store operation on a blocking thread. The Linux Secret
@@ -547,15 +623,24 @@ pub async fn store_translation_key(
     slot: String,
     key: String,
 ) -> Result<(), String> {
-    let store = store_for_app(&app)?;
-    run_store(move || store.store(&slot, &key)).await
+    let data_dir = app_data_dir_for(&app)?;
+    let store = ApiKeyStore::for_app_data_dir(&data_dir);
+    let slot_for_store = slot.clone();
+    let trimmed = key.trim().to_string();
+    run_store(move || store.store(&slot_for_store, &key)).await?;
+    update_cached_slot(&data_dir, &slot, Some(trimmed));
+    Ok(())
 }
 
 /// Removes `slot`'s key, from the system store and from the fallback file.
 #[tauri::command]
 pub async fn delete_translation_key(app: tauri::AppHandle, slot: String) -> Result<(), String> {
-    let store = store_for_app(&app)?;
-    run_store(move || store.delete(&slot)).await
+    let data_dir = app_data_dir_for(&app)?;
+    let store = ApiKeyStore::for_app_data_dir(&data_dir);
+    let slot_for_store = slot.clone();
+    run_store(move || store.delete(&slot_for_store)).await?;
+    update_cached_slot(&data_dir, &slot, None);
+    Ok(())
 }
 
 /// Whether `slot` holds a key. The key itself is never returned, and a blank
@@ -563,8 +648,7 @@ pub async fn delete_translation_key(app: tauri::AppHandle, slot: String) -> Resu
 /// `list_translation_models` reach when they look the slot up.
 #[tauri::command]
 pub async fn has_translation_key(app: tauri::AppHandle, slot: String) -> Result<bool, String> {
-    let store = store_for_app(&app)?;
-    run_store(move || store.has(&slot)).await
+    Ok(cached_optional_key_for_slot(&app, &slot).await?.is_some())
 }
 
 /// Whether keys are protected by the OS credential store (`system`) or by the
@@ -1030,5 +1114,85 @@ mod tests {
                 "error message leaked key material: {message}"
             );
         }
+    }
+
+    #[test]
+    fn key_cache_hits_on_repeat_reads_and_updates_on_store_and_delete() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let loads = Arc::new(AtomicUsize::new(0));
+
+        // First read misses cache and calls loader once.
+        let loads_first = Arc::clone(&loads);
+        let first = tauri::async_runtime::block_on(cached_optional_key_with_loader(
+            data_dir.clone(),
+            "custom",
+            move || {
+                loads_first.fetch_add(1, Ordering::SeqCst);
+                Ok(Some("sk-initial".to_string()))
+            },
+        ))
+        .unwrap();
+        assert_eq!(first.as_deref(), Some("sk-initial"));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+
+        // Second read hits cache and never invokes loader.
+        let loads_second = Arc::clone(&loads);
+        let second = tauri::async_runtime::block_on(cached_optional_key_with_loader(
+            data_dir.clone(),
+            "custom",
+            move || {
+                loads_second.fetch_add(1, Ordering::SeqCst);
+                Ok(Some("sk-should-not-load".to_string()))
+            },
+        ))
+        .unwrap();
+        assert_eq!(second.as_deref(), Some("sk-initial"));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+
+        // Updating cached slot reflects immediately without calling loader.
+        update_cached_slot(&data_dir, "custom", Some("sk-updated".to_string()));
+        let loads_third = Arc::clone(&loads);
+        let third = tauri::async_runtime::block_on(cached_optional_key_with_loader(
+            data_dir.clone(),
+            "custom",
+            move || {
+                loads_third.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            },
+        ))
+        .unwrap();
+        assert_eq!(third.as_deref(), Some("sk-updated"));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+
+        // Clearing cached slot caches None; invalidation triggers fresh load.
+        update_cached_slot(&data_dir, "custom", None);
+        let loads_fourth = Arc::clone(&loads);
+        let fourth = tauri::async_runtime::block_on(cached_optional_key_with_loader(
+            data_dir.clone(),
+            "custom",
+            move || {
+                loads_fourth.fetch_add(1, Ordering::SeqCst);
+                Ok(Some("sk-reloaded".to_string()))
+            },
+        ))
+        .unwrap();
+        assert_eq!(fourth, None);
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+
+        invalidate_cached_slot(&data_dir, "custom");
+        let loads_fifth = Arc::clone(&loads);
+        let fifth = tauri::async_runtime::block_on(cached_optional_key_with_loader(
+            data_dir,
+            "custom",
+            move || {
+                loads_fifth.fetch_add(1, Ordering::SeqCst);
+                Ok(Some("sk-reloaded".to_string()))
+            },
+        ))
+        .unwrap();
+        assert_eq!(fifth.as_deref(), Some("sk-reloaded"));
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
     }
 }

@@ -1392,4 +1392,45 @@ describe("tauri document port translation", () => {
     invoke.mockResolvedValueOnce("something-else");
     await expect(port.translationKeyProtection()).resolves.toBe("file");
   });
+
+  it("forwards runId, aborts immediately on signal, and invokes cancel_translation", async () => {
+    const port = createTauriDocumentPort();
+    invoke.mockImplementation((command: string) => {
+      if (command === "translate_segments") {
+        return new Promise(() => {});
+      }
+      return Promise.resolve(undefined);
+    });
+    const controller = new AbortController();
+    const running = port.translateSegments(settings, ["Hello"], {
+      signal: controller.signal,
+      runId: "run-42",
+    });
+    expect(invoke).toHaveBeenCalledWith("translate_segments", {
+      settings: {
+        endpoint: "https://api.openai.com/v1",
+        keySlot: "custom",
+        model: "gpt-4o-mini",
+        targetLanguage: "中文",
+      },
+      segments: ["Hello"],
+      runId: "run-42",
+    });
+
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ name: "AbortError" });
+    expect(invoke).toHaveBeenCalledWith("cancel_translation", { runId: "run-42" });
+
+    // Pre-aborted signal rejects without invoking backend.
+    invoke.mockClear();
+    await expect(
+      port.translateSegments(settings, ["Hello"], { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(invoke).not.toHaveBeenCalled();
+
+    // Explicit cancelTranslation delegates to cancel_translation and swallows errors.
+    invoke.mockRejectedValueOnce(new Error("ignored"));
+    await expect(port.cancelTranslation?.("run-99")).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("cancel_translation", { runId: "run-99" });
+  });
 });

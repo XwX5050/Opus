@@ -54,9 +54,10 @@ notify = "8.2.0"
 # explicitly (as tauri-plugin-updater does).
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-# Async sleep for the translation client's 429 Retry-After wait; tokio is
-# already locked in the tree via tauri, this only adds the `time` feature.
-tokio = { version = "1", features = ["time"] }
+# Async sleep for the translation client's 429 Retry-After wait and sync
+# primitives for cancellation/key cache; tokio is already locked in the tree
+# via tauri, this only adds `sync` and `time`.
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 
 # Translation API keys live in the OS credential store (see api_keys.rs), not
 # in session.json. keyring selects its backend by feature, so each target

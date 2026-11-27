@@ -81,6 +81,21 @@ export type { SaveFailure } from "../document/saveFlow";
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const isLoopbackEndpoint = (endpoint: string): boolean => {
+  try {
+    const url = new URL(endpoint.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return (
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "::1" ||
+      url.hostname === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Reported when a restore is refused because the draft's document is already
  * open with newer unsaved edits: the recovered text landed nowhere, so the
@@ -226,9 +241,16 @@ export function useAppController(
   useEffect(() => {
     mountedRef.current = true;
     lifecycleGenerationRef.current += 1;
+    const controllers = translationControllers.current;
+    const startTokens = translationStartTokensRef.current;
     return () => {
       mountedRef.current = false;
       lifecycleGenerationRef.current += 1;
+      for (const controller of controllers.values()) {
+        controller.abort();
+      }
+      controllers.clear();
+      startTokens.clear();
     };
   }, []);
 
@@ -441,10 +463,10 @@ export function useAppController(
     [translations],
   );
 
-  // Drops a tab's translation state: aborts any in-flight request and
-  // removes the entry. Idempotent, so callers (cancel, prune, text change)
-  // never need to check whether an entry exists first.
+  // Drops a tab's translation state: aborts any in-flight request, invalidates
+  // pending credential-lookup starts, and removes the entry. Idempotent.
   const dropTranslation = useCallback((id: string) => {
+    translationStartTokensRef.current.delete(id);
     translationControllers.current.get(id)?.abort();
     translationControllers.current.delete(id);
     setTranslations((current) => {
@@ -470,6 +492,7 @@ export function useAppController(
   const beginTranslation = useCallback((id: string, settings: TranslationSettings, generation: number) => {
     const tab = stateRef.current.tabs.find((candidate) => candidate.id === id);
     if (!tab) return;
+    translationControllers.current.get(id)?.abort();
     const controller = new AbortController();
     translationControllers.current.set(id, controller);
     setTranslations((current) => {
@@ -478,11 +501,16 @@ export function useAppController(
       return next;
     });
     const text = tab.text;
-    // Batch completions update the translating state under the same per-run
-    // guards as the final result: a partial only lands while this run is
-    // still current and the source text is unchanged, so it can never
-    // resurrect a cancelled, superseded, or text-invalidated run.
-    const applyPartial = (partial: TranslationPartial) => {
+    // Coalesce bursty per-unit partial callbacks (e.g. an 8-unit batch or
+    // skipped target-language chunks) into a single microtask flush so React
+    // and CodeMirror update at most once per batch landing.
+    let pendingPartial: TranslationPartial | null = null;
+    let partialScheduled = false;
+    const flushPartial = () => {
+      partialScheduled = false;
+      const partial = pendingPartial;
+      pendingPartial = null;
+      if (partial === null) return;
       if (!isCurrent(generation)) return;
       if (translationControllers.current.get(id) !== controller) return;
       const latest = stateRef.current.tabs.find(
@@ -503,19 +531,28 @@ export function useAppController(
         return next;
       });
     };
+    const applyPartial = (partial: TranslationPartial) => {
+      pendingPartial = partial;
+      if (partialScheduled) return;
+      partialScheduled = true;
+      queueMicrotask(flushPartial);
+    };
     void translateDocument(port, settings, text, {
       signal: controller.signal,
       concurrency: settings.concurrency,
       onPartial: applyPartial,
-      // Viewport priority: the getter is read fresh for every batch the
-      // scheduler picks, so in-flight viewport changes re-prioritize
-      // immediately. A null provider (or one returning null) means document
-      // order.
+      // Viewport priority: only consult the active tab's editor view so a
+      // background tab falls back to document order instead of using another
+      // tab's scroll offsets.
       priority: {
-        visibleRange: () => translationViewportProviderRef.current?.() ?? null,
+        visibleRange: () =>
+          stateRef.current.activeId === id
+            ? translationViewportProviderRef.current?.() ?? null
+            : null,
       },
     })
       .then((translatedText) => {
+        pendingPartial = null;
         if (!isCurrent(generation)) return;
         // The controller map entry is the run token; a cancelled or dropped
         // run fails the identity check and never writes its result. The text
@@ -530,13 +567,6 @@ export function useAppController(
           return;
         }
         translationControllers.current.delete(id);
-        // The provider stays registered: it is owned by the shell, which
-        // re-points it at the active tab's editor and clears it when that
-        // view goes away. A run that ended (or was dropped or errored) is no
-        // reason to unregister it — the getter is only read while a run
-        // schedules, and clearing it here would starve every later run of the
-        // same tab of viewport priority, since the shell's registration
-        // effect does not re-run without a tab change.
         setTranslations((current) => {
           const next = new Map(current);
           next.set(id, {
@@ -547,6 +577,7 @@ export function useAppController(
         });
       })
       .catch((caught) => {
+        pendingPartial = null;
         if (!isCurrent(generation)) return;
         if (translationControllers.current.get(id) !== controller) return;
         translationControllers.current.delete(id);
@@ -567,29 +598,34 @@ export function useAppController(
 
   /** Runs whose credential-store lookup has not answered yet. */
   const translationStartsRef = useRef(new Set<string>());
+  const translationStartTokensRef = useRef(new Map<string, number>());
+  const translationStartSeqRef = useRef(0);
 
   const startTranslation = useCallback((id: string) => {
     const settings = translationSettings;
-    // The check is re-run per click instead of being cached: a key saved in
-    // the settings dialog must be usable immediately, and only the backend
-    // knows which slots hold one (the frontend can never read the secret).
-    // Rejected lookups count as "no key" — the run must not start on a
-    // credential the backend could not confirm.
     if (translationStartsRef.current.has(id)) return;
     translationStartsRef.current.add(id);
+    const token = ++translationStartSeqRef.current;
+    translationStartTokensRef.current.set(id, token);
     const generation = lifecycleGenerationRef.current;
-    void port
-      .hasTranslationKey(translationKeySlot(settings))
-      .catch(() => false)
-      .then((keyPresent) => {
-        translationStartsRef.current.delete(id);
-        if (!isCurrent(generation)) return;
-        if (!keyPresent) {
-          setError("请先在设置中配置翻译 API");
-          return;
-        }
-        beginTranslation(id, settings, generation);
-      });
+    const expectedSignature = translationSettingsSignature(settings);
+    const keyCheck = isLoopbackEndpoint(settings.endpoint)
+      ? Promise.resolve(true)
+      : port
+          .hasTranslationKey(translationKeySlot(settings))
+          .catch(() => false);
+    void keyCheck.then((keyPresent) => {
+      translationStartsRef.current.delete(id);
+      if (translationStartTokensRef.current.get(id) !== token) return;
+      translationStartTokensRef.current.delete(id);
+      if (!isCurrent(generation)) return;
+      if (lastTranslationSignatureRef.current !== expectedSignature) return;
+      if (!keyPresent) {
+        setError("请先在设置中配置翻译 API");
+        return;
+      }
+      beginTranslation(id, settings, generation);
+    });
   }, [beginTranslation, isCurrent, port, translationSettings]);
 
   const toggleTranslation = useCallback((id: string) => {
@@ -677,7 +713,7 @@ export function useAppController(
     for (const id of [...seen.keys()]) {
       if (!state.tabs.some((tab) => tab.id === id)) seen.delete(id);
     }
-  });
+  }, [state.tabs, dropTranslation]);
 
   // A per-tab translation is bound to the settings signature it ran under
   // (endpoint, model, target language, concurrency — the API key never
@@ -1617,6 +1653,7 @@ export function useAppController(
     translationOf,
     setTranslationViewportProvider,
     toggleTranslation,
+    dismissTranslationError: dropTranslation,
     viewModes,
     viewModeOf,
     setViewMode,

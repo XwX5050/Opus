@@ -595,6 +595,16 @@ export default function SettingsDialog({
     };
   }, [port, currentKeySlot]);
 
+  // Clear stale fetched model list and hints when the endpoint changes.
+  const prevEndpointRef = useRef(translationSettings.endpoint);
+  useEffect(() => {
+    if (prevEndpointRef.current === translationSettings.endpoint) return;
+    prevEndpointRef.current = translationSettings.endpoint;
+    setTranslationModels(null);
+    setModelsHint(null);
+    setConnectionHint(null);
+  }, [translationSettings.endpoint]);
+
   // Protection level of the credential store, for the weak-protection note.
   useEffect(() => {
     if (!port) return;

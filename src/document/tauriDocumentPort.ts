@@ -3,7 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
-import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, WorkspaceRoot, WorkspaceSearchResult } from "./DocumentPort";
+import type { ClipboardImageInput, DirectoryEntry, DocumentPort, DocumentPortErrorCode, SavedFile, TranslateSegmentsOptions, WorkspaceRoot, WorkspaceSearchResult } from "./DocumentPort";
 import { DocumentPortError } from "./DocumentPort";
 import {
   normalizeEditorPreferences,
@@ -473,20 +473,66 @@ export function createTauriDocumentPort(onError: DocumentPortErrorHandler = () =
     async unwatch(consumerId: string): Promise<void> {
       try { await invoke("unwatch", { consumerId }); } catch (error) { throw failure(error); }
     },
-    async translateSegments(settings: TranslationSettings, segments: string[]): Promise<string[]> {
+    async translateSegments(
+      settings: TranslationSettings,
+      segments: string[],
+      options?: TranslateSegmentsOptions,
+    ): Promise<string[]> {
+      const signal = options?.signal;
+      if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const payload: Record<string, unknown> = {
+        settings: {
+          endpoint: settings.endpoint,
+          // The backend holds the secret; the frontend only names the slot
+          // its settings currently address.
+          keySlot: translationKeySlot(settings),
+          model: settings.model,
+          targetLanguage: settings.targetLanguage,
+        },
+        segments,
+      };
+      if (options?.runId !== undefined) {
+        payload.runId = options.runId;
+      }
+      const request = invoke<string[]>("translate_segments", payload);
+      if (!signal) {
+        try {
+          return await request;
+        } catch (error) {
+          throw failure(error);
+        }
+      }
+      // Prevent an unhandled rejection warning if abort wins the race first.
+      void request.catch(() => {});
+      let onAbort: (() => void) | null = null;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => {
+          if (options?.runId !== undefined) {
+            void invoke("cancel_translation", { runId: options.runId }).catch(() => {});
+          }
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
       try {
-        return await invoke<string[]>("translate_segments", {
-          settings: {
-            endpoint: settings.endpoint,
-            // The backend holds the secret; the frontend only names the slot
-            // its settings currently address.
-            keySlot: translationKeySlot(settings),
-            model: settings.model,
-            targetLanguage: settings.targetLanguage,
-          },
-          segments,
-        });
-      } catch (error) { throw failure(error); }
+        return await Promise.race([
+          request.catch((error) => {
+            throw failure(error);
+          }),
+          aborted,
+        ]);
+      } finally {
+        if (onAbort !== null) signal.removeEventListener("abort", onAbort);
+      }
+    },
+    async cancelTranslation(runId: string): Promise<void> {
+      try {
+        await invoke("cancel_translation", { runId });
+      } catch {
+        // Cancellation is best-effort.
+      }
     },
     async listTranslationModels(endpoint: string, keySlot: string): Promise<string[]> {
       try {

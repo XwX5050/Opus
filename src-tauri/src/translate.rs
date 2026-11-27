@@ -31,14 +31,16 @@
 use crate::api_keys;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use tauri::Manager;
+use tokio::sync::{watch, Semaphore};
+use tokio::task::JoinSet;
 
 /// Provider settings persisted from the settings dialog. Field names are
 /// snake_case on the Rust side; serde maps them from the frontend's camelCase
@@ -73,6 +75,8 @@ pub enum TranslateError {
     },
     /// The provider's payload could not be decoded into translations.
     BadResponse { detail: String },
+    /// The translation run was cancelled by the caller.
+    Cancelled,
 }
 
 impl fmt::Display for TranslateError {
@@ -98,6 +102,7 @@ impl fmt::Display for TranslateError {
                     "unexpected translation provider response: {detail}"
                 )
             }
+            Self::Cancelled => write!(formatter, "cancelled: translation aborted"),
         }
     }
 }
@@ -111,14 +116,151 @@ impl std::error::Error for TranslateError {
     }
 }
 
+const MAX_RECENTLY_CANCELLED_RUNS: usize = 256;
+
+#[derive(Default)]
+struct CancellationRegistry {
+    active: HashMap<String, (usize, watch::Sender<bool>)>,
+    recently_cancelled: VecDeque<String>,
+}
+
+static CANCELLATION_REGISTRY: OnceLock<Mutex<CancellationRegistry>> = OnceLock::new();
+
+fn cancellation_registry() -> &'static Mutex<CancellationRegistry> {
+    CANCELLATION_REGISTRY.get_or_init(|| Mutex::new(CancellationRegistry::default()))
+}
+
+/// Marks a translation `run_id` as cancelled, waking every active request for
+/// that run immediately and remembering the id briefly so late batches fail
+/// fast without hitting the network.
+pub fn cancel_run(run_id: &str) {
+    let mut registry = cancellation_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, sender)) = registry.active.get(run_id) {
+        let _ = sender.send(true);
+    }
+    if !registry.recently_cancelled.iter().any(|id| id == run_id) {
+        if registry.recently_cancelled.len() >= MAX_RECENTLY_CANCELLED_RUNS {
+            registry.recently_cancelled.pop_front();
+        }
+        registry.recently_cancelled.push_back(run_id.to_string());
+    }
+}
+
+#[derive(Clone, Default)]
+struct CancellationToken {
+    receiver: Option<watch::Receiver<bool>>,
+}
+
+impl CancellationToken {
+    fn is_cancelled(&self) -> bool {
+        self.receiver.as_ref().is_some_and(|rx| *rx.borrow())
+    }
+
+    async fn cancelled(&mut self) {
+        match &mut self.receiver {
+            Some(rx) => {
+                while !*rx.borrow_and_update() {
+                    if rx.changed().await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                }
+            }
+            None => std::future::pending::<()>().await,
+        }
+    }
+}
+
+struct RunGuard {
+    run_id: Option<String>,
+    token: CancellationToken,
+}
+
+impl RunGuard {
+    fn acquire(run_id: Option<&str>) -> Result<Self, TranslateError> {
+        let Some(run_id) = run_id else {
+            return Ok(Self {
+                run_id: None,
+                token: CancellationToken::default(),
+            });
+        };
+        let mut registry = cancellation_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if registry.recently_cancelled.iter().any(|id| id == run_id) {
+            return Err(TranslateError::Cancelled);
+        }
+        let receiver = {
+            let entry = registry
+                .active
+                .entry(run_id.to_string())
+                .or_insert_with(|| (0, watch::channel(false).0));
+            entry.0 += 1;
+            entry.1.subscribe()
+        };
+        Ok(Self {
+            run_id: Some(run_id.to_string()),
+            token: CancellationToken {
+                receiver: Some(receiver),
+            },
+        })
+    }
+
+    fn token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let Some(run_id) = &self.run_id else {
+            return;
+        };
+        let mut registry = cancellation_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((count, _)) = registry.active.get_mut(run_id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                registry.active.remove(run_id);
+            }
+        }
+    }
+}
+
+/// Normalizes an OpenAI-compatible base URL by trimming whitespace, trailing
+/// slashes, and any redundant `/chat/completions` suffix users sometimes paste.
+pub fn normalize_endpoint_base(endpoint: &str) -> &str {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix("/chat/completions")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/')
+}
+
+/// Whether `endpoint` points at a loopback host (Ollama, LM Studio, local
+/// test servers) where API keys are optional.
+pub fn is_loopback_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint.trim()) else {
+        return false;
+    };
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return false;
+    }
+    let host = url.host_str().unwrap_or_default();
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+
 /// Translation requests carry API keys and document content, so plaintext
 /// endpoints are refused except for loopback hosts (tests and local proxies
 /// such as Ollama).
 pub fn validate_endpoint(endpoint: &str) -> Result<(), TranslateError> {
-    let url = reqwest::Url::parse(endpoint).map_err(|error| TranslateError::InvalidEndpoint {
-        endpoint: endpoint.to_string(),
-        reason: format!("invalid URL: {error}"),
-    })?;
+    let url =
+        reqwest::Url::parse(endpoint.trim()).map_err(|error| TranslateError::InvalidEndpoint {
+            endpoint: endpoint.to_string(),
+            reason: format!("invalid URL: {error}"),
+        })?;
     match url.scheme() {
         "https" => Ok(()),
         // host_str() keeps IPv6 in bracketed form on the url crate in the
@@ -145,6 +287,7 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), TranslateError> {
 
 /// Per-segment translation cache in a dedicated directory; each entry is one
 /// JSON file named after the sha256 of the cache key.
+#[derive(Clone)]
 pub struct TranslationCache {
     dir: PathBuf,
 }
@@ -198,19 +341,25 @@ impl TranslationCache {
         self.dir.join(format!("{key}.json"))
     }
 
-    /// Reads a cached translation; missing or corrupt entries are misses.
+    /// Reads a cached translation; missing, corrupt, or blank entries are
+    /// misses so a poisoned empty write never sticks.
     pub fn get(&self, key: &str) -> Option<String> {
         let bytes = fs::read(self.entry_path(key)).ok()?;
         let entry: CachedTranslation = serde_json::from_slice(&bytes).ok()?;
+        if entry.translated.trim().is_empty() {
+            return None;
+        }
         Some(entry.translated)
     }
 
-    /// Stores a translation atomically: write a sibling temp file, fsync it,
-    /// rename over the destination, then fsync the directory so the rename
-    /// itself is durable (same discipline as recovery drafts). The directory
-    /// fsync is Unix-only: Windows cannot open directories for fsync
-    /// (ERROR_ACCESS_DENIED) and NTFS already journals directory metadata.
+    /// Stores a translation atomically via a sibling temp file + rename. Blank
+    /// translations are never persisted so they cannot poison the cache.
+    /// Individual cache files are disposable and regenerable, so no `fsync` is
+    /// paid per segment.
     pub fn store(&self, key: &str, translated: &str) -> Result<(), io::Error> {
+        if translated.trim().is_empty() {
+            return Ok(());
+        }
         fs::create_dir_all(&self.dir)?;
         let payload = serde_json::to_vec(&CachedTranslation {
             translated: translated.to_string(),
@@ -218,12 +367,9 @@ impl TranslationCache {
         let destination = self.entry_path(key);
         let mut temporary = tempfile::NamedTempFile::new_in(&self.dir)?;
         temporary.write_all(&payload)?;
-        temporary.as_file().sync_all()?;
         temporary
             .persist(&destination)
             .map_err(|error| error.error)?;
-        #[cfg(not(windows))]
-        fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
 
@@ -301,25 +447,45 @@ impl TranslationCache {
 }
 
 /// The system prompt asks for one plain-text translation of the user's
-/// message; Markdown structure and inline syntax survive the round trip.
+/// message; Markdown structure, inline syntax, and ⟪n⟫ inline placeholders
+/// survive the round trip.
 fn system_prompt(target_language: &str) -> String {
     format!(
         "Translate the following text into {target_language}. Preserve all \
          Markdown syntax, inline code, math ($...$ and $$...$$), URLs, and \
          HTML tags exactly as they appear, and do not translate code or \
-         formula content. Output only the translation."
+         formula content. Keep any placeholder tokens like ⟪1⟫, ⟪2⟫ strictly \
+         verbatim. Output only the translation."
     )
 }
 
-/// Batching variant of the prompt: the base contract plus the one sentence
-/// the batched reply is validated against.
+/// Batching variant of the prompt: the base contract plus the delimiter line
+/// rule the batched reply is validated against. Batch delimiters (`<<<SEG n>>>`)
+/// stay disjoint from inline placeholders (`⟪n⟫`).
 fn batch_system_prompt(target_language: &str) -> String {
     format!(
-        "{} Every segment is preceded by a delimiter line (⟪n⟫); keep every \
-         ⟪n⟫ line verbatim on its own line and translate only the text \
-         between markers.",
+        "{} Every segment is preceded by a delimiter line <<<SEG n>>>; keep \
+         every <<<SEG n>>> line verbatim on its own line in exact order and \
+         translate only the text between markers.",
         system_prompt(target_language)
     )
+}
+
+fn is_openai_reasoning_model(endpoint: &str, model: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint.trim()) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if !host.eq_ignore_ascii_case("api.openai.com") {
+        return false;
+    }
+    let model = model.to_ascii_lowercase();
+    model.starts_with("gpt-5")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
 }
 
 /// Provider-specific request fields that keep translation fast and cheap by
@@ -331,43 +497,40 @@ fn batch_system_prompt(target_language: &str) -> String {
 /// documented convention and is only sent to the hosts that document it —
 /// other providers reject unknown fields with HTTP 400.
 fn reasoning_override(endpoint: &str, model: &str) -> Vec<(&'static str, serde_json::Value)> {
-    let Ok(url) = reqwest::Url::parse(endpoint) else {
+    let Ok(url) = reqwest::Url::parse(endpoint.trim()) else {
         return vec![];
     };
     let Some(host) = url.host_str() else {
         return vec![];
     };
     let host = host.to_ascii_lowercase();
-    // 智谱 GLM (open.bigmodel.cn, *.bigmodel.cn, *.z.ai) and DeepSeek share
-    // the same `thinking` toggle object.
+    // 智谱 GLM (open.bigmodel.cn, *.bigmodel.cn, *.z.ai), DeepSeek, and
+    // Volcengine Ark (*.volces.com) share the `thinking` toggle object.
     if host == "open.bigmodel.cn"
         || host.ends_with(".bigmodel.cn")
         || host.ends_with(".z.ai")
         || host == "api.deepseek.com"
         || host.ends_with(".deepseek.com")
+        || host.ends_with(".volces.com")
     {
         return vec![("thinking", serde_json::json!({ "type": "disabled" }))];
+    }
+    // Alibaba DashScope uses `enable_thinking: false`.
+    if host == "dashscope.aliyuncs.com" || host == "dashscope-intl.aliyuncs.com" {
+        return vec![("enable_thinking", serde_json::json!(false))];
     }
     // OpenAI reasoning models (gpt-5 family, o-series) have no off switch;
     // "low" is the minimal effort they all accept. Non-reasoning models
     // (e.g. gpt-4o-mini) reject the field, so gate on the model name.
-    if host == "api.openai.com" {
-        let model = model.to_ascii_lowercase();
-        let reasoning_model = model.starts_with("gpt-5")
-            || model.starts_with("o1")
-            || model.starts_with("o3")
-            || model.starts_with("o4");
-        if reasoning_model {
-            return vec![("reasoning_effort", serde_json::json!("low"))];
-        }
+    if is_openai_reasoning_model(endpoint, model) {
+        return vec![("reasoning_effort", serde_json::json!("low"))];
     }
     vec![]
 }
 
-/// The chat completions body for a single segment: model, temperature 0, and
-/// the segment to translate as the user message. Providers with default-on
-/// reasoning additionally get their off/low override (see
-/// `reasoning_override`).
+/// The chat completions body for a single segment: model, streaming enabled,
+/// temperature 0 (omitted for OpenAI reasoning models which reject it), and
+/// the segment to translate as the user message.
 fn build_chat_body(
     endpoint: &str,
     model: &str,
@@ -376,7 +539,7 @@ fn build_chat_body(
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "model": model,
-        "temperature": 0,
+        "stream": true,
         "messages": [
             {
                 "role": "system",
@@ -388,6 +551,9 @@ fn build_chat_body(
             },
         ],
     });
+    if !is_openai_reasoning_model(endpoint, model) {
+        body["temperature"] = serde_json::json!(0);
+    }
     for (key, value) in reasoning_override(endpoint, model) {
         body[key] = value;
     }
@@ -395,9 +561,9 @@ fn build_chat_body(
 }
 
 /// The chat completions body for a batch: the segments joined into one user
-/// message, each preceded by its own ⟪n⟫ delimiter line (n is the 1-based
-/// position within the joined message). Reasoning overrides apply exactly
-/// like in `build_chat_body`.
+/// message, each preceded by its own `<<<SEG n>>>` delimiter line (n is the
+/// 1-based position within the joined message). Reasoning overrides apply
+/// exactly like in `build_chat_body`.
 fn build_batch_chat_body(
     endpoint: &str,
     model: &str,
@@ -409,11 +575,11 @@ fn build_batch_chat_body(
         if index > 0 {
             content.push_str("\n\n");
         }
-        content.push_str(&format!("⟪{}⟫\n{segment}", index + 1));
+        content.push_str(&format!("<<<SEG {}>>>\n{segment}", index + 1));
     }
     let mut body = serde_json::json!({
         "model": model,
-        "temperature": 0,
+        "stream": true,
         "messages": [
             {
                 "role": "system",
@@ -425,6 +591,9 @@ fn build_batch_chat_body(
             },
         ],
     });
+    if !is_openai_reasoning_model(endpoint, model) {
+        body["temperature"] = serde_json::json!(0);
+    }
     for (key, value) in reasoning_override(endpoint, model) {
         body[key] = value;
     }
@@ -433,7 +602,7 @@ fn build_batch_chat_body(
 
 /// Longest 429 `Retry-After` (in seconds) that is honoured with a wait and
 /// one retry; any longer wait is reported like any other provider error.
-const MAX_RETRY_AFTER_SECONDS: u64 = 10;
+const MAX_RETRY_AFTER_SECONDS: u64 = 15;
 
 /// The wait a 429 reply asks for before a retry, when `Retry-After` is an
 /// integer of at most `MAX_RETRY_AFTER_SECONDS` seconds. A date-formatted
@@ -447,87 +616,278 @@ fn retry_after_seconds(response: &reqwest::Response) -> Option<u64> {
         .get(reqwest::header::RETRY_AFTER)?
         .to_str()
         .ok()?;
-    let seconds: u64 = value.parse().ok()?;
+    let seconds: u64 = value.trim().parse().ok()?;
     (seconds <= MAX_RETRY_AFTER_SECONDS).then_some(seconds)
 }
 
-/// POSTs one chat completions body with the API key. The client is shared
-/// process-wide, so the command's budget lives on the request instead of the
-/// client; a long translation may stream for a while, hence the generous
-/// timeout. The key is passed in rather than read from the settings: it comes
-/// from the credential store and never lands anywhere else.
+/// POSTs one chat completions body with the optional API key, racing against
+/// cancellation.
 async fn post_chat(
     client: &reqwest::Client,
     url: &str,
     api_key: &str,
     body: &serde_json::Value,
+    cancel: &mut CancellationToken,
 ) -> Result<reqwest::Response, TranslateError> {
-    client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(body)
-        .timeout(Duration::from_secs(120))
-        .send()
-        .await
-        .map_err(|source| TranslateError::Request { source })
+    if cancel.is_cancelled() {
+        return Err(TranslateError::Cancelled);
+    }
+    let mut request = client.post(url).json(body).timeout(Duration::from_secs(90));
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(TranslateError::Cancelled),
+        result = request.send() => result.map_err(|source| TranslateError::Request { source }),
+    }
 }
 
 /// Sends a chat completions request, retrying once after a 429 whose
-/// integer `Retry-After` is at most `MAX_RETRY_AFTER_SECONDS`. The async
-/// sleep yields the runtime thread; it happens at most once per request.
+/// integer `Retry-After` is at most `MAX_RETRY_AFTER_SECONDS`. Both the
+/// sleep and HTTP calls observe cancellation immediately.
 async fn send_chat_request(
     client: &reqwest::Client,
     api_key: &str,
     settings: &TranslationSettings,
     body: &serde_json::Value,
+    cancel: &mut CancellationToken,
 ) -> Result<reqwest::Response, TranslateError> {
     let url = format!(
         "{}/chat/completions",
-        settings.endpoint.trim_end_matches('/')
+        normalize_endpoint_base(&settings.endpoint)
     );
-    let response = post_chat(client, &url, api_key, body).await?;
+    let response = post_chat(client, &url, api_key, body, cancel).await?;
     if let Some(seconds) = retry_after_seconds(&response) {
-        tokio::time::sleep(Duration::from_secs(seconds)).await;
-        return post_chat(client, &url, api_key, body).await;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(TranslateError::Cancelled),
+            _ = tokio::time::sleep(Duration::from_secs(seconds)) => {}
+        }
+        return post_chat(client, &url, api_key, body, cancel).await;
     }
     Ok(response)
 }
 
-/// Turns a chat completions response into the assistant's message content;
-/// non-success statuses and malformed payloads are `TranslateError`s.
-async fn chat_completion_content(response: reqwest::Response) -> Result<String, TranslateError> {
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(TranslateError::ResponseStatus { status, body });
+/// Reads the full response body in chunks while observing cancellation and
+/// capping buffered bytes so an error/JSON payload cannot grow without bound.
+async fn read_body_bytes(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    cancel: &mut CancellationToken,
+) -> Result<Vec<u8>, TranslateError> {
+    let mut bytes = Vec::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(TranslateError::Cancelled),
+            chunk = response.chunk() => {
+                match chunk {
+                    Ok(Some(data)) => {
+                        if bytes.len().saturating_add(data.len()) > max_bytes {
+                            bytes.extend_from_slice(&data[..max_bytes.saturating_sub(bytes.len())]);
+                            break;
+                        }
+                        bytes.extend_from_slice(&data);
+                    }
+                    Ok(None) => break,
+                    Err(source) => return Err(TranslateError::Request { source }),
+                }
+            }
+        }
+    }
+    Ok(bytes)
+}
+
+/// Detects runaway model repetition loops during streaming: once output passes
+/// 1 KiB, checks whether the trailing 32-byte window appears >= 10 times in the
+/// last 512 bytes.
+fn has_repetition_loop(output: &str) -> bool {
+    let bytes = output.as_bytes();
+    if bytes.len() < 1024 {
+        return false;
+    }
+    const PATTERN_LEN: usize = 32;
+    const WINDOW_LEN: usize = 512;
+    let tail = &bytes[bytes.len() - PATTERN_LEN..];
+    let window = &bytes[bytes.len().saturating_sub(WINDOW_LEN)..];
+    window
+        .windows(PATTERN_LEN)
+        .filter(|slice| *slice == tail)
+        .count()
+        >= 10
+}
+
+fn process_sse_line(
+    raw_line: &str,
+    output: &mut String,
+    finish_reason: &mut Option<String>,
+    max_output_bytes: usize,
+) -> Result<bool, TranslateError> {
+    let line = raw_line.trim_end_matches('\r').trim();
+    if line.is_empty() || line.starts_with(':') {
+        return Ok(false);
+    }
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(false);
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Ok(true);
     }
     let payload: serde_json::Value =
-        response
-            .json()
+        serde_json::from_str(data).map_err(|source| TranslateError::BadResponse {
+            detail: format!("SSE chunk JSON is invalid: {source}"),
+        })?;
+    if let Some(err) = payload.get("error") {
+        let message = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("provider stream error");
+        return Err(TranslateError::BadResponse {
+            detail: message.to_string(),
+        });
+    }
+    if let Some(reason) = payload
+        .pointer("/choices/0/finish_reason")
+        .and_then(|value| value.as_str())
+    {
+        *finish_reason = Some(reason.to_string());
+    }
+    if let Some(delta) = payload
+        .pointer("/choices/0/delta/content")
+        .and_then(|value| value.as_str())
+    {
+        output.push_str(delta);
+        if output.len() > max_output_bytes {
+            return Err(TranslateError::BadResponse {
+                detail: "provider response exceeded maximum output limit".into(),
+            });
+        }
+        if has_repetition_loop(output) {
+            return Err(TranslateError::BadResponse {
+                detail: "provider entered a repetition loop".into(),
+            });
+        }
+    }
+    Ok(false)
+}
+
+async fn read_sse_content(
+    mut response: reqwest::Response,
+    input_chars: usize,
+    cancel: &mut CancellationToken,
+) -> Result<(String, Option<String>), TranslateError> {
+    let max_output_bytes = input_chars.saturating_mul(12).max(24_576);
+    let mut output = String::new();
+    let mut finish_reason: Option<String> = None;
+    let mut pending_bytes: Vec<u8> = Vec::new();
+    let mut done = false;
+
+    while !done {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(TranslateError::Cancelled),
+            chunk = response.chunk() => {
+                match chunk {
+                    Ok(Some(data)) => {
+                        pending_bytes.extend_from_slice(&data);
+                        while let Some(newline_pos) = pending_bytes.iter().position(|&b| b == b'\n') {
+                            let line_bytes: Vec<u8> = pending_bytes.drain(..=newline_pos).collect();
+                            let line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]);
+                            if process_sse_line(&line, &mut output, &mut finish_reason, max_output_bytes)? {
+                                done = true;
+                                break;
+                            }
+                        }
+                        if pending_bytes.len() > 2 * 1024 * 1024 {
+                            return Err(TranslateError::BadResponse {
+                                detail: "SSE event line exceeded size limit".into(),
+                            });
+                        }
+                    }
+                    Ok(None) => {
+                        if !pending_bytes.is_empty() {
+                            let line = String::from_utf8_lossy(&pending_bytes);
+                            let _ = process_sse_line(&line, &mut output, &mut finish_reason, max_output_bytes)?;
+                            pending_bytes.clear();
+                        }
+                        break;
+                    }
+                    Err(source) => return Err(TranslateError::Request { source }),
+                }
+            }
+        }
+    }
+
+    Ok((output, finish_reason))
+}
+
+/// Turns a chat completions response (SSE stream or buffered JSON) into the
+/// assistant's non-empty, untruncated message content.
+async fn chat_completion_content(
+    response: reqwest::Response,
+    input_chars: usize,
+    cancel: &mut CancellationToken,
+) -> Result<String, TranslateError> {
+    let status = response.status();
+    if !status.is_success() {
+        let bytes = read_body_bytes(response, 32 * 1024, cancel)
             .await
-            .map_err(|source| TranslateError::BadResponse {
+            .unwrap_or_default();
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        return Err(TranslateError::ResponseStatus { status, body });
+    }
+
+    let is_sse = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|ct| ct.to_ascii_lowercase().contains("text/event-stream"));
+
+    let (content, finish_reason) = if is_sse {
+        read_sse_content(response, input_chars, cancel).await?
+    } else {
+        let bytes = read_body_bytes(response, 2 * 1024 * 1024, cancel).await?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|source| TranslateError::BadResponse {
                 detail: format!("response JSON is invalid: {source}"),
             })?;
-    payload
-        .pointer("/choices/0/message/content")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .ok_or_else(|| TranslateError::BadResponse {
-            detail: "missing choices[0].message.content".into(),
-        })
+        let reason = payload
+            .pointer("/choices/0/finish_reason")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        let text = payload
+            .pointer("/choices/0/message/content")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| TranslateError::BadResponse {
+                detail: "missing choices[0].message.content".into(),
+            })?;
+        (text, reason)
+    };
+
+    if finish_reason.as_deref() == Some("length") {
+        return Err(TranslateError::BadResponse {
+            detail: "response truncated by model token limit".into(),
+        });
+    }
+    if content.trim().is_empty() {
+        return Err(TranslateError::BadResponse {
+            detail: "provider returned empty translation".into(),
+        });
+    }
+    Ok(content)
 }
 
 /// Translates one segment in a single chat completions request and returns
 /// the model's plain-text answer with stray surrounding whitespace trimmed.
-/// The response is not parsed further: whatever the model writes for this one
-/// segment is the translation, so a reply that splits the input into several
-/// sentences or paragraphs still counts as a single result. This is also the
-/// fallback path when a batched reply fails marker validation.
 async fn translate_segment(
     client: &reqwest::Client,
     api_key: &str,
     settings: &TranslationSettings,
     segment: &str,
+    cancel: &mut CancellationToken,
 ) -> Result<String, TranslateError> {
     let body = build_chat_body(
         &settings.endpoint,
@@ -535,32 +895,65 @@ async fn translate_segment(
         &settings.target_language,
         segment,
     );
-    let response = send_chat_request(client, api_key, settings, &body).await?;
-    Ok(chat_completion_content(response).await?.trim().to_string())
+    let response = send_chat_request(client, api_key, settings, &body, cancel).await?;
+    Ok(
+        chat_completion_content(response, segment.chars().count(), cancel)
+            .await?
+            .trim()
+            .to_string(),
+    )
 }
 
-/// Returns n when a line is exactly a ⟪n⟫ marker (surrounding whitespace
-/// ignored); any other line is not a marker.
-fn marker_number(line: &str) -> Option<usize> {
-    let line = line.trim();
-    let inner = line.strip_prefix("⟪")?.strip_suffix("⟫")?;
-    inner.parse().ok()
+/// Recognizes a `<<<SEG n>>>` delimiter line (tolerating optional heading `#`s,
+/// bold/code wrappers, and inline translation text following the delimiter on
+/// the same line).
+fn parse_marker_line(line: &str) -> Option<(usize, &str)> {
+    let mut s = line.trim();
+    if s.starts_with('#') {
+        s = s.trim_start_matches('#').trim_start();
+    }
+    let wrapper = if s.starts_with("**") {
+        "**"
+    } else if s.starts_with("__") {
+        "__"
+    } else if s.starts_with('`') {
+        "`"
+    } else {
+        ""
+    };
+    if !wrapper.is_empty() {
+        s = &s[wrapper.len()..];
+    }
+    let after_open = s.strip_prefix("<<<SEG ")?;
+    let close_pos = after_open.find(">>>")?;
+    let num_str = after_open[..close_pos].trim();
+    if num_str.is_empty() || !num_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let number: usize = num_str.parse().ok()?;
+    let mut rest = &after_open[close_pos + 3..];
+    if !wrapper.is_empty() {
+        if let Some(stripped) = rest.strip_prefix(wrapper) {
+            rest = stripped;
+        }
+    }
+    Some((number, rest.trim_start()))
 }
 
-/// Splits a batched reply on its ⟪n⟫ marker lines. Requires the exact
-/// sequence ⟪1⟫..⟪N⟫ with nothing before ⟪1⟫ and a non-empty, trimmed body
-/// between consecutive markers; any other shape (missing, duplicated, or
-/// out-of-order markers, a preamble, an empty body) is rejected.
-fn parse_batch_reply(reply: &str, expected: usize) -> Option<Vec<String>> {
+fn parse_batch_reply_inner(reply: &str, expected: usize) -> Option<Vec<String>> {
     let mut bodies: Vec<String> = vec![String::new(); expected];
     let mut preamble = String::new();
     let mut marker_seen = 0usize;
     for raw_line in reply.lines() {
-        if let Some(number) = marker_number(raw_line) {
+        if let Some((number, inline_rest)) = parse_marker_line(raw_line) {
             if number != marker_seen + 1 || number > expected {
                 return None;
             }
             marker_seen = number;
+            if !inline_rest.is_empty() {
+                bodies[marker_seen - 1].push_str(inline_rest);
+                bodies[marker_seen - 1].push('\n');
+            }
         } else if marker_seen == 0 {
             preamble.push_str(raw_line);
             preamble.push('\n');
@@ -583,33 +976,152 @@ fn parse_batch_reply(reply: &str, expected: usize) -> Option<Vec<String>> {
     Some(results)
 }
 
-/// Translates several uncached segments in one chat completions request whose
-/// user message joins them with ⟪n⟫ delimiter lines, then splits the reply
-/// back. When the reply does not reproduce the exact marker sequence with
-/// non-empty bodies, falls back to one plain request per segment — today's
-/// protocol.
+fn strip_outer_code_fence(reply: &str) -> Option<&str> {
+    let trimmed = reply.trim();
+    if !trimmed.starts_with("```") {
+        return None;
+    }
+    let first_newline = trimmed.find('\n')?;
+    let after_open = &trimmed[first_newline + 1..];
+    let last_newline = after_open.rfind('\n')?;
+    if after_open[last_newline + 1..].trim() != "```" {
+        return None;
+    }
+    Some(&after_open[..last_newline])
+}
+
+/// Splits a batched reply on its `<<<SEG n>>>` marker lines. Requires the exact
+/// sequence `<<<SEG 1>>>`..`<<<SEG N>>>` with nothing before the first marker
+/// and a non-empty, trimmed body per segment; strips a single wrapping code
+/// fence if the model wrapped its entire reply in one.
+fn parse_batch_reply(reply: &str, expected: usize) -> Option<Vec<String>> {
+    parse_batch_reply_inner(reply, expected).or_else(|| {
+        strip_outer_code_fence(reply).and_then(|inner| parse_batch_reply_inner(inner, expected))
+    })
+}
+
+const FALLBACK_CONCURRENCY: usize = 4;
+
+/// Translates segments individually with bounded concurrency (4), storing each
+/// completed result in `cache` right away so partial progress survives later
+/// errors or cancellation.
+async fn translate_segments_concurrent_fallback(
+    client: &reqwest::Client,
+    api_key: &str,
+    settings: &TranslationSettings,
+    segments: &[String],
+    cache: &TranslationCache,
+    cancel: &mut CancellationToken,
+) -> Result<Vec<String>, TranslateError> {
+    let semaphore = Arc::new(Semaphore::new(FALLBACK_CONCURRENCY));
+    let mut set = JoinSet::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let permit_sem = Arc::clone(&semaphore);
+        let client = client.clone();
+        let api_key = api_key.to_string();
+        let settings = settings.clone();
+        let segment = segment.clone();
+        let mut task_cancel = cancel.clone();
+        set.spawn(async move {
+            let _permit = tokio::select! {
+                biased;
+                _ = task_cancel.cancelled() => return (index, Err(TranslateError::Cancelled)),
+                permit = permit_sem.acquire_owned() => match permit {
+                    Ok(permit) => permit,
+                    Err(_) => return (index, Err(TranslateError::Cancelled)),
+                }
+            };
+            let res =
+                translate_segment(&client, &api_key, &settings, &segment, &mut task_cancel).await;
+            (index, res)
+        });
+    }
+
+    let mut results: Vec<Option<String>> = vec![None; segments.len()];
+    loop {
+        let joined = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                set.abort_all();
+                return Err(TranslateError::Cancelled);
+            }
+            next = set.join_next() => next,
+        };
+        let Some(join_result) = joined else {
+            break;
+        };
+        match join_result {
+            Ok((index, Ok(value))) => {
+                store_translation(cache, settings, &segments[index], &value);
+                results[index] = Some(value);
+            }
+            Ok((_, Err(err))) => {
+                set.abort_all();
+                return Err(err);
+            }
+            Err(join_err) => {
+                set.abort_all();
+                return Err(TranslateError::BadResponse {
+                    detail: format!("fallback translation task failed: {join_err}"),
+                });
+            }
+        }
+    }
+
+    Ok(results
+        .into_iter()
+        .map(|entry| entry.expect("every fallback segment completed"))
+        .collect())
+}
+
+/// Translates several unique uncached segments in one batched chat completions
+/// request (`<<<SEG n>>>` delimiters), falling back to concurrent individual
+/// requests if the batch reply fails marker validation, truncates, or enters a
+/// repetition loop.
 async fn translate_batch_segments(
     client: &reqwest::Client,
     api_key: &str,
     settings: &TranslationSettings,
     segments: &[String],
+    cache: &TranslationCache,
+    cancel: &mut CancellationToken,
 ) -> Result<Vec<String>, TranslateError> {
+    if segments.iter().any(|s| s.contains("<<<SEG ")) {
+        return translate_segments_concurrent_fallback(
+            client, api_key, settings, segments, cache, cancel,
+        )
+        .await;
+    }
+
     let body = build_batch_chat_body(
         &settings.endpoint,
         &settings.model,
         &settings.target_language,
         segments,
     );
-    let response = send_chat_request(client, api_key, settings, &body).await?;
-    let content = chat_completion_content(response).await?;
-    if let Some(translations) = parse_batch_reply(&content, segments.len()) {
-        return Ok(translations);
+    let input_chars: usize = segments.iter().map(|s| s.chars().count()).sum();
+    let response = send_chat_request(client, api_key, settings, &body, cancel).await?;
+    match chat_completion_content(response, input_chars, cancel).await {
+        Ok(content) => {
+            if let Some(translations) = parse_batch_reply(&content, segments.len()) {
+                for (segment, value) in segments.iter().zip(&translations) {
+                    store_translation(cache, settings, segment, value);
+                }
+                return Ok(translations);
+            }
+            translate_segments_concurrent_fallback(
+                client, api_key, settings, segments, cache, cancel,
+            )
+            .await
+        }
+        Err(TranslateError::BadResponse { .. }) => {
+            translate_segments_concurrent_fallback(
+                client, api_key, settings, segments, cache, cancel,
+            )
+            .await
+        }
+        Err(other) => Err(other),
     }
-    let mut translations = Vec::with_capacity(segments.len());
-    for segment in segments {
-        translations.push(translate_segment(client, api_key, settings, segment).await?);
-    }
-    Ok(translations)
 }
 
 /// Caches one translation; write failures are logged and never fail the
@@ -684,11 +1196,9 @@ impl TranslationPlan {
         Self::collect(self.results)
     }
 
-    /// Translates the pending segments and caches each result. The uncached
-    /// ones are sent as one batched chat completion (or as one plain request
-    /// when only a single segment is missing, or when the batched reply fails
-    /// marker validation); cache write failures are logged and never fail a
-    /// translation.
+    /// Translates the pending segments and caches each result. Identical
+    /// uncached segments are deduplicated so each unique text is translated at
+    /// most once per call.
     pub async fn translate_uncached(
         self,
         client: &reqwest::Client,
@@ -696,22 +1206,63 @@ impl TranslationPlan {
         settings: &TranslationSettings,
         cache: &TranslationCache,
     ) -> Result<Vec<String>, TranslateError> {
+        self.translate_uncached_with_cancel(
+            client,
+            api_key,
+            settings,
+            cache,
+            CancellationToken::default(),
+        )
+        .await
+    }
+
+    async fn translate_uncached_with_cancel(
+        self,
+        client: &reqwest::Client,
+        api_key: &str,
+        settings: &TranslationSettings,
+        cache: &TranslationCache,
+        mut cancel: CancellationToken,
+    ) -> Result<Vec<String>, TranslateError> {
         validate_endpoint(&settings.endpoint)?;
+        if cancel.is_cancelled() {
+            return Err(TranslateError::Cancelled);
+        }
         let Self {
             mut results,
             uncached,
         } = self;
-        if uncached.len() == 1 {
-            let (index, segment) = &uncached[0];
-            let value = translate_segment(client, api_key, settings, segment).await?;
-            results[*index] = Some(value.clone());
-            store_translation(cache, settings, segment, &value);
-        } else if uncached.len() > 1 {
-            let texts: Vec<String> = uncached.iter().map(|(_, text)| text.clone()).collect();
-            let values = translate_batch_segments(client, api_key, settings, &texts).await?;
-            for ((index, segment), value) in uncached.iter().zip(values) {
-                results[*index] = Some(value.clone());
-                store_translation(cache, settings, segment, &value);
+        if uncached.is_empty() {
+            return Ok(Self::collect(results));
+        }
+
+        let mut unique_texts: Vec<String> = Vec::new();
+        let mut slots_by_unique: Vec<Vec<usize>> = Vec::new();
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for (index, segment) in uncached {
+            if let Some(&unique_idx) = seen.get(&segment) {
+                slots_by_unique[unique_idx].push(index);
+            } else {
+                let unique_idx = unique_texts.len();
+                seen.insert(segment.clone(), unique_idx);
+                unique_texts.push(segment);
+                slots_by_unique.push(vec![index]);
+            }
+        }
+
+        let values = if unique_texts.len() == 1 {
+            let value =
+                translate_segment(client, api_key, settings, &unique_texts[0], &mut cancel).await?;
+            store_translation(cache, settings, &unique_texts[0], &value);
+            vec![value]
+        } else {
+            translate_batch_segments(client, api_key, settings, &unique_texts, cache, &mut cancel)
+                .await?
+        };
+
+        for (slots, value) in slots_by_unique.into_iter().zip(values) {
+            for index in slots {
+                results[index] = Some(value.clone());
             }
         }
         Ok(Self::collect(results))
@@ -756,13 +1307,16 @@ pub async fn list_translation_models_with_client(
     api_key: &str,
 ) -> Result<Vec<String>, TranslateError> {
     validate_endpoint(endpoint)?;
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let response = client
+    let url = format!("{}/models", normalize_endpoint_base(endpoint));
+    let mut request = client
         .get(&url)
-        .bearer_auth(api_key)
         // The client is shared process-wide; the settings dialog's model
         // check gets a shorter budget than translation.
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(30));
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
         .send()
         .await
         .map_err(|source| TranslateError::Request { source })?;
@@ -821,6 +1375,10 @@ pub fn shared_client() -> Result<&'static reqwest::Client, String> {
         return Ok(client);
     }
     let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .tcp_keepalive(Duration::from_secs(15))
+        .pool_idle_timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("failed to build HTTP client: {error}"))?;
@@ -829,53 +1387,84 @@ pub fn shared_client() -> Result<&'static reqwest::Client, String> {
     Ok(SHARED_CLIENT.get_or_init(|| client))
 }
 
+/// Cancels an active translation run by `run_id`, aborting all in-flight
+/// HTTP requests and retries associated with that run immediately.
+#[tauri::command]
+pub fn cancel_translation(run_id: String) {
+    cancel_run(&run_id);
+}
+
 /// Translates a batch of markdown segments via an OpenAI-compatible chat
 /// completions endpoint, caching results per segment under the app data
 /// directory. The API key belongs to `settings.key_slot` and is read from the
-/// credential store here, so it never reaches the frontend; a slot with no
-/// key fails with the structured `missing-key` error the UI matches on.
+/// in-memory cache / OS credential store here, so it never reaches the
+/// frontend; a slot with no key fails with `missing-key:` (unless the endpoint
+/// is a loopback server such as Ollama).
 ///
-/// The key is resolved *lazily*: the cache is consulted first, and a document
-/// the cache can serve in full is returned without touching the credential
-/// store, so a translation made before the key was removed still renders
-/// offline.
+/// The key is resolved *lazily*: the cache is consulted first on the blocking
+/// pool, and a document the cache can serve in full is returned without
+/// touching the credential store.
 #[tauri::command]
 pub async fn translate_segments(
     app: tauri::AppHandle,
     settings: TranslationSettings,
     segments: Vec<String>,
+    run_id: Option<String>,
 ) -> Result<Vec<String>, String> {
+    let guard = RunGuard::acquire(run_id.as_deref()).map_err(|error| error.to_string())?;
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let cache = TranslationCache::new(data_dir.join("translation-cache"));
-    let plan = TranslationPlan::from_cache(&cache, &settings, &segments);
+    let cache_for_plan = cache.clone();
+    let settings_for_plan = settings.clone();
+    let segments_for_plan = segments.clone();
+    let plan = tauri::async_runtime::spawn_blocking(move || {
+        TranslationPlan::from_cache(&cache_for_plan, &settings_for_plan, &segments_for_plan)
+    })
+    .await
+    .map_err(|error| format!("translation cache task failed: {error}"))?;
+    if guard.token().is_cancelled() {
+        return Err(TranslateError::Cancelled.to_string());
+    }
     if !plan.needs_request() {
         return Ok(plan.into_results());
     }
-    let store = api_keys::store_for_app(&app)?;
-    let slot = settings.key_slot.clone();
-    let api_key = api_keys::run_store(move || api_keys::key_for_slot(&store, &slot)).await?;
-    plan.translate_uncached(shared_client()?, &api_key, &settings, &cache)
-        .await
-        .map_err(|error| error.to_string())
+    let api_key = if is_loopback_endpoint(&settings.endpoint) {
+        api_keys::cached_optional_key_for_slot(&app, &settings.key_slot)
+            .await?
+            .unwrap_or_default()
+    } else {
+        api_keys::cached_key_for_slot(&app, &settings.key_slot).await?
+    };
+    plan.translate_uncached_with_cancel(
+        shared_client()?,
+        &api_key,
+        &settings,
+        &cache,
+        guard.token(),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// Lists the models available at an OpenAI-compatible endpoint (GET
-/// {endpoint}/models, Bearer api_key), sorted by id. The settings dialog's
-/// model picker and connection check both call this; the WebView CSP forbids
-/// direct frontend calls to the provider, so the request goes through Rust
-/// like translation. The key is read from the credential store by slot and
-/// never travels through the frontend.
+/// {endpoint}/models, Bearer api_key), sorted by id. Loopback endpoints allow
+/// keyless requests (e.g. Ollama).
 #[tauri::command]
 pub async fn list_translation_models(
     app: tauri::AppHandle,
     endpoint: String,
     key_slot: String,
 ) -> Result<Vec<String>, String> {
-    let store = api_keys::store_for_app(&app)?;
-    let api_key = api_keys::run_store(move || api_keys::key_for_slot(&store, &key_slot)).await?;
+    let api_key = if is_loopback_endpoint(&endpoint) {
+        api_keys::cached_optional_key_for_slot(&app, &key_slot)
+            .await?
+            .unwrap_or_default()
+    } else {
+        api_keys::cached_key_for_slot(&app, &key_slot).await?
+    };
     list_translation_models_with_client(shared_client()?, &endpoint, &api_key)
         .await
         .map_err(|error| error.to_string())
@@ -976,6 +1565,7 @@ mod tests {
         );
         assert_eq!(body["model"], "m");
         assert_eq!(body["temperature"], 0);
+        assert_eq!(body["stream"], true);
         assert!(body.get("thinking").is_none());
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
@@ -984,14 +1574,14 @@ mod tests {
         assert!(system.contains("only the text between markers"));
         assert_eq!(
             messages[1]["content"].as_str().unwrap(),
-            "⟪1⟫\none\n\n⟪2⟫\ntwo"
+            "<<<SEG 1>>>\none\n\n<<<SEG 2>>>\ntwo"
         );
     }
 
     #[test]
     fn reasoning_override_hosts_and_models() {
         let overrides = |endpoint: &str, model: &str| reasoning_override(endpoint, model);
-        // 智谱 and DeepSeek hosts get the thinking toggle, any model.
+        // 智谱, DeepSeek, and Volcengine hosts get the thinking toggle, any model.
         for endpoint in [
             "https://open.bigmodel.cn/api/paas/v4",
             "https://api.bigmodel.cn/v1",
@@ -999,10 +1589,19 @@ mod tests {
             "https://anything.z.ai/v1",
             "https://api.deepseek.com/v1",
             "https://api.deepseek.com",
+            "https://ark.cn-beijing.volces.com/api/v3",
         ] {
             let fields = overrides(endpoint, "glm-4.7-flash");
             assert_eq!(fields.len(), 1, "{endpoint} must override thinking");
             assert_eq!(fields[0].1, serde_json::json!({ "type": "disabled" }));
+        }
+        // Alibaba DashScope uses enable_thinking: false.
+        for endpoint in [
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        ] {
+            let fields = overrides(endpoint, "qwen-plus");
+            assert_eq!(fields, vec![("enable_thinking", serde_json::json!(false))]);
         }
         // OpenAI: only reasoning-model names get the effort floor.
         assert_eq!(
@@ -1046,16 +1645,20 @@ mod tests {
             "https://open.bigmodel.cn/api/paas/v4",
             "https://open.z.ai/api/paas/v4",
             "https://api.deepseek.com/v1",
+            "https://ark.cn-beijing.volces.com/api/v3",
         ] {
             let body = build_chat_body(endpoint, "m", "中文", "hello");
             assert_eq!(
                 body["thinking"]["type"], "disabled",
                 "{endpoint} must disable thinking"
             );
+            assert_eq!(body["temperature"], 0);
         }
         let body = build_chat_body("https://api.openai.com/v1", "gpt-5-mini", "中文", "hello");
         assert_eq!(body["reasoning_effort"], "low");
         assert!(body.get("thinking").is_none());
+        // OpenAI reasoning models reject temperature: 0.
+        assert!(body.get("temperature").is_none());
         // Non-reasoning models and other providers carry no override at all.
         for (endpoint, model) in [
             ("https://api.openai.com/v1", "gpt-4o-mini"),
@@ -1067,6 +1670,7 @@ mod tests {
                 body.get("thinking").is_none() && body.get("reasoning_effort").is_none(),
                 "{endpoint}/{model} must not carry a reasoning override"
             );
+            assert_eq!(body["temperature"], 0);
         }
     }
 
@@ -1089,6 +1693,7 @@ mod tests {
             &["one".into()],
         );
         assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("temperature").is_none());
         let body = build_batch_chat_body(
             "https://tokenhub.tencentmaas.com/v1",
             "m",
@@ -1104,18 +1709,27 @@ mod tests {
     #[test]
     fn batch_reply_parses_exact_marker_sequences_with_non_empty_bodies() {
         assert_eq!(
-            parse_batch_reply("⟪1⟫\n一\n\n⟪2⟫\n二、三\n", 2),
+            parse_batch_reply("<<<SEG 1>>>\n一\n\n<<<SEG 2>>>\n二、三\n", 2),
             Some(vec!["一".into(), "二、三".into()])
         );
         // multi-line bodies keep their inner line breaks
         assert_eq!(
-            parse_batch_reply("⟪1⟫\n第一行\n第二行\n⟪2⟫\n二", 2),
+            parse_batch_reply("<<<SEG 1>>>\n第一行\n第二行\n<<<SEG 2>>>\n二", 2),
             Some(vec!["第一行\n第二行".into(), "二".into()])
         );
-        // trailing blank lines and stray whitespace around markers are fine
+        // trailing blank lines, stray whitespace, inline text, markdown wrappers,
+        // and outer code fences are tolerated
         assert_eq!(
-            parse_batch_reply("  \n⟪1⟫  \n你好\n", 1),
+            parse_batch_reply("  \n<<<SEG 1>>>  \n你好\n", 1),
             Some(vec!["你好".into()])
+        );
+        assert_eq!(
+            parse_batch_reply("**<<<SEG 1>>>** 一\n### <<<SEG 2>>>\n二", 2),
+            Some(vec!["一".into(), "二".into()])
+        );
+        assert_eq!(
+            parse_batch_reply("```markdown\n<<<SEG 1>>>\n一\n<<<SEG 2>>>\n二\n```", 2),
+            Some(vec!["一".into(), "二".into()])
         );
     }
 
@@ -1124,15 +1738,57 @@ mod tests {
         // no markers at all
         assert_eq!(parse_batch_reply("一\n二", 2), None);
         // out-of-order markers
-        assert_eq!(parse_batch_reply("⟪2⟫\n二\n⟪1⟫\n一", 2), None);
+        assert_eq!(
+            parse_batch_reply("<<<SEG 2>>>\n二\n<<<SEG 1>>>\n一", 2),
+            None
+        );
         // a duplicated marker
-        assert_eq!(parse_batch_reply("⟪1⟫\n一\n⟪1⟫\n一", 2), None);
+        assert_eq!(
+            parse_batch_reply("<<<SEG 1>>>\n一\n<<<SEG 1>>>\n一", 2),
+            None
+        );
         // a marker beyond the batch's count
-        assert_eq!(parse_batch_reply("⟪1⟫\n一\n⟪2⟫\n二\n⟪3⟫\n三", 2), None);
+        assert_eq!(
+            parse_batch_reply("<<<SEG 1>>>\n一\n<<<SEG 2>>>\n二\n<<<SEG 3>>>\n三", 2),
+            None
+        );
         // text before the first marker
-        assert_eq!(parse_batch_reply("译文：\n⟪1⟫\n一\n⟪2⟫\n二", 2), None);
+        assert_eq!(
+            parse_batch_reply("译文：\n<<<SEG 1>>>\n一\n<<<SEG 2>>>\n二", 2),
+            None
+        );
         // an empty body
-        assert_eq!(parse_batch_reply("⟪1⟫\n\n⟪2⟫\n二", 2), None);
+        assert_eq!(parse_batch_reply("<<<SEG 1>>>\n\n<<<SEG 2>>>\n二", 2), None);
+    }
+
+    #[test]
+    fn endpoint_normalization_and_loopback_detection() {
+        assert_eq!(
+            normalize_endpoint_base("https://api.openai.com/v1/chat/completions/"),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            normalize_endpoint_base("  https://api.deepseek.com/  "),
+            "https://api.deepseek.com"
+        );
+        assert!(is_loopback_endpoint("http://localhost:11434/v1"));
+        assert!(is_loopback_endpoint("http://127.0.0.1:8080/v1"));
+        assert!(is_loopback_endpoint("http://[::1]:8080/v1"));
+        assert!(!is_loopback_endpoint("https://api.openai.com/v1"));
+        assert!(!is_loopback_endpoint("not-a-url"));
+    }
+
+    #[test]
+    fn cache_treats_blank_entries_as_misses_and_skips_storing_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TranslationCache::new(dir.path().join("translation-cache"));
+        let key = TranslationCache::cache_key("https://a.example/v1", "m", "中文", "hello");
+        cache.store(&key, "   \n ").unwrap();
+        assert_eq!(cache.get(&key), None);
+        // Even a pre-existing blank JSON entry on disk is ignored as a miss.
+        std::fs::create_dir_all(cache.dir()).unwrap();
+        std::fs::write(cache.entry_path(&key), br#"{"translated":"  \n "}"#).unwrap();
+        assert_eq!(cache.get(&key), None);
     }
 
     #[test]
@@ -1192,5 +1848,32 @@ mod tests {
         std::fs::create_dir_all(cache.dir().join("dir.json")).unwrap();
         assert_eq!(cache.evict_oldest_entries(0).unwrap(), 0);
         assert!(cache.dir().join("dir.json").is_dir());
+    }
+
+    #[test]
+    fn run_guard_wakes_active_tokens_on_cancel_and_rejects_cancelled_run_id() {
+        let run_id = "test-run-guard-cancel-1";
+        let guard = RunGuard::acquire(Some(run_id)).unwrap();
+        let mut token = guard.token();
+        assert!(!token.is_cancelled());
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let waiter = tokio::spawn(async move {
+                token.cancelled().await;
+            });
+            cancel_run(run_id);
+            tokio::time::timeout(Duration::from_secs(1), waiter)
+                .await
+                .expect("token must wake promptly on cancel_run")
+                .expect("waiter must finish cleanly");
+        });
+
+        drop(guard);
+        let late = RunGuard::acquire(Some(run_id));
+        assert!(matches!(late, Err(TranslateError::Cancelled)));
     }
 }

@@ -135,6 +135,19 @@ describe("protectInlineSpans", () => {
     expect(protectedText.text).toBe("`未闭合\n继续\n");
     expect(protectedText.spans).toEqual([]);
   });
+
+  it("leaves currency amounts and escaped dollars as literal text", () => {
+    for (const sample of [
+      "The price is from $10 to $20 today.\n",
+      "机器$5到$10元之间。\n",
+      "转义符号 \\$x\\$ 保持原样。\n",
+      "空格间隔 $ x $ 不是行内公式。\n",
+    ]) {
+      const protectedText = protectInlineSpans(sample);
+      expect(protectedText.text).toBe(sample);
+      expect(protectedText.spans).toEqual([]);
+    }
+  });
 });
 
 describe("restoreInlineSpans", () => {

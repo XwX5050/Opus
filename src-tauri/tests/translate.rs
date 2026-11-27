@@ -354,7 +354,7 @@ async fn uncached_segments_are_batched_into_one_request_and_then_cached() {
     let server = MockServer::spawn();
     let settings = settings(&server.endpoint());
     let texts = ["one", "two"];
-    server.queue(chat_text_response("⟪1⟫\n一\n\n⟪2⟫\n二"));
+    server.queue(chat_text_response("<<<SEG 1>>>\n一\n\n<<<SEG 2>>>\n二"));
 
     let client = client();
     let result =
@@ -366,10 +366,11 @@ async fn uncached_segments_are_batched_into_one_request_and_then_cached() {
     assert_eq!(server.request_count(), 1);
 
     // The request carries the batched system prompt, both segments joined by
-    // ⟪n⟫ delimiter lines, and temperature 0.
+    // <<<SEG n>>> delimiter lines, and temperature 0.
     let first: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
     assert_eq!(first["model"], "test-model");
     assert_eq!(first["temperature"], 0);
+    assert_eq!(first["stream"], true);
     let messages = first["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
     let system = messages[0]["content"].as_str().unwrap();
@@ -380,8 +381,8 @@ async fn uncached_segments_are_batched_into_one_request_and_then_cached() {
     assert!(system.contains("HTML"));
     assert!(system.contains("only the text between markers"));
     let user = messages[1]["content"].as_str().unwrap();
-    assert!(user.contains("⟪1⟫\none"));
-    assert!(user.contains("⟪2⟫\ntwo"));
+    assert!(user.contains("<<<SEG 1>>>\none"));
+    assert!(user.contains("<<<SEG 2>>>\ntwo"));
 
     // The per-segment cache means a second run touches the network not at
     // all, even though the first run answered both segments together.
@@ -402,7 +403,7 @@ async fn loopback_requests_never_carry_the_zhipu_thinking_field() {
     let cache = TranslationCache::new(dir.path().join("translation-cache"));
     let server = MockServer::spawn();
     let settings = settings(&server.endpoint());
-    server.queue(chat_text_response("⟪1⟫\n一\n\n⟪2⟫\n二"));
+    server.queue(chat_text_response("<<<SEG 1>>>\n一\n\n<<<SEG 2>>>\n二"));
 
     let client = client();
     let result = translate_segments_with_client(
@@ -440,17 +441,20 @@ async fn single_uncached_segment_sends_a_plain_request_with_no_markers() {
     assert_eq!(result, ["你好"]);
     assert_eq!(server.request_count(), 1);
 
-    // A lone segment is sent as plain text: no markers anywhere, temperature 0.
+    // A lone segment is sent as plain text: no batch markers anywhere, temperature 0.
     let body: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
     assert_eq!(body["temperature"], 0);
     let messages = body["messages"].as_array().unwrap();
     let system = messages[0]["content"].as_str().unwrap();
     let user = messages[1]["content"].as_str().unwrap();
     assert!(
-        !system.contains('⟪'),
-        "system prompt must not mention markers"
+        !system.contains("<<<SEG"),
+        "system prompt must not mention batch markers"
     );
-    assert!(!user.contains('⟪'), "raw segment must be sent unmarked");
+    assert!(
+        !user.contains("<<<SEG"),
+        "raw segment must be sent unmarked"
+    );
     assert_eq!(user, "hello");
     // The base prompt keeps the translation contract without the batching
     // sentence.
@@ -466,9 +470,12 @@ async fn batched_reply_marker_mismatches_fall_back_to_one_request_per_segment() 
         // no markers at all
         ("一\n二", &["一", "二"]),
         // markers out of order
-        ("⟪2⟫\n二\n⟪1⟫\n一", &["一", "二"]),
+        ("<<<SEG 2>>>\n二\n<<<SEG 1>>>\n一", &["一", "二"]),
         // one marker too many
-        ("⟪1⟫\n一\n⟪2⟫\n二\n⟪3⟫\n三", &["一", "二"]),
+        (
+            "<<<SEG 1>>>\n一\n<<<SEG 2>>>\n二\n<<<SEG 3>>>\n三",
+            &["一", "二"],
+        ),
     ];
     let client = client();
     for (batched_reply, per_segment) in scenarios {
@@ -494,14 +501,22 @@ async fn batched_reply_marker_mismatches_fall_back_to_one_request_per_segment() 
         // One batched request that failed validation, then one plain request
         // per segment.
         assert_eq!(server.request_count(), 1 + per_segment.len());
-        // The fallback requests carry no markers and the raw segment text.
-        for (index, text) in ["one", "two"].iter().enumerate() {
-            let body: serde_json::Value =
-                serde_json::from_slice(&server.request_body(1 + index)).unwrap();
-            let user = body["messages"][1]["content"].as_str().unwrap();
-            assert!(!user.contains('⟪'), "fallback must be unmarked: {user}");
-            assert_eq!(user, *text);
-        }
+        // The fallback requests carry no batch markers and the raw segment text
+        // (concurrent fallback may deliver them in any order).
+        let mut fallback_users: Vec<String> = (1..=per_segment.len())
+            .map(|index| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&server.request_body(index)).unwrap();
+                let user = body["messages"][1]["content"].as_str().unwrap().to_string();
+                assert!(
+                    !user.contains("<<<SEG"),
+                    "fallback must be unmarked: {user}"
+                );
+                user
+            })
+            .collect();
+        fallback_users.sort();
+        assert_eq!(fallback_users, vec!["one".to_string(), "two".to_string()]);
     }
 }
 
@@ -1016,4 +1031,180 @@ async fn a_plan_needing_a_request_still_fails_loudly_without_a_key() {
     // This is the command's lazy step: it runs only because a request is due.
     let error = key_for_slot(&store, &settings.key_slot).unwrap_err();
     assert_eq!(error, "missing-key: no API key stored for slot \"custom\"");
+}
+
+fn sse_response(chunks: &[&str]) -> Vec<u8> {
+    let mut body = String::new();
+    for chunk in chunks {
+        body.push_str(chunk);
+    }
+    let bytes = body.as_bytes();
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(bytes);
+    response
+}
+
+#[tokio::test]
+async fn sse_streaming_response_assembles_deltas_and_caches() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(sse_response(&[
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"世界\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ]));
+
+    let result = translate_segments_with_client(
+        &client(),
+        TEST_KEY,
+        &settings,
+        &segments(&["hello world"]),
+        &cache,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, vec!["你好世界"]);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn sse_empty_and_length_truncated_replies_are_rejected_and_not_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(sse_response(&[
+        "data: {\"choices\":[{\"delta\":{\"content\":\"截断\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ]));
+    server.queue(chat_text_response("   \n  "));
+
+    let truncated_err =
+        translate_segments_with_client(&client(), TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
+    assert!(truncated_err.to_string().contains("truncated"));
+
+    let empty_err =
+        translate_segments_with_client(&client(), TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
+    assert!(empty_err.to_string().contains("empty"));
+
+    let key = TranslationCache::cache_key(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        "one",
+    );
+    assert_eq!(cache.get(&key), None);
+}
+
+#[tokio::test]
+async fn sse_repetition_loop_is_aborted() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    let repeated = "repetitive-loop-segment-01234567".repeat(40);
+    let event = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        serde_json::json!({ "choices": [{ "delta": { "content": repeated } }] })
+    );
+    server.queue(sse_response(&[&event]));
+
+    let err =
+        translate_segments_with_client(&client(), TEST_KEY, &settings, &segments(&["one"]), &cache)
+            .await
+            .unwrap_err();
+    assert!(err.to_string().contains("repetition loop"));
+}
+
+#[tokio::test]
+async fn duplicate_uncached_segments_are_translated_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    server.queue(chat_text_response("<<<SEG 1>>>\n甲\n\n<<<SEG 2>>>\n乙"));
+
+    let result = translate_segments_with_client(
+        &client(),
+        TEST_KEY,
+        &settings,
+        &segments(&["alpha", "beta", "alpha"]),
+        &cache,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, vec!["甲", "乙", "甲"]);
+    assert_eq!(server.request_count(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&server.request_body(0)).unwrap();
+    assert_eq!(
+        body["messages"][1]["content"].as_str().unwrap(),
+        "<<<SEG 1>>>\nalpha\n\n<<<SEG 2>>>\nbeta"
+    );
+}
+
+#[tokio::test]
+async fn fallback_caches_completed_segments_even_when_a_sibling_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&server.endpoint());
+    // Batched reply has invalid markers -> triggers concurrent per-segment fallback.
+    server.queue(chat_text_response("invalid reply"));
+    // One fallback succeeds, one fails with 500.
+    server.queue(chat_text_response("成功译文"));
+    server.queue(http_status(500, "boom"));
+
+    let err = translate_segments_with_client(
+        &client(),
+        TEST_KEY,
+        &settings,
+        &segments(&["first", "second"]),
+        &cache,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("500"));
+    let first_key = TranslationCache::cache_key(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        "first",
+    );
+    let second_key = TranslationCache::cache_key(
+        &settings.endpoint,
+        &settings.model,
+        &settings.target_language,
+        "second",
+    );
+    // Exactly one of the two succeeded and was immediately persisted in cache.
+    assert!(cache.get(&first_key).is_some() || cache.get(&second_key).is_some());
+}
+
+#[tokio::test]
+async fn empty_api_key_omits_authorization_header_and_strips_chat_completions_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = TranslationCache::new(dir.path().join("translation-cache"));
+    let server = MockServer::spawn();
+    let settings = settings(&format!("{}/chat/completions/", server.endpoint()));
+    server.queue(chat_text_response("你好"));
+
+    let result =
+        translate_segments_with_client(&client(), "", &settings, &segments(&["hello"]), &cache)
+            .await
+            .unwrap();
+    assert_eq!(result, vec!["你好"]);
+    assert_eq!(server.request_line(0), "POST /v1/chat/completions HTTP/1.1");
+    assert_eq!(server.request_header(0, "authorization"), None);
 }
