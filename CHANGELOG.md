@@ -2,6 +2,41 @@
 
 All notable changes to Opus are documented in this file.
 
+## [0.2.8] - 2026-11-27
+
+### Fixed
+
+- End-to-end translation cancellation (`cancel_translation` + `runId` registry)
+  now aborts in-flight backend HTTP requests and retry backoffs immediately
+  when cancelling, editing, switching settings, closing tabs, or hitting
+  fatal errors.
+- Switched translation completions to SSE streaming (with JSON fallback),
+  explicit HTTP connect/read/request timeouts, and runaway repetition-loop,
+  truncation (`finish_reason: "length"`), and empty-output guards so stalled
+  or looping models never hang or poison the disk cache.
+- Separated batch segment delimiters (`<<<SEG n>>>`) from inline code/math
+  placeholders (`⟪n⟫`) and hardened marker parsing against outer code fences
+  and wrapped markers.
+- Failed fast on non-retryable 4xx/auth/config errors, added shared AIMD
+  rate-limit cooldown on HTTP 429, and bisected oversized batches on timeouts
+  or truncation instead of failing the whole document.
+- Fixed currency/escaped `$` false positives in inline math placeholders,
+  omitted `temperature: 0` for OpenAI reasoning models, supported keyless
+  loopback endpoints (such as Ollama), locked the editor read-only from the
+  start of translation, isolated viewport priority to the active tab, and
+  cleared stale model lists when changing API endpoints.
+
+### Changed
+
+- Added an in-memory slot cache for translation API keys, moved disk cache
+  reads and pruning off async workers via `spawn_blocking`, removed per-segment
+  `fsync`, deduplicated repeated uncached segments, and parallelized batch
+  fallback retries.
+- Coalesced rapid partial translation updates per microtask and switched
+  external editor value updates to minimal common-prefix/suffix diffs so
+  CodeMirror updates incrementally without rebuilding the whole document.
+- Added a dismiss button to the translation failure banner.
+
 ## [0.2.7] - 2026-11-27
 
 ### Added
